@@ -1,0 +1,19 @@
+# Go build output
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+/finplan
+
+# Personal data: never commit databases, backups or credentials
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.bak
+.env
+.env.*
