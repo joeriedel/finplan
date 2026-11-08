@@ -18,6 +18,10 @@ extern "C" {
 #define FINPLAN_EVENT_INPUT 1 // at least one event was processed
 #define FINPLAN_EVENT_QUIT  2 // the window was closed or the app was asked to quit
 
+// Verifies that the struct layouts seen by this package match the ones cimgui.a was compiled with (IMGUI_CHECKVERSION).
+// Aborts through IM_ASSERT on a mismatch. Needs no ImGui context, window or display.
+void        FinplanBackend_CheckVersion(void);
+
 bool        FinplanBackend_Init(const char* title, int width, int height);
 const char* FinplanBackend_Error(void);
 void        FinplanBackend_Shutdown(void);

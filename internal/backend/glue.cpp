@@ -20,6 +20,11 @@ static PFN_glViewport   g_glViewport = nullptr;
 static PFN_glClearColor g_glClearColor = nullptr;
 static PFN_glClear      g_glClear = nullptr;
 
+void FinplanBackend_CheckVersion(void)
+{
+    IMGUI_CHECKVERSION();
+}
+
 bool FinplanBackend_Init(const char* title, int width, int height)
 {
     // No video driver hints: SDL picks Wayland when a Wayland session is available.

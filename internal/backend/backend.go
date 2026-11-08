@@ -5,7 +5,7 @@
 // imgui_impl_sdl3 and imgui_impl_opengl3 backends; imgui core itself comes from cimgui-go.
 package backend
 
-// #cgo CPPFLAGS: -DIMGUI_USE_WCHAR32 -I${SRCDIR}
+// #cgo CPPFLAGS: -DIMGUI_USE_WCHAR32 -DIMGUI_DISABLE_OBSOLETE_FUNCTIONS=1 -I${SRCDIR}
 // #cgo pkg-config: sdl3
 // #include <stdlib.h>
 // #include "glue.h"
@@ -40,6 +40,12 @@ func Init(title string, width, height int) error {
 		return err
 	}
 	return nil
+}
+
+// CheckVersion verifies that this package's view of the ImGui struct layouts matches cimgui-go's prebuilt library.
+// A mismatch aborts the process through ImGui's assert handler.
+func CheckVersion() {
+	C.FinplanBackend_CheckVersion()
 }
 
 // Shutdown releases the backends, the GL context and the window.
