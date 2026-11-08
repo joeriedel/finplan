@@ -10,7 +10,7 @@ Status: agreed design, not yet implemented beyond the UI scaffold.
 - **Store inputs, never computed output.** Projections store only their inputs, so engine fixes and improvements refine every projection, old ones included.
 - **Stored formats load forever.** Old inputs are migrated, never dropped.
 - **One code path.** The GUI and the CLI change data only through the same library functions, so neither can bypass a rule the other enforces.
-- **Every number is explainable.** Each month's change in any account breaks down into its causes (income, expenses, tax, growth, transfers, shocks), for the UI and for the agent.
+- **Every number is explainable.** The change in any account over any interval breaks down into its causes (income, expenses, tax, growth, transfers, shocks), for the UI and for the agent.
 - **The engine is a standalone library** with its own tests, separate from the UI.
 
 ## Accounts
@@ -58,7 +58,7 @@ An asset can override the parameters of anything it wraps. One precedence rule a
 
 When two sibling members of the same asset set different values for the same shared account, nothing decides between them; that is reported as a conflict and settled by setting the value at an outer level.
 
-The engine still computes each account month by month, because flows land on accounts and tax treatment differs per account; the assets supply the resolved parameters.
+The engine still computes each account individually, because flows land on accounts and tax treatment differs per account; the assets supply the resolved parameters.
 
 ## Budgets
 
@@ -66,7 +66,7 @@ The budget is the forecast of every flow, and the shared context for extrapolati
 
 A budget item has:
 
-- an amount and a schedule (monthly, annual, one-time)
+- an amount and a schedule: a calendar rule (biweekly, semimonthly, monthly on a given day, annual on a date) or a one-time date
 - optional start and end dates
 - whether it is indexed to inflation
 - the account it lands in or draws from
@@ -133,27 +133,23 @@ Withholding, estimated payments, refunds and amounts owed are what land in accou
 
 ## The engine
 
-A monthly time step over a state of account sub-balances, lots, budget items and year-to-date tax. Each month, in order:
+The engine is event-driven, with no fixed time step. It advances from one dated flow to the next (each paycheck, bill, vest, contribution, shock and rebalance on its actual date) and grows balances over exactly the time elapsed between them. Granularity is therefore not a property of the engine: `balance(t)` is defined for any instant, and the caller chooses how to sample it (the graph by its zoom level, a report by its interval, the CLI by a flag). Zoomed out over decades the graph samples sparsely; zoomed in on a month it shows each paycheck landing.
 
-1. income
-2. payroll deductions (401k/TSP and employer match, HSA, withholding)
-3. RSU vests, taxed as income
-4. expenses
-5. debt payments (mortgage amortization)
-6. contributions and where leftover cash goes, as a waterfall
-7. growth by market class, shocks and rebalances
-
-At year end: tax reconciliation.
+- **Growth** compounds by each account's own convention: daily for credit-card interest, per period for a mortgage's amortization schedule, and continuously over elapsed time for market classes.
+- **Ordering on one date:** income, then payroll deductions (401k/TSP and employer match, HSA, withholding), RSU vests taxed as income, expenses, debt payments, then contributions and where leftover cash goes (a waterfall), then shocks and rebalances.
+- **Taxes** are computed per tax year, because that is how they work: withholding and estimated payments flow on their dates, and each year end reconciles tax due against tax paid.
+- **Breakdowns** cover any interval the caller picks.
+- **Monte Carlo** draws class returns at a chosen base resolution, since randomized returns need a step; the rest of the engine is unchanged.
 
 Capabilities the engine must model: 401k and TSP limits, employer match, RSU vesting and sale, mortgage amortization, 529 rules, inflation, FERS pensions (annuity, the supplement before 62, survivor options), and retirement drawdown (withdrawal order, Social Security, required minimum distributions, Roth conversions).
 
-The engine must be fast: goal solving and Monte Carlo rerun it thousands of times.
+The engine must be fast: goal solving and Monte Carlo rerun it thousands of times. Sixty years of biweekly pay and monthly bills is a few thousand events per run.
 
 ## Analysis tools
 
 In build order:
 
-1. **Single projection:** an asset's curve plus the monthly breakdown.
+1. **Single projection:** an asset's curve plus the breakdown for any interval.
 2. **Compare:** several projections and reality on one graph, and the difference between any two.
 3. **Plan versus actual:** an earlier projection against what really happened.
 4. **Sensitivity:** vary one parameter across a range to get a band of outcomes.
