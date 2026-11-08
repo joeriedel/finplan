@@ -38,9 +38,30 @@ An asset carries behavior. It wraps one or more members, each of which is an acc
 - An **aggregate asset** wraps several members, for example "all cash" over every cash account, or "net worth" over everything (liabilities are negative, so net worth is a plain sum).
 - Membership is an explicit list, a rule (for example: type is cash, so newly linked accounts join on their own), or both.
 - Assets nest freely; they form a graph, and cycles are rejected.
-- Every asset has a **default balance** (0 unless set) with an as-of date. It grows at the asset's rate from that date and may have an end date. The end date covers the hand-off from a stand-in number to a real account: "use 40,000 for this account until its real data begins". The jump at a hand-off is accepted and marked on the graph.
 
-At any time, an asset's value is its default balance plus the sum of its distinct underlying accounts at that time. Money lives only in accounts; an asset never holds a balance of its own beyond its default balance.
+Money lives only in accounts. Any asset can be asked for its balance on any date.
+
+### Default balances
+
+Every account and asset has a **default balance**: a fallback value for dates with no actual data. It is not added to anything and it does not grow; growth is a projection concept.
+
+- A **base** default of 0 fills every date.
+- The user can add **intervals** (from, to, value) that override the base on those dates, for example "use 40,000 for this account until its real data begins".
+- **Actual data always beats any default.** Defaults apply only on dates with no actual data.
+
+A balance query returns the value with a flag saying whether it came from actual data or from defaults.
+
+An account has actual data on every date within its real data span; gaps between snapshots inside the span are filled from transactions, never from defaults. An asset's **actual-data coverage** is the union of its members' coverage, which may be disjoint, and its **last actual data date** is the end of that union.
+
+### Resolving an asset's balance
+
+Actual data comes only from accounts; defaults never count as actual data, however deeply nested. For an asset on a given date:
+
+- If any underlying account has actual data on that date, the asset's value is the sum of its members, each resolved the same way (its actual data, its own default, or 0).
+- Otherwise, if the asset has a default interval covering that date, that value wins over its members' defaults (the outer setting wins, as with parameters).
+- Otherwise, the asset's value is the sum of its members, each resolved the same way. The 0 base never beats a member's explicit interval.
+
+Hand-offs between defaults and actual data can make a line jump; that is accepted and marked on the graph.
 
 Any asset can be graphed and projected, individually or as an aggregate, by the user or by the agent.
 
@@ -77,7 +98,7 @@ Taxes are not budget items. The engine computes them (see Taxes), and the net pa
 
 ### Past and future
 
-For each account, the engine uses actual transactions up to the account's last real data and budget items after it. Accounts sync on different dates, so the boundary is per account, not one global date.
+The engine reads back actual data where it applies and uses budget items after that. Where that switch happens is set by the projection start rule (see Projections).
 
 ## Projections
 
@@ -89,12 +110,37 @@ A projection can modify **any property of any object on a timetable**: a modific
 - parameter schedules ("brokerage at 4% until 2029, then 6% until 2035, then 2%")
 - one-off actions: a market shock ("large cap −30% in March 2035"), a rebalance ("brokerage to 75% treasuries, 25% small cap in 2027"), a withdrawal or transfer
 - hypothetical accounts and default balances
-- the extrapolation start date, so a projection can begin in the past and ignore real data after that date
+- the projection start date, globally or per asset, and `override_history` (see below)
 - global assumptions such as inflation
 
 A projection may build on one parent projection (a chain, never a merge of two). A modification whose target no longer exists, for example a change to a budget item later deleted from the base, is marked red and skipped, as with overlap.
 
-A plotted line is an asset under a projection, or under reality: `asset.balance(t, projection)`. A report is an asset viewed over a time range. Extrapolation continues indefinitely; the view decides how far to look.
+### Querying the engine
+
+A projection does no computing of its own. It asks the engine what its assets will hold, passing in every modification in effect:
+
+    engine.balances(target, sample_times, modifications)
+
+Reality is the same query with no modifications. The engine is a pure function of the record, the base budget, the modifications and the engine version, so the same inputs always give the same answer and results can be cached; the GUI and the CLI see identical numbers. A query takes a set of sample times (or a range and a resolution), so one simulation serves a whole graph. Extrapolation continues indefinitely; the caller decides how far to look.
+
+A plotted line is an asset under a projection, or under reality. A report is an asset viewed over a time range.
+
+### Projection start
+
+A projection has a global **projection start date**. Each asset in it may be given its own start date, and its own `override_history` setting. The engine applies the rule to each account, using the start date and `override_history` resolved from the assets that wrap it (the outer setting wins):
+
+    if override_history:
+        start = min(last_actual_data_date, projection_start_date)
+    else:
+        start = last_actual_data_date
+
+- Without `override_history`, all real data is read back, and each account starts projecting where its own data runs out. Checking synced through yesterday projects from tomorrow, while a hand-entered account last updated in March projects from March, under the same projection.
+- With `override_history`, real data after the projection start is ignored: the "what if I had done this back then" case.
+- An account with no actual data starts at the projection start date, reading back its defaults before it.
+
+Before its start, an account's values are read back; from its start on, the engine extrapolates from the value at that point, applying the projection's modifications. Real data therefore beats modifications on the dates it covers, unless the start moves earlier.
+
+The engine **aggregates as it projects**: every account is read back or projected on its own, and an asset's value is the sum of its accounts. A member whose data ends earlier than its siblings' is projected from its own end, never filled with defaults.
 
 ### Scope
 
