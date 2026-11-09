@@ -33,6 +33,41 @@ Drag to pan and scroll to zoom the plot. The toolbar has a Projection dropdown a
 
 The Projections tab lists the projections as a tree with Reality first, with search, New, Clone, Rename and Delete, and edits a projection's parent, start date, override history, inflation and modifications (add, remove, edit a constant value or start, drag to reorder; modifications overwritten by later ones are greyed with a tooltip). Edits are saved to the database at once. Edit > Undo and Redo (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y) step through them until the database is reloaded. Modifications with several segments and budget item additions are shown but not yet editable.
 
+## Command line
+
+    bin/finplan [--demo | --db <path>] <command> [arguments] [flags]
+
+With no command (`finplan` or `finplan --demo`) the app opens its window as above. With a command, the same binary reads the database and prints one JSON document on stdout, without a window. Run `bin/finplan help` for the commands and `bin/finplan help --json` for the same description as JSON, generated from the command definitions the parser uses.
+
+- `--demo` (a throwaway seeded database, removed on exit) and `--db <path>` work on every command, before or after it; using both is a usage error. With neither, the real database is used (same location as the app).
+- Read commands never write: they open the database read-only. A missing file is an error (`no_database`) and is not created. A database older than the program gives `old_schema` (open it with the app first so it is upgraded), and a newer one `future_schema`.
+- Errors are `{"error":{"code","message"}}` on stdout, with exit code 2 for usage errors and 1 for all others. Codes: `usage`, `not_found`, `ambiguous`, `no_database`, `old_schema`, `future_schema`, `database`, `engine`.
+- Dates are `YYYY-MM-DD`, and `null` when absent or unbounded. Statuses are lowercase: `default`, `actual`, `projected`, `partly_projected`. Reality appears as `"projection": null`.
+
+Read commands:
+
+| Command | Output |
+| --- | --- |
+| `account list` | accounts: id, name, type, tax, owner |
+| `account entries <account>` | the account's snapshots and transactions with current values (voided entries left out) |
+| `entry history <entry-id>` | every revision of one entry: original values, then each correction or void |
+| `asset list` | assets with their members, members left out as invalid, and any resolve error |
+| `budget list` | budget items with recurrence, start, end, indexing and accounts |
+| `projection list` | projections: name, parent, start, override history, modification count |
+| `projection show <name>` | a projection's settings, per-asset settings and modifications in the order they apply |
+| `balance <target> --from D --to D [--step day\|week\|month\|year] [--projection P]` | samples of date, value and status, plus diagnostics; `--step` defaults to `month` |
+| `breakdown <target> --from D --to D [--projection P]` | start and end values, total, and lines of cause with actual and projected parts, plus diagnostics |
+| `starts [--projection P] [<target>]` | where each account switches from recorded data to projection; every account when no target is given |
+| `help [--json]` | the command reference |
+
+Commands about data that belongs to one kind of object are noun-verb (`account list`, `projection show`). The engine queries (`balance`, `breakdown`, `starts`) are top-level verbs because they accept either an asset or an account.
+
+A `<target>` is an asset or account given by id or display name; ids win over names, an account and its default asset count as one object, and a name matching several objects is an `ambiguous` error. `--from` and `--to` take `YYYY-MM-DD` or `YYYY-MM`: for `--from` a month means its first day, for `--to` its last day. Month and year steps keep the day of month of `--from`, clamped to the end of shorter months.
+
+Commands that change data come later.
+
+An agent skill for using the CLI is in `.claude/skills/finplan/SKILL.md`.
+
 ## Fonts
 
 The Inter font is bundled under the SIL Open Font License; the licence text is in `cmd/finplan/fonts/OFL.txt`.

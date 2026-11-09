@@ -1,0 +1,658 @@
+// Copyright (c) 2026 Joseph Riedel
+// SPDX-License-Identifier: MIT
+
+package main
+
+import (
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/joeriedel/finplan/internal/engine"
+	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/store"
+)
+
+const (
+	targetArg = "the asset or account to look at, by asset id, asset name, account id or account name (ids win over names); an account stands for its own default asset"
+	dateNote  = "YYYY-MM-DD, or YYYY-MM for the first day of the month"
+	endNote   = "YYYY-MM-DD, or YYYY-MM for the last day of the month"
+	projDesc  = "projection to evaluate under; reality when omitted"
+	diagShape = "diagnostics {skipped: [{projection, index, target: {kind, id}, property, reason}], overlaps: [{asset, seq, member, duplicates, against}]}"
+	jsonNote  = "Dates are YYYY-MM-DD, null when absent or unbounded. Money is a plain number. Statuses are lowercase: default, actual, projected, partly_projected."
+)
+
+// commands is every CLI command, in help order.
+var commands = []*command{
+	{
+		Name: "help", Summary: "describe the commands and their flags",
+		Flags:  []flagDef{{Name: "json", Type: typeBool, Default: "false", Description: "print the description as JSON for programs"}},
+		Output: "text; with --json {global_flags: [{name, type, default, required, description}], commands: [{name, summary, args, flags, output}]}. " + jsonNote,
+		run:    cmdHelp,
+	},
+	{
+		Name: "account list", Summary: "list the accounts",
+		Output: "[{id, name, type, tax, owner}]",
+		run:    cmdAccountList,
+	},
+	{
+		Name: "account entries", Summary: "list an account's record entries (snapshots and transactions) with their current values; voided entries are left out",
+		Args:   []argDef{{Name: "account", Description: "account id or name", Required: true}},
+		Output: "[{id, kind (snapshot or transaction), date, amount, tx_kind, counter, memo}]; empty fields are null",
+		run:    cmdAccountEntries,
+	},
+	{
+		Name: "entry history", Summary: "show every revision of one entry: its original values, then each correction or void",
+		Args:   []argDef{{Name: "entry-id", Description: "entry id, as listed by account entries", Required: true}},
+		Output: "{id, revisions: [{date, amount, tx_kind, counter, memo, made_at (RFC 3339), note, void}]}",
+		run:    cmdEntryHistory,
+	},
+	{
+		Name: "asset list", Summary: "list the assets with their members and any members left out as invalid",
+		Output: "[{id, name, members: [{seq, member, account, asset, rule: {types, tax} or null}], invalid: [{seq, member, duplicates, against}], error}]; error is null unless the asset cannot be resolved, for example because of a cycle",
+		run:    cmdAssetList,
+	},
+	{
+		Name: "budget list", Summary: "list the budget items",
+		Output: "[{id, name, kind, amount, recurrence: {kind, anchor, month, day, day2}, start, end, indexed, account, from, to}]; recurrence fields that its kind does not use are null",
+		run:    cmdBudgetList,
+	},
+	{
+		Name: "projection list", Summary: "list the projections",
+		Output: "[{name, parent, start, override_history, modification_count}]",
+		run:    cmdProjectionList,
+	},
+	{
+		Name: "projection show", Summary: "show a projection's settings and modifications",
+		Args:   []argDef{{Name: "name", Description: "projection name", Required: true}},
+		Output: "{name, parent, start, override_history, asset_settings: [{asset, start, override_history}], modifications: [{index, target: {kind, id}, property, schedule: [{from, end, value}], item}]}; modifications are in the order they apply",
+		run:    cmdProjectionShow,
+	},
+	{
+		Name: "balance", Summary: "the value of an asset or account on a series of dates",
+		Args: []argDef{{Name: "target", Description: targetArg, Required: true}},
+		Flags: []flagDef{
+			{Name: "from", Type: typeDate, Required: true, Description: "first sample date: " + dateNote},
+			{Name: "to", Type: typeDate, Required: true, EndOfMonth: true, Description: "last sample date, inclusive: " + endNote},
+			{Name: "step", Type: typeEnum, Default: "month", Choices: []string{"day", "week", "month", "year"}, Description: "spacing of the samples; month and year keep the day of the month of --from, clamped to the end of shorter months"},
+			{Name: "projection", Type: typeString, Description: projDesc},
+		},
+		Output: "{target (asset id), projection, from, to, step, samples: [{date, value, status}], " + diagShape + "}. " + jsonNote,
+		run:    cmdBalance,
+	},
+	{
+		Name: "breakdown", Summary: "split the change in an asset or account over a period by cause",
+		Args: []argDef{{Name: "target", Description: targetArg, Required: true}},
+		Flags: []flagDef{
+			{Name: "from", Type: typeDate, Required: true, Description: "start of the period (the change counts after this date): " + dateNote},
+			{Name: "to", Type: typeDate, Required: true, EndOfMonth: true, Description: "end of the period, inclusive: " + endNote},
+			{Name: "projection", Type: typeString, Description: projDesc},
+		},
+		Output: "{target (asset id), projection, from, to, start, end, total, lines: [{cause, actual, projected}], " + diagShape + "}. " + jsonNote,
+		run:    cmdBreakdown,
+	},
+	{
+		Name: "starts", Summary: "where each account switches from recorded data to projection",
+		Args:   []argDef{{Name: "target", Description: targetArg + "; every account when omitted"}},
+		Flags:  []flagDef{{Name: "projection", Type: typeString, Description: projDesc}},
+		Output: "[{account, start, last_actual, has_actual, override_history, projection_start}]; last_actual is null without actual data",
+		run:    cmdStarts,
+	},
+}
+
+type jbudgetItem struct {
+	ID         string      `json:"id"`
+	Name       string      `json:"name"`
+	Kind       string      `json:"kind"`
+	Amount     float64     `json:"amount"`
+	Recurrence jrecurrence `json:"recurrence"`
+	Start      *jdate      `json:"start"`
+	End        *jdate      `json:"end"`
+	Indexed    bool        `json:"indexed"`
+	Account    *string     `json:"account"`
+	From       *string     `json:"from"`
+	To         *string     `json:"to"`
+}
+
+type jrecurrence struct {
+	Kind   string `json:"kind"`
+	Anchor *jdate `json:"anchor"`
+	Month  *int   `json:"month"`
+	Day    *int   `json:"day"`
+	Day2   *int   `json:"day2"`
+}
+
+func budgetItemJSON(it model.BudgetItem) jbudgetItem {
+	r := it.Recurrence
+	jr := jrecurrence{Kind: string(r.Kind)}
+	switch r.Kind {
+	case model.Biweekly, model.OneTime:
+		jr.Anchor = model.Ptr(jd(r.Anchor))
+	case model.Monthly:
+		jr.Day = &r.Day
+	case model.Semimonthly:
+		jr.Day, jr.Day2 = &r.Day, &r.Day2
+	case model.Annual:
+		m := int(r.Month)
+		jr.Month, jr.Day = &m, &r.Day
+	}
+	return jbudgetItem{
+		ID: it.ID, Name: it.Name, Kind: string(it.Kind), Amount: it.Amount, Recurrence: jr,
+		Start: jdp(it.Start), End: jdp(it.End), Indexed: it.Indexed,
+		Account: nullable(string(it.Account)), From: nullable(string(it.From)), To: nullable(string(it.To)),
+	}
+}
+
+// candidate is an object a target name can mean.
+type candidate struct {
+	asset   model.AssetID
+	account model.AccountID // set when the object is an account
+	label   string
+}
+
+// findCandidates returns the distinct objects whose id, or with byName their name, is s. An account and its default asset are one object.
+func findCandidates(rec *model.Record, s string, byName, accountsOnly bool) []candidate {
+	var out []candidate
+	add := func(c candidate) {
+		for _, o := range out {
+			if o.asset == c.asset {
+				return
+			}
+		}
+		out = append(out, c)
+	}
+	for _, a := range rec.Accounts {
+		key := string(a.ID)
+		if byName {
+			key = a.Name
+		}
+		if key == s {
+			add(candidate{asset: model.DefaultAssetID(a.ID), account: a.ID, label: fmt.Sprintf("account %q", a.ID)})
+		}
+	}
+	if accountsOnly {
+		return out
+	}
+	for _, a := range rec.Assets {
+		key := string(a.ID)
+		if byName {
+			key = a.Name
+		}
+		if key == s {
+			add(candidate{asset: a.ID, label: fmt.Sprintf("asset %q", a.ID)})
+		}
+	}
+	return out
+}
+
+// resolveTarget finds the one object that s names.
+func resolveTarget(rec *model.Record, s string, accountsOnly bool) (candidate, error) {
+	kinds := "an asset or account"
+	if accountsOnly {
+		kinds = "an account"
+	}
+	for _, byName := range []bool{false, true} {
+		switch found := findCandidates(rec, s, byName, accountsOnly); len(found) {
+		case 0:
+		case 1:
+			return found[0], nil
+		default:
+			labels := make([]string, len(found))
+			for i, f := range found {
+				labels[i] = f.label
+			}
+			return candidate{}, failErr("ambiguous", "%q matches more than one object: %s", s, strings.Join(labels, ", "))
+		}
+	}
+	return candidate{}, failErr("not_found", "%q is not %s", s, kinds)
+}
+
+// projection returns the --projection flag's name after checking that it exists.
+func (c *call) projection(rec *model.Record) (string, error) {
+	name := c.str("projection")
+	if name != "" && rec.Projection(name) == nil {
+		return "", failErr("not_found", "there is no projection named %q", name)
+	}
+	return name, nil
+}
+
+func cmdAccountList(c *call) (any, error) {
+	_, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	type jaccount struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Type  string `json:"type"`
+		Tax   string `json:"tax"`
+		Owner string `json:"owner"`
+	}
+	out := []jaccount{}
+	for _, a := range rec.Accounts {
+		out = append(out, jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.Owner})
+	}
+	return out, nil
+}
+
+type jvalues struct {
+	Date    jdate   `json:"date"`
+	Amount  float64 `json:"amount"`
+	TxKind  *string `json:"tx_kind"`
+	Counter *string `json:"counter"`
+	Memo    *string `json:"memo"`
+}
+
+func valuesJSON(v store.Values) jvalues {
+	return jvalues{jd(v.Date), v.Amount, nullable(string(v.TxKind)), nullable(string(v.Counter)), nullable(v.Memo)}
+}
+
+func cmdAccountEntries(c *call) (any, error) {
+	st, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	acct, err := resolveTarget(rec, c.args[0], true)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := st.Entries(acct.account)
+	if err != nil {
+		return nil, failErr("database", "%v", err)
+	}
+	type jentry struct {
+		ID   int64  `json:"id"`
+		Kind string `json:"kind"`
+		jvalues
+	}
+	out := []jentry{}
+	for _, e := range entries {
+		out = append(out, jentry{e.ID, string(e.Kind), valuesJSON(e.Values)})
+	}
+	return out, nil
+}
+
+func cmdEntryHistory(c *call) (any, error) {
+	id, err := strconv.ParseInt(c.args[0], 10, 64)
+	if err != nil {
+		return nil, usageErr("entry id %q is not a number", c.args[0])
+	}
+	st, _, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	revs, err := st.History(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, failErr("not_found", "there is no entry %d", id)
+	}
+	if err != nil {
+		return nil, failErr("database", "%v", err)
+	}
+	type jrevision struct {
+		jvalues
+		MadeAt string  `json:"made_at"`
+		Note   *string `json:"note"`
+		Void   bool    `json:"void"`
+	}
+	out := struct {
+		ID        int64       `json:"id"`
+		Revisions []jrevision `json:"revisions"`
+	}{ID: id, Revisions: []jrevision{}}
+	for _, r := range revs {
+		out.Revisions = append(out.Revisions, jrevision{valuesJSON(r.Values), r.MadeAt.Format("2006-01-02T15:04:05Z07:00"), nullable(r.Note), r.Void})
+	}
+	return out, nil
+}
+
+type joverlap struct {
+	Seq        int      `json:"seq"`
+	Member     string   `json:"member"`
+	Duplicates []string `json:"duplicates"`
+	Against    int      `json:"against"`
+}
+
+func overlapJSON(o model.Overlap) joverlap {
+	dups := []string{}
+	for _, d := range o.Duplicates {
+		dups = append(dups, string(d))
+	}
+	return joverlap{o.Seq, o.Member, dups, o.Against}
+}
+
+func cmdAssetList(c *call) (any, error) {
+	_, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	type jrule struct {
+		Types []string `json:"types"`
+		Tax   []string `json:"tax"`
+	}
+	type jmember struct {
+		Seq     int     `json:"seq"`
+		Member  string  `json:"member"`
+		Account *string `json:"account"`
+		Asset   *string `json:"asset"`
+		Rule    *jrule  `json:"rule"`
+	}
+	type jasset struct {
+		ID      string     `json:"id"`
+		Name    string     `json:"name"`
+		Members []jmember  `json:"members"`
+		Invalid []joverlap `json:"invalid"`
+		Error   *string    `json:"error"`
+	}
+	out := []jasset{}
+	for _, a := range rec.Assets {
+		ja := jasset{ID: string(a.ID), Name: a.Name, Members: []jmember{}, Invalid: []joverlap{}}
+		for _, m := range a.Members {
+			jm := jmember{Seq: m.Seq, Member: m.String(), Account: nullable(string(m.Account)), Asset: nullable(string(m.Asset))}
+			if m.Rule != nil {
+				jm.Rule = &jrule{Types: []string{}, Tax: []string{}}
+				for _, t := range m.Rule.Types {
+					jm.Rule.Types = append(jm.Rule.Types, string(t))
+				}
+				for _, t := range m.Rule.Tax {
+					jm.Rule.Tax = append(jm.Rule.Tax, string(t))
+				}
+			}
+			ja.Members = append(ja.Members, jm)
+		}
+		res, err := rec.Resolve(a.ID)
+		if err != nil {
+			ja.Error = model.Ptr(err.Error())
+		} else {
+			for _, o := range res.Overlaps {
+				if o.Asset == a.ID {
+					ja.Invalid = append(ja.Invalid, overlapJSON(o))
+				}
+			}
+		}
+		out = append(out, ja)
+	}
+	return out, nil
+}
+
+func cmdBudgetList(c *call) (any, error) {
+	_, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	out := []jbudgetItem{}
+	for _, it := range rec.Budget.Items {
+		out = append(out, budgetItemJSON(it))
+	}
+	return out, nil
+}
+
+func cmdProjectionList(c *call) (any, error) {
+	_, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	type jprojection struct {
+		Name              string  `json:"name"`
+		Parent            *string `json:"parent"`
+		Start             *jdate  `json:"start"`
+		OverrideHistory   *bool   `json:"override_history"`
+		ModificationCount int     `json:"modification_count"`
+	}
+	out := []jprojection{}
+	for _, p := range rec.Projections {
+		out = append(out, jprojection{p.Name, nullable(p.Parent), jdp(p.Start), p.OverrideHistory, len(p.Mods)})
+	}
+	return out, nil
+}
+
+func cmdProjectionShow(c *call) (any, error) {
+	_, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	p := rec.Projection(c.args[0])
+	if p == nil {
+		return nil, failErr("not_found", "there is no projection named %q", c.args[0])
+	}
+	type jsetting struct {
+		Asset           string `json:"asset"`
+		Start           *jdate `json:"start"`
+		OverrideHistory *bool  `json:"override_history"`
+	}
+	type jsegment struct {
+		From  jdate   `json:"from"`
+		End   *jdate  `json:"end"`
+		Value float64 `json:"value"`
+	}
+	type jtarget struct {
+		Kind string `json:"kind"`
+		ID   string `json:"id"`
+	}
+	type jmod struct {
+		Index    int          `json:"index"`
+		Target   jtarget      `json:"target"`
+		Property string       `json:"property"`
+		Schedule []jsegment   `json:"schedule"`
+		Item     *jbudgetItem `json:"item"`
+	}
+	out := struct {
+		Name            string     `json:"name"`
+		Parent          *string    `json:"parent"`
+		Start           *jdate     `json:"start"`
+		OverrideHistory *bool      `json:"override_history"`
+		AssetSettings   []jsetting `json:"asset_settings"`
+		Modifications   []jmod     `json:"modifications"`
+	}{p.Name, nullable(p.Parent), jdp(p.Start), p.OverrideHistory, []jsetting{}, []jmod{}}
+	for _, s := range p.AssetSettings {
+		out.AssetSettings = append(out.AssetSettings, jsetting{string(s.Asset), jdp(s.Start), s.OverrideHistory})
+	}
+	for i, m := range p.Mods {
+		jm := jmod{Index: i, Target: jtarget{string(m.Target.Kind), m.Target.ID}, Property: m.Property, Schedule: []jsegment{}}
+		for _, s := range m.Values.Segments() {
+			jm.Schedule = append(jm.Schedule, jsegment{jd(s.From), jdp(s.End), s.Value})
+		}
+		if m.Item != nil {
+			jm.Item = model.Ptr(budgetItemJSON(*m.Item))
+		}
+		out.Modifications = append(out.Modifications, jm)
+	}
+	return out, nil
+}
+
+type jdiagnostics struct {
+	Skipped  []jskipped   `json:"skipped"`
+	Overlaps []joverlapOf `json:"overlaps"`
+}
+
+type jskipped struct {
+	Projection string `json:"projection"`
+	Index      int    `json:"index"`
+	Target     struct {
+		Kind string `json:"kind"`
+		ID   string `json:"id"`
+	} `json:"target"`
+	Property string `json:"property"`
+	Reason   string `json:"reason"`
+}
+
+type joverlapOf struct {
+	Asset string `json:"asset"`
+	joverlap
+}
+
+func diagnosticsJSON(d engine.Diagnostics) jdiagnostics {
+	out := jdiagnostics{Skipped: []jskipped{}, Overlaps: []joverlapOf{}}
+	for _, s := range d.Skipped {
+		js := jskipped{Projection: s.Projection, Index: s.Index, Property: s.Property, Reason: s.Reason}
+		js.Target.Kind, js.Target.ID = string(s.Target.Kind), s.Target.ID
+		out.Skipped = append(out.Skipped, js)
+	}
+	for _, o := range d.Overlaps {
+		out.Overlaps = append(out.Overlaps, joverlapOf{string(o.Asset), overlapJSON(o)})
+	}
+	return out
+}
+
+// period reads the target, projection and --from/--to flags shared by balance and breakdown.
+func (c *call) period() (rec *model.Record, target model.AssetID, projection string, from, to model.Date, err error) {
+	from, _, err = c.date("from")
+	if err != nil {
+		return
+	}
+	if to, _, err = c.date("to"); err != nil {
+		return
+	}
+	if to < from {
+		err = usageErr("--to %v is before --from %v", to, from)
+		return
+	}
+	if _, rec, err = c.open(); err != nil {
+		return
+	}
+	var cand candidate
+	if cand, err = resolveTarget(rec, c.args[0], false); err != nil {
+		return
+	}
+	target = cand.asset
+	projection, err = c.projection(rec)
+	return
+}
+
+func cmdBalance(c *call) (any, error) {
+	rec, target, projection, from, to, err := c.period()
+	if err != nil {
+		return nil, err
+	}
+	step := c.str("step")
+	res, err := engine.Balances(rec, projection, target, sampleDates(from, to, step))
+	if err != nil {
+		return nil, failErr("engine", "%v", err)
+	}
+	type jsample struct {
+		Date   jdate   `json:"date"`
+		Value  float64 `json:"value"`
+		Status string  `json:"status"`
+	}
+	out := struct {
+		Target     string       `json:"target"`
+		Projection *string      `json:"projection"`
+		From       jdate        `json:"from"`
+		To         jdate        `json:"to"`
+		Step       string       `json:"step"`
+		Samples    []jsample    `json:"samples"`
+		Diag       jdiagnostics `json:"diagnostics"`
+	}{string(target), nullable(projection), jd(from), jd(to), step, []jsample{}, diagnosticsJSON(res.Diagnostics)}
+	for _, s := range res.Samples {
+		out.Samples = append(out.Samples, jsample{jd(s.Date), s.Amount, strings.ReplaceAll(s.Status.String(), " ", "_")})
+	}
+	return out, nil
+}
+
+// sampleDates returns from, then each later step up to and including to. Month and year steps are computed from from each time, so that a clamped day does not carry into later months.
+func sampleDates(from, to model.Date, step string) []model.Date {
+	var out []model.Date
+	for k := 0; ; k++ {
+		var d model.Date
+		switch step {
+		case "day":
+			d = from.Add(k)
+		case "week":
+			d = from.Add(7 * k)
+		case "month":
+			d = addMonths(from, k)
+		default:
+			d = addMonths(from, 12*k)
+		}
+		if d > to {
+			return out
+		}
+		out = append(out, d)
+	}
+}
+
+// addMonths returns the date n months after d on the same day of the month, or the month's last day if it is shorter.
+func addMonths(d model.Date, n int) model.Date {
+	y, m, day := d.YMD()
+	months := y*12 + int(m) - 1 + n
+	y, mm := months/12, time.Month(months%12+1)
+	_, _, last := model.D(y, mm+1, 0).YMD()
+	return model.D(y, mm, min(day, last))
+}
+
+func cmdBreakdown(c *call) (any, error) {
+	rec, target, projection, from, to, err := c.period()
+	if err != nil {
+		return nil, err
+	}
+	res, err := engine.Breakdown(rec, projection, target, from, to)
+	if err != nil {
+		return nil, failErr("engine", "%v", err)
+	}
+	type jline struct {
+		Cause     string  `json:"cause"`
+		Actual    float64 `json:"actual"`
+		Projected float64 `json:"projected"`
+	}
+	out := struct {
+		Target     string       `json:"target"`
+		Projection *string      `json:"projection"`
+		From       jdate        `json:"from"`
+		To         jdate        `json:"to"`
+		Start      float64      `json:"start"`
+		End        float64      `json:"end"`
+		Total      float64      `json:"total"`
+		Lines      []jline      `json:"lines"`
+		Diag       jdiagnostics `json:"diagnostics"`
+	}{string(target), nullable(projection), jd(from), jd(to), res.Start, res.End, res.Total(), []jline{}, diagnosticsJSON(res.Diagnostics)}
+	for _, l := range res.Lines {
+		out.Lines = append(out.Lines, jline{string(l.Cause), l.Actual, l.Projected})
+	}
+	return out, nil
+}
+
+func cmdStarts(c *call) (any, error) {
+	_, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	projection, err := c.projection(rec)
+	if err != nil {
+		return nil, err
+	}
+	var targets []model.AssetID
+	if len(c.args) > 0 {
+		cand, err := resolveTarget(rec, c.args[0], false)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, cand.asset)
+	} else {
+		for _, a := range rec.Accounts {
+			targets = append(targets, model.DefaultAssetID(a.ID))
+		}
+	}
+	type jstart struct {
+		Account         string `json:"account"`
+		Start           jdate  `json:"start"`
+		LastActual      *jdate `json:"last_actual"`
+		HasActual       bool   `json:"has_actual"`
+		OverrideHistory bool   `json:"override_history"`
+		ProjectionStart jdate  `json:"projection_start"`
+	}
+	out := []jstart{}
+	for _, t := range targets {
+		starts, err := engine.Starts(rec, projection, t)
+		if err != nil {
+			return nil, failErr("engine", "%v", err)
+		}
+		for _, s := range starts {
+			js := jstart{Account: string(s.Account), Start: jd(s.Start), HasActual: s.HasActual, OverrideHistory: s.OverrideHistory, ProjectionStart: jd(s.ProjectionStart)}
+			if s.HasActual {
+				js.LastActual = model.Ptr(jd(s.LastActual))
+			}
+			out = append(out, js)
+		}
+	}
+	return out, nil
+}

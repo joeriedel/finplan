@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -790,5 +791,71 @@ func TestRoundTripInterleavedMembers(t *testing.T) {
 				t.Fatal("loaded record differs from the saved one")
 			}
 		})
+	}
+}
+
+func TestOpenReadOnly(t *testing.T) {
+	s, path := openTemp(t)
+	want := demodata.Family()
+	mustSave(t, s, want)
+	s.Close() // the -wal and -shm files may be gone now
+
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ro, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ro.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Error("read-only database loads differently")
+	}
+	if err := ro.Save(want); err == nil {
+		t.Error("Save succeeded on a read-only store")
+	}
+	if err := ro.Void(1, "x"); err == nil {
+		t.Error("Void succeeded on a read-only store")
+	}
+	ro.Close()
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Error("read-only open changed the database file")
+	}
+}
+
+func TestOpenReadOnlyRefusals(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing.db")
+	if _, err := OpenReadOnly(missing); err == nil {
+		t.Error("opened a missing file")
+	}
+	if _, err := os.Stat(missing); err == nil {
+		t.Error("created the missing file")
+	}
+
+	for _, c := range []struct {
+		version int
+		want    error
+	}{{len(migrations) - 1, ErrOldSchema}, {len(migrations) + 1, ErrFutureSchema}} {
+		path := filepath.Join(dir, fmt.Sprintf("v%d.db", c.version))
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, c.version)); err != nil {
+			t.Fatal(err)
+		}
+		db.Close()
+		if _, err := OpenReadOnly(path); !errors.Is(err, c.want) {
+			t.Errorf("version %d: err = %v, want %v", c.version, err, c.want)
+		}
 	}
 }

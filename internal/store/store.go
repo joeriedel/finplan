@@ -14,6 +14,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
 	"sync"
 	"time"
 
@@ -27,6 +29,8 @@ var (
 	ErrRecordChanged = errors.New("store: record entries changed outside the correction API")
 	// ErrFutureSchema is returned by Open for a database written by a newer schema version.
 	ErrFutureSchema = errors.New("store: database schema is newer than this build")
+	// ErrOldSchema is returned by OpenReadOnly for a database older than this build, which only Open can migrate.
+	ErrOldSchema = errors.New("store: database schema is older than this build")
 	// ErrUnknownFormat is returned for a stored document whose format version this build cannot read.
 	ErrUnknownFormat = errors.New("store: unknown document format version")
 	// ErrNotFound is returned for an entry or preset that does not exist.
@@ -59,6 +63,32 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
 	return s, nil
+}
+
+// OpenReadOnly opens the existing database at path for reading only. It never creates the file, migrates it or changes its journal mode, and every write through the returned Store fails. It returns ErrOldSchema for a database that Open would migrate and ErrFutureSchema for one written by a newer build.
+func OpenReadOnly(path string) (*Store, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("store: open %s: %w", path, err)
+	}
+	u := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&_pragma=busy_timeout(5000)&_pragma=query_only(1)"}
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return nil, fmt.Errorf("store: open %s: %w", path, err)
+	}
+	db.SetMaxOpenConns(1)
+	var v int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: open %s: %w", path, err)
+	}
+	if v != len(migrations) {
+		db.Close()
+		if v > len(migrations) {
+			return nil, fmt.Errorf("store: open %s: %w: version %d, this build knows %d", path, ErrFutureSchema, v, len(migrations))
+		}
+		return nil, fmt.Errorf("store: open %s: %w: version %d, this build needs %d", path, ErrOldSchema, v, len(migrations))
+	}
+	return &Store{db: db, path: path, now: time.Now}, nil
 }
 
 func (s *Store) init() error {

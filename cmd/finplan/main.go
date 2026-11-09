@@ -3,7 +3,7 @@
 
 // Command finplan is a personal financial planner. It shows the Graph tab of the record in its SQLite
 // database, the user's own or, with --demo, a throwaway one holding an invented family, and edits its
-// projections in the Projections tab; the other tabs are placeholders.
+// projections in the Projections tab; the other tabs are placeholders. With a subcommand (see finplan help) it instead reads the database and prints JSON, without a window.
 package main
 
 import (
@@ -36,6 +36,13 @@ func init() {
 }
 
 func main() {
+	if isCLI(os.Args[1:]) {
+		os.Exit(runCLI(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	}
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: finplan [--demo]\n       finplan [--demo | --db <path>] <command> ...   (run finplan help)")
+		flag.PrintDefaults()
+	}
 	demo := flag.Bool("demo", false, "use a throwaway database holding an invented family instead of your own")
 	flag.Parse()
 	if err := run(*demo); err != nil {
