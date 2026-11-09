@@ -107,7 +107,7 @@ func (a *app) drawNotices() {
 	imgui.SetNextWindowPosV(imgui.MainViewport().Center(), imgui.CondAppearing, imgui.NewVec2(0.5, 0.5))
 	if imgui.BeginPopupModalV("finplan##notice", nil, imgui.WindowFlagsAlwaysAutoResize) {
 		imgui.PushTextWrapPosV(imgui.FontSize() * 30)
-		imgui.TextWrapped(a.notices[0])
+		imgui.TextUnformatted(a.notices[0])
 		imgui.PopTextWrapPos()
 		if imgui.Button("OK") {
 			a.notices = a.notices[1:]

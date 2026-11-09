@@ -328,7 +328,7 @@ func (g *graphTab) row(ln graph.Line) {
 			if ln.Pinned {
 				tip = "Unpin: follow the switcher"
 			}
-			imgui.SetTooltip(tip)
+			tooltipText(tip)
 		}
 		if hovered || ln.Pinned {
 			drawPin(dl, imgui.NewVec2(bx+fh/2, p.Y+h/2), 13*s, u32(rgba(colText, pinAlpha)))

@@ -213,7 +213,9 @@ func (t *projTab) deletePopup() {
 	if !imgui.BeginPopupModalV("delete projection", nil, imgui.WindowFlagsAlwaysAutoResize) {
 		return
 	}
-	imgui.TextWrapped(fmt.Sprintf("Delete the projection %q? Undo brings it back.", t.deleting))
+	imgui.PushTextWrapPos()
+	imgui.TextUnformatted(fmt.Sprintf("Delete the projection %q? Undo brings it back.", t.deleting))
+	imgui.PopTextWrapPos()
 	if imgui.Button("Delete") {
 		name := t.deleting
 		if p := t.a.rec.Projection(name); p != nil {
@@ -241,7 +243,7 @@ func (t *projTab) detail() {
 		return
 	}
 	if e := t.errs[""]; e != "" {
-		imgui.TextColored(rgba(colError, 1), "Not changed: "+e)
+		errorText("Not changed: " + e)
 	}
 	t.header(p)
 	imgui.Separator()
@@ -278,11 +280,11 @@ func (t *projTab) field(id, hint, value string, width float32) (string, bool) {
 		if width < 0 {
 			// A field that fills a table cell has no room beside it, so the message goes below, wrapped to the cell.
 			imgui.PushTextWrapPos()
-			imgui.TextColored(rgba(colError, 1), "Not changed: "+e)
+			errorText("Not changed: " + e)
 			imgui.PopTextWrapPos()
 		} else {
 			imgui.SameLine()
-			imgui.TextColored(rgba(colError, 1), "Not changed: "+e)
+			errorText("Not changed: " + e)
 		}
 	}
 	return text, done
@@ -534,7 +536,7 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 	}
 	tip := func() {
 		if ow != nil && imgui.IsItemHovered() {
-			imgui.SetTooltip(overwriteText(ow))
+			tooltipText(overwriteText(ow))
 		}
 	}
 	imgui.PushIDInt(int32(i))
@@ -784,7 +786,7 @@ func (t *projTab) addForm(p *model.Projection) {
 	}
 	if t.addErr != "" {
 		imgui.SameLine()
-		imgui.TextColored(rgba(colError, 1), "Not added: "+t.addErr)
+		errorText("Not added: " + t.addErr)
 	}
 }
 
@@ -907,4 +909,19 @@ func describeWhen(s model.Schedule) string {
 		return segs[0].From.String() + " to " + segs[0].End.String()
 	}
 	return fmt.Sprintf("%d periods from %s", len(segs), segs[0].From)
+}
+
+// errorText draws msg in the error colour as plain text; msg quotes user input, so it must never be a format string.
+func errorText(msg string) {
+	imgui.PushStyleColorVec4(imgui.ColText, rgba(colError, 1))
+	imgui.TextUnformatted(msg)
+	imgui.PopStyleColor()
+}
+
+// tooltipText shows msg as a tooltip without treating it as a format string.
+func tooltipText(msg string) {
+	if imgui.BeginTooltip() {
+		imgui.TextUnformatted(msg)
+		imgui.EndTooltip()
+	}
 }
