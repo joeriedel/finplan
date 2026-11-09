@@ -22,6 +22,7 @@ const (
 	dashLen       = 7
 	dashGap       = 5
 	hitRadius     = 6
+	hatchSpacing  = 7
 )
 
 func lineColor(c graph.Color, alpha float32) imgui.Vec4 {
@@ -94,7 +95,7 @@ func (g *graphTab) toPx(x, y float64) graph.Pt {
 	}
 }
 
-// drawPlot draws everything inside the plot: the today marker, the lines, handoff markers and labels,
+// drawPlot draws everything inside the plot: the today marker, the bands, the lines, handoff markers and labels,
 // the crosshair, and handles selecting a line by clicking it. Limits and plot area are read from ImPlot.
 func (g *graphTab) drawPlot(views []lineView) {
 	lim := implot.GetPlotLimitsV(implot.AxisX1, implot.AxisY1)
@@ -122,13 +123,17 @@ func (g *graphTab) drawPlot(views []lineView) {
 		dl.AddTextVec2(imgui.NewVec2(todayX+6*s, top+4*s), u32(rgba(colAccent, 1)), "Today · projected →")
 	}
 
-	// Lines, the selected one last so that it lies on top.
+	// Bands lie beneath the lines. The selected line is drawn last so that it lies on top.
 	polys := make([][]graph.Pt, len(views))
 	for i, v := range views {
 		polys[i] = make([]graph.Pt, len(v.samples))
 		for k, sm := range v.samples {
 			polys[i][k] = g.toPx(float64(sm.Date)*secondsPerDay, sm.Amount)
 		}
+	}
+	bands := g.bandViews(views)
+	for _, bv := range bands {
+		g.drawBand(dl, bv, polys[bv.upper], polys[bv.lower])
 	}
 	for pass := 0; pass < 2; pass++ {
 		for i, v := range views {
@@ -197,7 +202,7 @@ func (g *graphTab) drawPlot(views []lineView) {
 	}
 
 	if hovered {
-		g.crosshairTags(views, day)
+		g.crosshairTags(views, bands, day)
 	}
 }
 
@@ -242,7 +247,7 @@ func (g *graphTab) drawTag(dl *imgui.DrawList, p graph.Pt, bg imgui.Vec4, text s
 // crosshairTags queues the value tags (in the y-axis gutter, against the plot's left edge) and the date tag (in
 // the x-axis area, below the plot), and shows the tooltip, for the date under the pointer. The tags are our own
 // rather than ImPlot's, which would resize the axis gutters as the pointer moves.
-func (g *graphTab) crosshairTags(views []lineView, day model.Date) {
+func (g *graphTab) crosshairTags(views []lineView, bands []bandView, day model.Date) {
 	type row struct {
 		v      lineView
 		amount float64
@@ -288,9 +293,67 @@ func (g *graphTab) crosshairTags(views []lineView, day model.Date) {
 				imgui.TextUnformatted(r.status.String())
 				imgui.PopStyleColor()
 			}
+			g.bandTipRows(views, bands, day)
 			imgui.EndTable()
 		}
 		imgui.EndTooltip()
+	}
+}
+
+// drawBand fills the area between the band's edges, and stripes it if hatched. The edges are the pixel polylines of
+// its upper and lower lines.
+func (g *graphTab) drawBand(dl *imgui.DrawList, bv bandView, upper, lower []graph.Pt) {
+	fill := u32(lineColor(bv.band.Color, 0.25))
+	left, right := g.plotPos.X, g.plotPos.X+g.plotSize.X
+	for _, poly := range graph.BandPolys(upper, lower) {
+		minX, maxX := poly[0].X, poly[0].X
+		for _, p := range poly[1:] {
+			minX, maxX = min(minX, p.X), max(maxX, p.X)
+		}
+		if minX > right || maxX < left {
+			continue
+		}
+		dl.AddConvexPolyFilled(vecs(poly), int32(len(poly)), fill)
+	}
+	if bv.band.Hatch {
+		col := u32(lineColor(bv.band.Color, 0.6))
+		for _, sg := range graph.HatchStripes(upper, lower, hatchSpacing*uiScale,
+			graph.Pt{X: left, Y: g.plotPos.Y}, graph.Pt{X: right, Y: g.plotPos.Y + g.plotSize.Y}) {
+			dl.AddLineArgs(vec(sg.A), vec(sg.B), col, uiScale)
+		}
+	}
+}
+
+// bandTipRows adds a tooltip row per band with the gap between its lines at the day, and the gap in today's dollars
+// if the band asks for it. A band whose lines have no value at the day is left out.
+func (g *graphTab) bandTipRows(views []lineView, bands []bandView, day model.Date) {
+	for _, bv := range bands {
+		up, _, uok := graph.At(views[bv.upper].samples, day)
+		lo, _, lok := graph.At(views[bv.lower].samples, day)
+		if !uok || !lok {
+			continue
+		}
+		gap := graph.Gap(up, lo)
+		imgui.TableNextRow()
+		imgui.TableNextColumn()
+		imgui.PushStyleColorVec4(imgui.ColText, lineColor(bv.band.Color, 1))
+		imgui.TextUnformatted(bv.name)
+		imgui.PopStyleColor()
+		imgui.TableNextColumn()
+		imgui.TextUnformatted(graph.FormatMoney(gap))
+		imgui.TableNextColumn()
+		imgui.PushStyleColorVec4(imgui.ColText, rgba(colMuted, 1))
+		imgui.TextUnformatted("gap")
+		imgui.PopStyleColor()
+		if bv.band.TodayDollars {
+			imgui.TableNextRow()
+			imgui.TableNextColumn()
+			imgui.PushStyleColorVec4(imgui.ColText, rgba(colMuted, 1))
+			imgui.TextUnformatted("  gap in today's $")
+			imgui.TableNextColumn()
+			imgui.TextUnformatted(graph.FormatMoney(graph.ToTodayDollars(gap, day, g.rec.Today, g.rec.Globals[model.PropInflation])))
+			imgui.PopStyleColor()
+		}
 	}
 }
 

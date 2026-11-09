@@ -49,8 +49,24 @@ type graphTab struct {
 	addProj    string
 	addColor   [3]float32
 	addDefault [3]float32
-	// The recolour popup of a row.
+	// The recolour popup of a row or band.
 	editColor [3]float32
+
+	// The Add band popup; the colour follows the upper line's until the user edits it.
+	bandUpper, bandLower   graph.LineID
+	bandColor, bandDefault [3]float32
+
+	// The saved view presets, the index of the current one (-1 for none) and the Save as name.
+	presets    []graph.Preset
+	preset     int
+	presetName string
+}
+
+// bandView is a drawn band with the indexes in the frame's lineViews of its upper and lower lines.
+type bandView struct {
+	band         graph.Band
+	name         string
+	upper, lower int
 }
 
 func newGraphTab(rec *model.Record) *graphTab {
@@ -58,7 +74,7 @@ func newGraphTab(rec *model.Record) *graphTab {
 	if len(rec.Projections) > 0 {
 		switcher = rec.Projections[0].Name
 	}
-	g := &graphTab{rec: rec, lines: graph.NewLines(switcher), cache: newDataCache(rec), dataStart: graph.DataStart(rec)}
+	g := &graphTab{rec: rec, lines: graph.NewLines(switcher), cache: newDataCache(rec), dataStart: graph.DataStart(rec), preset: -1}
 	for _, id := range []model.AssetID{
 		demodata.NetWorth, demodata.AllCash, demodata.Retirement,
 		model.DefaultAssetID(demodata.Brokerage), model.DefaultAssetID(demodata.TSP), model.DefaultAssetID(demodata.Mortgage),
@@ -68,7 +84,72 @@ func newGraphTab(rec *model.Record) *graphTab {
 		}
 	}
 	g.setRange(graph.RangeButtons[1])
+	g.presets = familyPresets(rec)
 	return g
+}
+
+// applyPreset replaces the lines, bands and x range with the preset's and makes it current. Selection is cleared.
+func (g *graphTab) applyPreset(i int) {
+	p := g.presets[i]
+	g.lines = p.Restore()
+	g.xMin, g.xMax = p.From, p.To
+	g.applyX, g.fitY = true, true
+	g.preset = i
+}
+
+// savePreset stores the current view over the current preset.
+func (g *graphTab) savePreset() {
+	g.presets[g.preset] = graph.Capture(g.presets[g.preset].Name, g.lines, g.xMin, g.xMax)
+}
+
+// savePresetAs stores the current view as a new preset and makes it current.
+func (g *graphTab) savePresetAs(name string) {
+	g.presets = append(g.presets, graph.Capture(name, g.lines, g.xMin, g.xMax))
+	g.preset = len(g.presets) - 1
+}
+
+// presetNameTaken reports whether a preset already has the name.
+func (g *graphTab) presetNameTaken(name string) bool {
+	for _, p := range g.presets {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// lineName returns the line's asset name and effective projection.
+func (g *graphTab) lineName(id graph.LineID) (name, proj string) {
+	if ln, ok := g.lines.Get(id); ok {
+		proj, _ = g.lines.Effective(id)
+		return g.assetName(ln.Asset), proj
+	}
+	return "", ""
+}
+
+// bandName returns the band's name from its lines' assets and effective projections.
+func (g *graphTab) bandName(b graph.Band) string {
+	un, up := g.lineName(b.Upper)
+	ln, lp := g.lineName(b.Lower)
+	return graph.BandName(un, up, ln, lp)
+}
+
+// bandViews returns the drawn bands whose two lines were sampled in views to the same number of samples.
+func (g *graphTab) bandViews(views []lineView) []bandView {
+	at := map[graph.LineID]int{}
+	for i, v := range views {
+		at[v.line.ID] = i
+	}
+	var out []bandView
+	for _, b := range g.lines.Bands() {
+		u, uok := at[b.Upper]
+		l, lok := at[b.Lower]
+		if !g.lines.BandDrawn(b.ID) || !uok || !lok || len(views[u].samples) != len(views[l].samples) {
+			continue
+		}
+		out = append(out, bandView{b, g.bandName(b), u, l})
+	}
+	return out
 }
 
 func (g *graphTab) setRange(b graph.RangeButton) {

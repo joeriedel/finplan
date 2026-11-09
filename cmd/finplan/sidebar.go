@@ -33,6 +33,9 @@ func drawPin(dl *imgui.DrawList, c imgui.Vec2, size float32, col uint32) {
 }
 
 func (g *graphTab) sidebar() {
+	// A picked preset replaces the lines, so it is applied once the sidebar is drawn.
+	pick := g.presetSection()
+	imgui.Separator()
 	imgui.AlignTextToFramePadding()
 	imgui.TextUnformatted("Lines")
 	imgui.SameLineV(imgui.ContentRegionAvail().X-imgui.FontSize()*4.5+imgui.CursorPos().X, 0)
@@ -52,6 +55,168 @@ func (g *graphTab) sidebar() {
 	for _, ln := range g.lines.All() {
 		g.row(ln)
 	}
+
+	imgui.Separator()
+	imgui.AlignTextToFramePadding()
+	imgui.TextUnformatted("Bands")
+	imgui.SameLineV(imgui.ContentRegionAvail().X-imgui.FontSize()*4.5+imgui.CursorPos().X, 0)
+	if imgui.Button("+ Add##band") {
+		g.bandUpper, g.bandLower = 0, 0
+		g.bandColor, g.bandDefault = [3]float32{}, [3]float32{}
+		imgui.OpenPopupStrV("add band", 0)
+	}
+	g.addBandPopup()
+	for _, b := range g.lines.Bands() {
+		g.bandRow(b)
+	}
+
+	if pick >= 0 {
+		g.applyPreset(pick)
+	}
+}
+
+// presetSection draws the preset dropdown with Save and Save as, and returns the index of the preset picked, or -1.
+func (g *graphTab) presetSection() int {
+	pick := -1
+	imgui.AlignTextToFramePadding()
+	imgui.TextUnformatted("View preset")
+	preview := "Choose a preset"
+	if g.preset >= 0 {
+		preview = g.presets[g.preset].Name
+	}
+	imgui.SetNextItemWidth(-1)
+	if imgui.BeginComboV("##preset", preview, 0) {
+		for i, p := range g.presets {
+			if imgui.SelectableBoolV(p.Name+"##"+strconv.Itoa(i), i == g.preset, 0, imgui.NewVec2(0, 0)) {
+				pick = i
+			}
+		}
+		imgui.EndCombo()
+	}
+	imgui.BeginDisabledV(g.preset < 0)
+	if imgui.Button("Save") {
+		g.savePreset()
+	}
+	imgui.EndDisabled()
+	imgui.SameLine()
+	if imgui.Button("Save as…") {
+		g.presetName = ""
+		imgui.OpenPopupStrV("save preset as", 0)
+	}
+	if imgui.BeginPopupV("save preset as", 0) {
+		imgui.SetNextItemWidth(imgui.FontSize() * 16)
+		imgui.InputTextWithHint("##name", "Preset name", &g.presetName, 0, nil)
+		name := strings.TrimSpace(g.presetName)
+		imgui.BeginDisabledV(name == "" || g.presetNameTaken(name))
+		if imgui.Button("Save") {
+			g.savePresetAs(name)
+			imgui.CloseCurrentPopup()
+		}
+		imgui.EndDisabled()
+		imgui.SameLine()
+		if imgui.Button("Cancel") {
+			imgui.CloseCurrentPopup()
+		}
+		imgui.EndPopup()
+	}
+	return pick
+}
+
+// bandRow draws one band: visibility checkbox, colour swatch and name, then hatch and today's dollars toggles and a
+// remove button.
+func (g *graphTab) bandRow(b graph.Band) {
+	imgui.PushIDStr("band" + strconv.Itoa(int(b.ID)))
+	defer imgui.PopID()
+
+	vis := b.Visible
+	if imgui.Checkbox("##visible", &vis) {
+		g.lines.SetBandVisible(b.ID, vis)
+	}
+	imgui.SameLine()
+	sw := imgui.FrameHeight() * 0.7
+	if imgui.ColorButtonV("##swatch", lineColor(b.Color, 1), imgui.ColorEditFlagsNoTooltip|imgui.ColorEditFlagsNoAlpha, imgui.NewVec2(sw, sw)) {
+		g.editColor = colorFloats(b.Color)
+		imgui.OpenPopupStrV("recolour", 0)
+	}
+	if imgui.BeginPopupV("recolour", 0) {
+		if imgui.ColorEdit3V("##colour", &g.editColor, imgui.ColorEditFlagsNoInputs|imgui.ColorEditFlagsNoLabel) {
+			g.lines.SetBandColor(b.ID, floatsColor(g.editColor))
+		}
+		imgui.EndPopup()
+	}
+	imgui.SameLine()
+	imgui.PushTextWrapPosV(0)
+	imgui.TextUnformatted(g.bandName(b))
+	imgui.PopTextWrapPos()
+
+	hatch, today := b.Hatch, b.TodayDollars
+	if imgui.Checkbox("Hatch", &hatch) {
+		g.lines.SetBandHatch(b.ID, hatch)
+	}
+	imgui.SameLine()
+	if imgui.Checkbox("Today's $", &today) {
+		g.lines.SetBandTodayDollars(b.ID, today)
+	}
+	imgui.SameLine()
+	if imgui.SmallButton("Remove") {
+		g.lines.RemoveBand(b.ID)
+	}
+	imgui.Dummy(imgui.NewVec2(0, imgui.CurrentStyle().ItemSpacing().Y))
+}
+
+// lineCombo is a combo choosing one of the lines, shown by asset name and effective projection. It reports whether
+// the choice changed.
+func (g *graphTab) lineCombo(label string, id *graph.LineID) bool {
+	preview := "Choose a line"
+	if n, p := g.lineName(*id); n != "" {
+		preview = n + " (" + p + ")"
+	}
+	changed := false
+	imgui.SetNextItemWidth(imgui.FontSize() * 16)
+	if imgui.BeginComboV(label, preview, 0) {
+		for _, ln := range g.lines.All() {
+			n, p := g.lineName(ln.ID)
+			if imgui.SelectableBoolV(n+" ("+p+")##"+strconv.Itoa(int(ln.ID)), ln.ID == *id, 0, imgui.NewVec2(0, 0)) {
+				*id, changed = ln.ID, true
+			}
+		}
+		imgui.EndCombo()
+	}
+	return changed
+}
+
+// addBandPopup is the Add band dialog: the upper and lower lines and the colour, which follows the upper line's
+// until it is edited.
+func (g *graphTab) addBandPopup() {
+	if !imgui.BeginPopupV("add band", 0) {
+		return
+	}
+	if g.lineCombo("Upper", &g.bandUpper) {
+		if ln, ok := g.lines.Get(g.bandUpper); ok {
+			c := colorFloats(ln.Color)
+			if g.bandColor == g.bandDefault {
+				g.bandColor = c
+			}
+			g.bandDefault = c
+		}
+	}
+	g.lineCombo("Lower", &g.bandLower)
+	imgui.ColorEdit3V("Colour", &g.bandColor, imgui.ColorEditFlagsNoInputs)
+
+	imgui.Separator()
+	imgui.BeginDisabledV(g.bandUpper == 0 || g.bandLower == 0 || g.bandUpper == g.bandLower)
+	imgui.PushStyleColorVec4(imgui.ColButton, rgba(colSelect, 1))
+	if imgui.Button("Add") {
+		g.lines.AddBand(g.bandUpper, g.bandLower, floatsColor(g.bandColor))
+		imgui.CloseCurrentPopup()
+	}
+	imgui.PopStyleColor()
+	imgui.EndDisabled()
+	imgui.SameLine()
+	if imgui.Button("Cancel") {
+		imgui.CloseCurrentPopup()
+	}
+	imgui.EndPopup()
 }
 
 // row draws one line: visibility checkbox, solo button, colour swatch, asset name and projection, with pin and

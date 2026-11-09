@@ -3,7 +3,11 @@
 
 package graph
 
-import "github.com/joeriedel/finplan/internal/model"
+import (
+	"slices"
+
+	"github.com/joeriedel/finplan/internal/model"
+)
 
 // LineID identifies a line for as long as the list lives. Ids are never reused.
 type LineID int
@@ -26,10 +30,12 @@ type Lines struct {
 	switcher string
 	selected LineID
 	solo     map[LineID]bool
+	bands    []Band
+	nextBand BandID
 }
 
 // NewLines returns an empty list whose switcher shows the projection.
-func NewLines(switcher string) *Lines { return &Lines{nextID: 1, switcher: switcher} }
+func NewLines(switcher string) *Lines { return &Lines{nextID: 1, nextBand: 1, switcher: switcher} }
 
 // Switcher returns the projection unpinned lines follow.
 func (l *Lines) Switcher() string { return l.switcher }
@@ -65,7 +71,7 @@ func (l *Lines) index(id LineID) int {
 	return -1
 }
 
-// Remove deletes the line, and clears its selection and solo.
+// Remove deletes the line, clears its selection and solo, and removes the bands that use it.
 func (l *Lines) Remove(id LineID) {
 	i := l.index(id)
 	if i < 0 {
@@ -76,6 +82,7 @@ func (l *Lines) Remove(id LineID) {
 		l.selected = 0
 	}
 	delete(l.solo, id)
+	l.bands = slices.DeleteFunc(l.bands, func(b Band) bool { return b.Upper == id || b.Lower == id })
 }
 
 // Get returns the line with the id.
