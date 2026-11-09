@@ -58,6 +58,37 @@ func WaitEvents(timeoutMs int) int {
 	return int(C.FinplanBackend_WaitEvents(C.int(timeoutMs)))
 }
 
+// SaveResult is the outcome of a save dialog: the chosen Path, or Cancelled, or Err.
+type SaveResult struct {
+	Path      string
+	Cancelled bool
+	Err       error
+}
+
+// ShowSaveDialog opens a save dialog offering defaultName and a .db filter, and reports false if one is already
+// open. The outcome comes from PollSaveDialog; the dialog's completion wakes WaitEvents.
+func ShowSaveDialog(defaultName string) bool {
+	cName := C.CString(defaultName)
+	defer C.free(unsafe.Pointer(cName))
+	return bool(C.FinplanBackend_ShowSaveFileDialog(cName))
+}
+
+// PollSaveDialog returns the finished dialog's outcome once, or false if there is none waiting.
+func PollSaveDialog() (SaveResult, bool) {
+	buf := make([]byte, 4096)
+	kind := C.FinplanBackend_PollSaveFile((*C.char)(unsafe.Pointer(&buf[0])), C.int(len(buf)))
+	text := C.GoString((*C.char)(unsafe.Pointer(&buf[0])))
+	switch kind {
+	case C.FINPLAN_SAVE_CHOSEN:
+		return SaveResult{Path: text}, true
+	case C.FINPLAN_SAVE_CANCELLED:
+		return SaveResult{Cancelled: true}, true
+	case C.FINPLAN_SAVE_ERROR:
+		return SaveResult{Err: errors.New(text)}, true
+	}
+	return SaveResult{}, false
+}
+
 // UIScale is the factor to apply to ImGui sizes and font size.
 func UIScale() float32 {
 	return float32(C.FinplanBackend_UIScale())

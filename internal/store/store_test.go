@@ -309,6 +309,253 @@ func TestMigrateFromVersion1(t *testing.T) {
 	}
 }
 
+func TestSaveStaleAfterVoid(t *testing.T) {
+	s, _ := openTemp(t)
+	mustSave(t, s, demodata.Family())
+	stale := mustLoad(t, s)
+	es, _ := s.Entries(demodata.Home)
+	if err := s.Void(es[1].ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	var before int
+	s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&before)
+	if err := s.Save(stale); !errors.Is(err, ErrRecordChanged) {
+		t.Fatalf("Save of a record loaded before the void: %v", err)
+	}
+	var after int
+	s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&after)
+	if after != before {
+		t.Errorf("entry rows %d -> %d", before, after)
+	}
+}
+
+func TestSaveStaleAfterCorrectAndVoid(t *testing.T) {
+	s, _ := openTemp(t)
+	rec := demodata.Family()
+	rec.Account(demodata.Checking).AddTransaction(model.Transaction{Date: model.D(2026, 1, 3), Amount: -41.5, Kind: model.TxExpense, Memo: "fare"})
+	mustSave(t, s, rec)
+	stale := mustLoad(t, s)
+	es, _ := s.Entries(demodata.Checking)
+	last := es[len(es)-1]
+	v := last.Values
+	v.Amount = -43.25
+	if err := s.Correct(last.ID, v, "fix"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Void(last.ID, "dup"); err != nil {
+		t.Fatal(err)
+	}
+	var before, after int
+	s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&before)
+	if err := s.Save(stale); !errors.Is(err, ErrRecordChanged) {
+		t.Fatalf("Save of a record loaded before correct and void: %v", err)
+	}
+	s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&after)
+	if after != before {
+		t.Errorf("entry rows %d -> %d", before, after)
+	}
+}
+
+func TestSaveNewEntryEqualToEarlierVoid(t *testing.T) {
+	s, _ := openTemp(t)
+	tx := model.Transaction{Date: model.D(2026, 1, 3), Amount: -2.75, Kind: model.TxExpense, Memo: "fare"}
+	rec := demodata.Family()
+	rec.Account(demodata.Checking).AddTransaction(tx)
+	rec.Account(demodata.Checking).AddTransaction(tx)
+	mustSave(t, s, rec)
+	es, _ := s.Entries(demodata.Checking)
+	dup := es[len(es)-1]
+	if err := s.Void(dup.ID, "duplicate"); err != nil {
+		t.Fatal(err)
+	}
+	loaded := mustLoad(t, s)
+	loaded.Account(demodata.Checking).AddTransaction(tx)
+	mustSave(t, s, loaded)
+	live, _ := s.Entries(demodata.Checking)
+	if len(live) != len(es) {
+		t.Errorf("live entries = %d, want %d", len(live), len(es))
+	}
+	all, err := queryEntries(s.db, true, `e.id = ?`, dup.ID)
+	if err != nil || len(all) != 1 {
+		t.Fatalf("voided entry: %v %v", all, err)
+	}
+	for _, e := range live {
+		if e.ID == dup.ID {
+			t.Error("voided entry is live again")
+		}
+	}
+}
+
+func TestVoid(t *testing.T) {
+	s, _ := openTemp(t)
+	clock := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { clock = clock.Add(time.Hour); return clock }
+	rec := demodata.Family()
+	mustSave(t, s, rec)
+	before, _ := s.Entries(demodata.Home)
+	sn := before[1]
+
+	if err := s.Void(sn.ID, "duplicate"); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s.Entries(demodata.Home)
+	if len(after) != len(before)-1 {
+		t.Fatalf("entries %d -> %d", len(before), len(after))
+	}
+	got := mustLoad(t, s)
+	if n := len(got.Account(demodata.Home).Snapshots); n != len(before)-1 {
+		t.Errorf("loaded snapshots = %d", n)
+	}
+	var rows int
+	s.db.QueryRow(`SELECT COUNT(*) FROM entries WHERE id = ?`, sn.ID).Scan(&rows)
+	if rows != 1 {
+		t.Error("voided entry row was removed")
+	}
+	h, err := s.History(sn.ID)
+	if err != nil || len(h) != 2 || h[0].Void || !h[1].Void || h[1].Note != "duplicate" || h[1].Amount != sn.Amount || h[1].Date != sn.Date {
+		t.Fatalf("history: %+v, %v", h, err)
+	}
+
+	// Saving the loaded record neither fails nor brings the entry back.
+	mustSave(t, s, got)
+	if again, _ := s.Entries(demodata.Home); len(again) != len(before)-1 {
+		t.Errorf("save re-inserted the voided entry: %d entries", len(again))
+	}
+	s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&rows)
+	var total int
+	for _, a := range rec.Accounts {
+		total += len(a.Snapshots) + len(a.Transactions)
+	}
+	if rows != total {
+		t.Errorf("entry rows = %d, want %d", rows, total)
+	}
+
+	// A correction restores it.
+	if err := s.Correct(sn.ID, Values{Date: sn.Date, Amount: 5}, "restored"); err != nil {
+		t.Fatal(err)
+	}
+	restored, _ := s.Entries(demodata.Home)
+	if len(restored) != len(before) || restored[1].Amount != 5 {
+		t.Errorf("restored entries = %+v", restored)
+	}
+	if h, _ := s.History(sn.ID); len(h) != 3 || h[2].Void {
+		t.Errorf("history after restore = %+v", h)
+	}
+	if err := s.Void(9999, ""); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown entry: %v", err)
+	}
+}
+
+func TestMigrateFromVersion2(t *testing.T) {
+	// A version 3 database with a correction supplies the rows for the version 2 one.
+	src, srcPath := openTemp(t)
+	want := demodata.Family()
+	mustSave(t, src, want)
+	es, _ := src.Entries(demodata.Home)
+	if err := src.Correct(es[1].ID, Values{Date: es[1].Date, Amount: 111}, "typo"); err != nil {
+		t.Fatal(err)
+	}
+	want = mustLoad(t, src)
+	src.Close()
+
+	path := filepath.Join(t.TempDir(), "v2.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := migrate(db, 2); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`ATTACH DATABASE '` + srcPath + `' AS src`,
+		`INSERT INTO documents SELECT * FROM src.documents`,
+		`INSERT INTO entries SELECT * FROM src.entries`,
+		`INSERT INTO corrections (id, entry, date, amount, tx_kind, counter, memo, note, made_at)
+			SELECT id, entry, date, amount, tx_kind, counter, memo, note, made_at FROM src.corrections`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var v int
+	s.db.QueryRow(`PRAGMA user_version`).Scan(&v)
+	if v != 3 {
+		t.Errorf("user_version = %d, want 3", v)
+	}
+	if got := mustLoad(t, s); !reflect.DeepEqual(got, want) {
+		t.Error("migrated database loads differently")
+	}
+	if err := s.Void(es[0].ID, ""); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestBackup(t *testing.T) {
+	s, _ := openTemp(t)
+	want := richFamily(t)
+	mustSave(t, s, want)
+	if err := s.PutPreset("p", 1, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "backup.db")
+	// A second backup over the first replaces it.
+	for i := 0; i < 2; i++ {
+		if err := s.Backup(target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := Open(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if got := mustLoad(t, b); !reflect.DeepEqual(got, want) {
+		t.Error("backup loads differently")
+	}
+	if p, err := b.Preset("p"); err != nil || string(p.Body) != "x" {
+		t.Errorf("backup preset: %+v, %v", p, err)
+	}
+	left, _ := filepath.Glob(filepath.Join(dir, ".finplan-backup-*"))
+	if len(left) != 0 {
+		t.Errorf("temp files left: %v", left)
+	}
+	if err := s.Backup(filepath.Join(dir, "missing", "b.db")); err == nil {
+		t.Error("backup into a missing folder succeeded")
+	}
+}
+
+func TestDataVersion(t *testing.T) {
+	s, path := openTemp(t)
+	v0, err := s.DataVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustSave(t, s, demodata.Family())
+	if v, _ := s.DataVersion(); v != v0 {
+		t.Errorf("own write changed the version: %d -> %d", v0, v)
+	}
+	other, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := other.PutPreset("p", 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := s.DataVersion(); v == v0 {
+		t.Error("another store's write did not change the version")
+	}
+}
+
 func TestWAL(t *testing.T) {
 	s, _ := openTemp(t)
 	var mode string

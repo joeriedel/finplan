@@ -58,6 +58,8 @@ var migrations = []string{
 		format INTEGER NOT NULL,
 		body   BLOB    NOT NULL
 	);`,
+	// 3: a correction can void its entry, taking it out of the record without deleting it.
+	`ALTER TABLE corrections ADD COLUMN void INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // migrate brings the database up to schema version target in one transaction. It fails, changing

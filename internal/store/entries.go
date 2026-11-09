@@ -39,10 +39,12 @@ type Entry struct {
 }
 
 // Revision is one version of an entry: the original, then each correction. Note is empty for the original.
+// Void is set for a correction that voided the entry.
 type Revision struct {
 	Values
 	MadeAt time.Time
 	Note   string
+	Void   bool
 }
 
 type querier interface {
@@ -54,8 +56,22 @@ const currentEntries = `SELECT e.id, e.account, e.kind,
 		COALESCE(c.counter, e.counter), COALESCE(c.memo, e.memo)
 	FROM entries e LEFT JOIN corrections c ON c.id = (SELECT MAX(id) FROM corrections WHERE entry = e.id)`
 
-// queryEntries returns the entries matching the where clause (which may be empty), in id order.
-func queryEntries(q querier, where string, args ...any) ([]Entry, error) {
+// queryEntries returns the entries matching the condition (an SQL expression, which may be empty), in id
+// order. Voided entries are left out unless withVoided is set.
+func queryEntries(q querier, withVoided bool, cond string, args ...any) ([]Entry, error) {
+	where := ""
+	if !withVoided {
+		where = "COALESCE(c.void, 0) = 0"
+	}
+	if cond != "" {
+		if where != "" {
+			where += " AND "
+		}
+		where += cond
+	}
+	if where != "" {
+		where = "WHERE " + where
+	}
 	rows, err := q.Query(currentEntries+" "+where+" ORDER BY e.id", args...)
 	if err != nil {
 		return nil, err
@@ -73,20 +89,21 @@ func queryEntries(q querier, where string, args ...any) ([]Entry, error) {
 }
 
 // Entries returns the account's entries in the order they were stored, with their current values.
+// Voided entries are left out.
 func (s *Store) Entries(account model.AccountID) ([]Entry, error) {
-	return queryEntries(s.db, `WHERE e.account = ?`, string(account))
+	return queryEntries(s.db, false, `e.account = ?`, string(account))
 }
 
 // Correct stores a correction of the entry: from now on the entry has the new values. The original
 // and earlier corrections stay stored. A snapshot correction that would give the account two current
-// snapshots on one date is rejected.
+// snapshots on one date is rejected. Correcting a voided entry restores it.
 func (s *Store) Correct(id int64, v Values, note string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	es, err := queryEntries(tx, `WHERE e.id = ?`, id)
+	es, err := queryEntries(tx, true, `e.id = ?`, id)
 	if err != nil {
 		return err
 	}
@@ -99,7 +116,7 @@ func (s *Store) Correct(id int64, v Values, note string) error {
 		if v.TxKind != "" || v.Counter != "" || v.Memo != "" {
 			return fmt.Errorf("store: entry %d is a snapshot: kind, counter and memo must be empty", id)
 		}
-		others, err := queryEntries(tx, `WHERE e.account = ?`, string(e.Account))
+		others, err := queryEntries(tx, false, `e.account = ?`, string(e.Account))
 		if err != nil {
 			return err
 		}
@@ -122,7 +139,32 @@ func (s *Store) Correct(id int64, v Values, note string) error {
 	return tx.Commit()
 }
 
-// History returns the entry's original values followed by each correction, in the order made.
+// Void stores a correction that takes the entry out of the record: Load and Entries leave it out, while
+// the entry and its history stay stored. A later Correct restores it.
+func (s *Store) Void(id int64, note string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	es, err := queryEntries(tx, true, `e.id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if len(es) == 0 {
+		return fmt.Errorf("%w: entry %d", ErrNotFound, id)
+	}
+	v := es[0].Values
+	_, err = tx.Exec(`INSERT INTO corrections (entry, date, amount, tx_kind, counter, memo, note, void, made_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+		id, int32(v.Date), v.Amount, string(v.TxKind), string(v.Counter), v.Memo, note, s.now().UnixNano())
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// History returns the entry's original values followed by each correction, including voids, in the order made.
 func (s *Store) History(id int64) ([]Revision, error) {
 	var revs []Revision
 	read := func(query string, args ...any) error {
@@ -134,7 +176,7 @@ func (s *Store) History(id int64) ([]Revision, error) {
 		for rows.Next() {
 			var r Revision
 			var at int64
-			if err := rows.Scan(&r.Date, &r.Amount, &r.TxKind, &r.Counter, &r.Memo, &r.Note, &at); err != nil {
+			if err := rows.Scan(&r.Date, &r.Amount, &r.TxKind, &r.Counter, &r.Memo, &r.Note, &r.Void, &at); err != nil {
 				return err
 			}
 			r.MadeAt = time.Unix(0, at).UTC()
@@ -142,14 +184,14 @@ func (s *Store) History(id int64) ([]Revision, error) {
 		}
 		return rows.Err()
 	}
-	err := read(`SELECT date, amount, tx_kind, counter, memo, '', made_at FROM entries WHERE id = ?`, id)
+	err := read(`SELECT date, amount, tx_kind, counter, memo, '', 0, made_at FROM entries WHERE id = ?`, id)
 	if err != nil {
 		return nil, err
 	}
 	if len(revs) == 0 {
 		return nil, fmt.Errorf("%w: entry %d", ErrNotFound, id)
 	}
-	err = read(`SELECT date, amount, tx_kind, counter, memo, note, made_at FROM corrections WHERE entry = ? ORDER BY id`, id)
+	err = read(`SELECT date, amount, tx_kind, counter, memo, note, void, made_at FROM corrections WHERE entry = ? ORDER BY id`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -165,16 +207,24 @@ type entryKey struct {
 // appendNew stores the account's entries from the model that are not yet stored and reports
 // ErrRecordChanged if a stored entry is absent from the model. Matching is by value as a multiset:
 // each stored entry (with its current values) consumes one equal model entry, and the leftover model
-// entries are appended in model order.
-func (s *Store) appendNew(tx *sql.Tx, a *model.Account, stored []Entry) error {
+// entries are appended in model order. A leftover that equals a revision of an entry voided since the
+// record was loaded (voided) is not appended: the model predates the void, so it is reported as ErrRecordChanged.
+func (s *Store) appendNew(tx *sql.Tx, a *model.Account, stored, voided []Entry) error {
 	unmatched := map[entryKey]int{}
 	for _, e := range stored {
 		unmatched[entryKey{e.Kind, e.Values}]++
+	}
+	voidedKeys := map[entryKey]bool{}
+	for _, e := range voided {
+		voidedKeys[entryKey{e.Kind, e.Values}] = true
 	}
 	insert := func(k entryKey) error {
 		if unmatched[k] > 0 {
 			unmatched[k]--
 			return nil
+		}
+		if voidedKeys[k] {
+			return fmt.Errorf("%w: account %q has an entry voided since the record was loaded", ErrRecordChanged, a.ID)
 		}
 		_, err := tx.Exec(`INSERT INTO entries (account, kind, date, amount, tx_kind, counter, memo, made_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

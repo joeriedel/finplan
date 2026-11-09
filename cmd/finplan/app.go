@@ -4,27 +4,119 @@
 package main
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/AllenDang/cimgui-go/imgui"
 
+	"github.com/joeriedel/finplan/internal/backend"
 	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/store"
 )
 
 // app is the application shell: menu bar, tab bar and the tabs.
 type app struct {
+	st    *store.Store
 	rec   *model.Record
 	graph *graphTab
 	quit  bool
+	// notices are messages waiting for the user to dismiss them; backupOpen is set while the Backup save dialog is open.
+	notices    []string
+	backupOpen bool
+	// reported holds the preset problems already queued, so that a reload does not queue them again.
+	reported map[string]bool
 }
 
-func newApp(rec *model.Record) *app {
-	return &app{rec: rec, graph: newGraphTab(rec)}
+// newApp loads the record and the view presets from the database.
+func newApp(st *store.Store) (*app, error) {
+	rec, err := st.Load()
+	if err != nil {
+		return nil, err
+	}
+	presets, problems, err := loadPresets(st)
+	if err != nil {
+		return nil, err
+	}
+	a := &app{st: st, rec: rec, reported: map[string]bool{}}
+	a.notifyOnce(problems)
+	a.graph = newGraphTab(rec, presets, st, a.notify)
+	return a, nil
+}
+
+func (a *app) notify(msg string) { a.notices = append(a.notices, msg) }
+
+// notifyOnce queues each message not queued by an earlier call.
+func (a *app) notifyOnce(msgs []string) {
+	for _, m := range msgs {
+		if !a.reported[m] {
+			a.reported[m] = true
+			a.notify(m)
+		}
+	}
+}
+
+// reload re-reads the record and presets after another program changed the database, keeping the view. If it
+// fails the old data stays.
+func (a *app) reload() {
+	rec, err := a.st.Load()
+	if err != nil {
+		a.notify(fmt.Sprintf("Could not reload the database: %v", err))
+		return
+	}
+	presets, problems, err := loadPresets(a.st)
+	if err != nil {
+		a.notify(fmt.Sprintf("Could not reload the view presets: %v", err))
+		return
+	}
+	a.rec = rec
+	a.graph.reload(rec, presets)
+	a.notifyOnce(problems)
+}
+
+// backup writes the backup the save dialog asked for and reports the outcome.
+func (a *app) backup(r backend.SaveResult) {
+	switch {
+	case r.Err != nil:
+		a.notify(fmt.Sprintf("The save dialog failed: %v", r.Err))
+	case r.Cancelled:
+	default:
+		if err := a.st.Backup(r.Path); err != nil {
+			a.notify(fmt.Sprintf("Backup failed: %v", err))
+		} else {
+			a.notify("Backup written to " + r.Path)
+		}
+	}
+}
+
+// drawNotices shows the first waiting message in a modal until it is dismissed.
+func (a *app) drawNotices() {
+	if len(a.notices) == 0 {
+		return
+	}
+	imgui.OpenPopupStr("finplan##notice")
+	imgui.SetNextWindowPosV(imgui.MainViewport().Center(), imgui.CondAppearing, imgui.NewVec2(0.5, 0.5))
+	if imgui.BeginPopupModalV("finplan##notice", nil, imgui.WindowFlagsAlwaysAutoResize) {
+		imgui.PushTextWrapPosV(imgui.FontSize() * 30)
+		imgui.TextWrapped(a.notices[0])
+		imgui.PopTextWrapPos()
+		if imgui.Button("OK") {
+			a.notices = a.notices[1:]
+			imgui.CloseCurrentPopup()
+		}
+		imgui.EndPopup()
+	}
 }
 
 // tabs lists the tab bar in order; only Graph is built.
 var tabs = []string{"Graph", "Projections", "Assets", "Accounts", "Budget", "Markets"}
 
 func (a *app) draw() {
+	if r, ok := backend.PollSaveDialog(); ok {
+		a.backupOpen = false
+		a.backup(r)
+	}
 	a.menuBar()
+	a.drawNotices()
 
 	vp := imgui.MainViewport()
 	imgui.SetNextWindowPos(vp.WorkPos())
@@ -65,7 +157,7 @@ func (a *app) draw() {
 	imgui.PopStyleVarV(3)
 }
 
-// menuBar draws the main menu. Only File > Quit does anything yet.
+// menuBar draws the main menu. Only File > Backup and Quit do anything yet.
 func (a *app) menuBar() {
 	if !imgui.BeginMainMenuBar() {
 		return
@@ -74,6 +166,11 @@ func (a *app) menuBar() {
 		imgui.MenuItemBoolV("New", "", false, false)
 		imgui.MenuItemBoolV("Open...", "", false, false)
 		imgui.MenuItemBoolV("Save", "", false, false)
+		imgui.Separator()
+		if imgui.MenuItemBoolV("Backup...", "", false, !a.backupOpen) {
+			name := "finplan-backup-" + time.Now().Format("2006-01-02") + ".db"
+			a.backupOpen = backend.ShowSaveDialog(name)
+		}
 		imgui.Separator()
 		if imgui.MenuItemBoolV("Quit", "", false, true) {
 			a.quit = true

@@ -4,12 +4,49 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/joeriedel/finplan/internal/demodata"
 	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/store"
 )
 
-// familyPresets returns the invented view presets that ship with the Family record. A preset whose assets or
+// recordHas returns the predicate for Preset.Restore: whether rec has the asset and, if one is named, the projection.
+func recordHas(rec *model.Record) func(asset model.AssetID, projection string) bool {
+	return func(asset model.AssetID, projection string) bool {
+		return rec.Asset(asset) != nil && (projection == "" || rec.Projection(projection) != nil)
+	}
+}
+
+// projectionNames returns the names of the record's projections in order.
+func projectionNames(rec *model.Record) []string {
+	var names []string
+	for _, p := range rec.Projections {
+		names = append(names, p.Name)
+	}
+	return names
+}
+
+// loadPresets returns the stored view presets. A preset that cannot be decoded is left out and described in
+// problems.
+func loadPresets(st *store.Store) (presets []graph.Preset, problems []string, err error) {
+	rows, err := st.Presets()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, r := range rows {
+		p, err := graph.DecodePreset(r.Name, r.Format, r.Body)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("View preset %q was skipped: %v", r.Name, err))
+			continue
+		}
+		presets = append(presets, p)
+	}
+	return presets, problems, nil
+}
+
+// familyPresets returns the invented view presets of the Family record, which the demo database holds. A preset whose assets or
 // projections the record lacks is left out.
 func familyPresets(rec *model.Record) []graph.Preset {
 	has := func(proj string) bool {

@@ -4,6 +4,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -259,8 +260,9 @@ func buildAccount(d accountDoc, entries []Entry) (*model.Account, error) {
 	return a, nil
 }
 
-// Load returns the stored record with every correction applied. An empty database loads as an empty
-// record.
+// Load returns the stored record with every correction applied and voided entries left out. An empty database loads as an empty
+// record. Load also marks the point in the correction history that the returned record reflects; Save's
+// stale-record check is relative to the most recent Load on this Store.
 func (s *Store) Load() (*model.Record, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -284,7 +286,7 @@ func (s *Store) Load() (*model.Record, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	all, err := queryEntries(tx, ``)
+	all, err := queryEntries(tx, false, ``)
 	if err != nil {
 		return nil, err
 	}
@@ -292,11 +294,58 @@ func (s *Store) Load() (*model.Record, error) {
 	for _, e := range all {
 		byAccount[e.Account] = append(byAccount[e.Account], e)
 	}
-	return decodeRecord(docs, byAccount)
+	var mark int64
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM corrections`).Scan(&mark); err != nil {
+		return nil, err
+	}
+	r, err := decodeRecord(docs, byAccount)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.loaded, s.loadMark = true, mark
+	s.mu.Unlock()
+	return r, nil
+}
+
+// voidedSinceLoad returns, for entries voided after the most recent Load (all voided entries if there has
+// been none), one Entry per revision: the original values and each correction's.
+func (s *Store) voidedSinceLoad(tx *sql.Tx) ([]Entry, error) {
+	s.mu.Lock()
+	mark := s.loadMark
+	if !s.loaded {
+		mark = 0
+	}
+	s.mu.Unlock()
+	voided, err := queryEntries(tx, true, `COALESCE(c.void, 0) = 1 AND c.id > ?`, mark)
+	if err != nil {
+		return nil, err
+	}
+	var out []Entry
+	for _, e := range voided {
+		rows, err := tx.Query(`SELECT date, amount, tx_kind, counter, memo FROM entries WHERE id = ?
+			UNION ALL SELECT date, amount, tx_kind, counter, memo FROM corrections WHERE entry = ?`, e.ID, e.ID)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			r := e
+			if err := rows.Scan(&r.Date, &r.Amount, &r.TxKind, &r.Counter, &r.Memo); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out = append(out, r)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // Save writes the record in one transaction. Documents are replaced; entries in the model that are
-// not stored yet are appended. If a stored entry (with its corrections applied) is missing from or
+// not stored yet are appended. Voided entries count as absent, but a model entry equal to any revision of an entry voided since the most recent Load on this Store is a stale copy and fails the same way. If a stored entry (with its corrections applied) is missing from or
 // changed in the model, or an account with stored entries is gone, Save writes nothing and returns
 // an error matching ErrRecordChanged.
 func (s *Store) Save(r *model.Record) error {
@@ -322,7 +371,7 @@ func (s *Store) Save(r *model.Record) error {
 			return fmt.Errorf("store: save %s %q: %w", d.kind, d.key, err)
 		}
 	}
-	all, err := queryEntries(tx, ``)
+	all, err := queryEntries(tx, false, ``)
 	if err != nil {
 		return err
 	}
@@ -330,8 +379,16 @@ func (s *Store) Save(r *model.Record) error {
 	for _, e := range all {
 		byAccount[e.Account] = append(byAccount[e.Account], e)
 	}
+	voidedEntries, err := s.voidedSinceLoad(tx)
+	if err != nil {
+		return err
+	}
+	voided := map[model.AccountID][]Entry{}
+	for _, e := range voidedEntries {
+		voided[e.Account] = append(voided[e.Account], e)
+	}
 	for _, a := range r.Accounts {
-		if err := s.appendNew(tx, a, byAccount[a.ID]); err != nil {
+		if err := s.appendNew(tx, a, byAccount[a.ID], voided[a.ID]); err != nil {
 			return err
 		}
 		delete(byAccount, a.ID)

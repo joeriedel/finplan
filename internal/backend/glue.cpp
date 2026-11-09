@@ -7,6 +7,8 @@
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl3.h"
 #include <SDL3/SDL.h>
+#include <mutex>
+#include <string>
 
 typedef void (*PFN_glViewport)(int x, int y, int width, int height);
 typedef void (*PFN_glClearColor)(float r, float g, float b, float a);
@@ -19,6 +21,13 @@ static SDL_GLContext    g_GLContext = nullptr;
 static PFN_glViewport   g_glViewport = nullptr;
 static PFN_glClearColor g_glClearColor = nullptr;
 static PFN_glClear      g_glClear = nullptr;
+
+// The save dialog's callback may run on another thread, so its result waits in a slot guarded by g_SaveMutex.
+static std::mutex       g_SaveMutex;
+static bool             g_SaveOpen = false;
+static int              g_SaveResult = FINPLAN_SAVE_NONE;
+static std::string      g_SaveText;
+static Uint32           g_SaveEvent = 0;
 
 void FinplanBackend_CheckVersion(void)
 {
@@ -52,6 +61,8 @@ bool FinplanBackend_Init(const char* title, int width, int height)
     g_glClear = (PFN_glClear)SDL_GL_GetProcAddress("glClear");
     if (g_glViewport == nullptr || g_glClearColor == nullptr || g_glClear == nullptr)
         return false;
+
+    g_SaveEvent = SDL_RegisterEvents(1);
 
     SDL_ShowWindow(g_Window);
 
@@ -126,4 +137,57 @@ void FinplanBackend_Render(void)
     g_glClear(GL_COLOR_BUFFER_BIT_);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     SDL_GL_SwapWindow(g_Window);
+}
+
+static void SDLCALL SaveFileCallback(void* /*userdata*/, const char* const* filelist, int /*filter*/)
+{
+    {
+        std::lock_guard<std::mutex> lock(g_SaveMutex);
+        if (filelist == nullptr)
+        {
+            g_SaveResult = FINPLAN_SAVE_ERROR;
+            g_SaveText = SDL_GetError();
+        }
+        else if (filelist[0] == nullptr)
+        {
+            g_SaveResult = FINPLAN_SAVE_CANCELLED;
+            g_SaveText.clear();
+        }
+        else
+        {
+            g_SaveResult = FINPLAN_SAVE_CHOSEN;
+            g_SaveText = filelist[0];
+        }
+        g_SaveOpen = false;
+    }
+    SDL_Event event;
+    SDL_zero(event);
+    event.type = g_SaveEvent;
+    SDL_PushEvent(&event);
+}
+
+bool FinplanBackend_ShowSaveFileDialog(const char* default_name)
+{
+    {
+        std::lock_guard<std::mutex> lock(g_SaveMutex);
+        if (g_SaveOpen)
+            return false;
+        g_SaveOpen = true;
+        g_SaveResult = FINPLAN_SAVE_NONE;
+    }
+    static const SDL_DialogFileFilter filters[] = { { "Database (*.db)", "db" } };
+    SDL_ShowSaveFileDialog(SaveFileCallback, nullptr, g_Window, filters, 1, default_name);
+    return true;
+}
+
+int FinplanBackend_PollSaveFile(char* buffer, int buffer_size)
+{
+    std::lock_guard<std::mutex> lock(g_SaveMutex);
+    int result = g_SaveResult;
+    if (result == FINPLAN_SAVE_NONE)
+        return FINPLAN_SAVE_NONE;
+    if (buffer_size > 0)
+        SDL_strlcpy(buffer, g_SaveText.c_str(), (size_t)buffer_size);
+    g_SaveResult = FINPLAN_SAVE_NONE;
+    return result;
 }

@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
@@ -36,6 +37,10 @@ var (
 type Store struct {
 	db  *sql.DB
 	now func() time.Time
+
+	mu       sync.Mutex // guards loaded and loadMark
+	loaded   bool       // whether Load has run
+	loadMark int64      // highest corrections.id seen by the most recent Load
 }
 
 // Open opens the database at path, creating it if needed and migrating it to the current schema.

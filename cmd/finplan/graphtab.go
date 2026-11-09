@@ -4,6 +4,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/AllenDang/cimgui-go/imgui"
@@ -13,6 +14,7 @@ import (
 	"github.com/joeriedel/finplan/internal/engine"
 	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/store"
 )
 
 const secondsPerDay = 86400
@@ -60,6 +62,9 @@ type graphTab struct {
 	presets    []graph.Preset
 	preset     int
 	presetName string
+	// Presets are written through store; notify tells the user about a failure.
+	store  *store.Store
+	notify func(string)
 }
 
 // bandView is a drawn band with the indexes in the frame's lineViews of its upper and lower lines.
@@ -69,12 +74,13 @@ type bandView struct {
 	upper, lower int
 }
 
-func newGraphTab(rec *model.Record) *graphTab {
+func newGraphTab(rec *model.Record, presets []graph.Preset, st *store.Store, notify func(string)) *graphTab {
 	switcher := ""
 	if len(rec.Projections) > 0 {
 		switcher = rec.Projections[0].Name
 	}
-	g := &graphTab{rec: rec, lines: graph.NewLines(switcher), cache: newDataCache(rec), dataStart: graph.DataStart(rec), preset: -1}
+	g := &graphTab{rec: rec, lines: graph.NewLines(switcher), cache: newDataCache(rec), dataStart: graph.DataStart(rec), preset: -1,
+		presets: presets, store: st, notify: notify}
 	for _, id := range []model.AssetID{
 		demodata.NetWorth, demodata.AllCash, demodata.Retirement,
 		model.DefaultAssetID(demodata.Brokerage), model.DefaultAssetID(demodata.TSP), model.DefaultAssetID(demodata.Mortgage),
@@ -84,28 +90,83 @@ func newGraphTab(rec *model.Record) *graphTab {
 		}
 	}
 	g.setRange(graph.RangeButtons[1])
-	g.presets = familyPresets(rec)
 	return g
+}
+
+// reload switches to a freshly loaded record and preset list, keeping the view: the lines whose assets and
+// projections still exist, the x range and the current preset if its name still exists.
+func (g *graphTab) reload(rec *model.Record, presets []graph.Preset) {
+	if len(g.rec.Accounts) == 0 {
+		*g = *newGraphTab(rec, presets, g.store, g.notify)
+		return
+	}
+	name := ""
+	if g.preset >= 0 {
+		name = g.presets[g.preset].Name
+	}
+	old := g.lines.All()
+	oldSel, selected := g.lines.Selected()
+	keep := graph.Capture("", g.lines, g.xMin, g.xMax)
+	has := recordHas(rec)
+	g.rec, g.cache, g.dataStart = rec, newDataCache(rec), graph.DataStart(rec)
+	g.lines = keep.Restore(has, projectionNames(rec))
+	// Restore keeps the order of the lines it keeps, so the kept old lines pair up with the new ones.
+	newIDs := map[graph.LineID]graph.LineID{}
+	kept := g.lines.All()
+	for _, ln := range old {
+		if has(ln.Asset, ln.Projection) {
+			newIDs[ln.ID] = kept[len(newIDs)].ID
+		}
+	}
+	if selected {
+		g.lines.Select(newIDs[oldSel])
+	}
+	g.bandUpper, g.bandLower = newIDs[g.bandUpper], newIDs[g.bandLower]
+	g.presets, g.preset = presets, -1
+	for i, p := range presets {
+		if p.Name == name {
+			g.preset = i
+		}
+	}
 }
 
 // applyPreset replaces the lines, bands and x range with the preset's and makes it current. Selection is cleared.
 func (g *graphTab) applyPreset(i int) {
 	p := g.presets[i]
-	g.lines = p.Restore()
+	g.lines = p.Restore(recordHas(g.rec), projectionNames(g.rec))
 	g.xMin, g.xMax = p.From, p.To
 	g.applyX, g.fitY = true, true
 	g.preset = i
 }
 
+// persist writes the preset to the database, telling the user and returning false if that fails.
+func (g *graphTab) persist(p graph.Preset) bool {
+	body, err := graph.EncodePreset(p)
+	if err == nil {
+		err = g.store.PutPreset(p.Name, graph.PresetFormat, body)
+	}
+	if err != nil {
+		g.notify(fmt.Sprintf("Could not save view preset %q: %v", p.Name, err))
+		return false
+	}
+	return true
+}
+
 // savePreset stores the current view over the current preset.
 func (g *graphTab) savePreset() {
-	g.presets[g.preset] = graph.Capture(g.presets[g.preset].Name, g.lines, g.xMin, g.xMax)
+	p := graph.Capture(g.presets[g.preset].Name, g.lines, g.xMin, g.xMax)
+	if g.persist(p) {
+		g.presets[g.preset] = p
+	}
 }
 
 // savePresetAs stores the current view as a new preset and makes it current.
 func (g *graphTab) savePresetAs(name string) {
-	g.presets = append(g.presets, graph.Capture(name, g.lines, g.xMin, g.xMax))
-	g.preset = len(g.presets) - 1
+	p := graph.Capture(name, g.lines, g.xMin, g.xMax)
+	if g.persist(p) {
+		g.presets = append(g.presets, p)
+		g.preset = len(g.presets) - 1
+	}
 }
 
 // presetNameTaken reports whether a preset already has the name.
@@ -168,6 +229,10 @@ func (g *graphTab) assetName(id model.AssetID) string {
 }
 
 func (g *graphTab) draw() {
+	if len(g.rec.Accounts) == 0 {
+		imgui.TextWrapped("There are no accounts yet. Adding them comes with the editor tabs and SimpleFIN. Run finplan with --demo to explore an invented family.")
+		return
+	}
 	imgui.PushStyleColorVec4(imgui.ColChildBg, rgba(colPanel, 1))
 	open := imgui.BeginChildStrV("##lines", imgui.NewVec2(imgui.FontSize()*21, 0), imgui.ChildFlagsBorders, 0)
 	imgui.PopStyleColor()
