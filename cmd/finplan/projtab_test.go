@@ -113,12 +113,13 @@ func TestProjectionShownAndDescendants(t *testing.T) {
 
 func TestObjectsFor(t *testing.T) {
 	rec := demodata.Family()
-	for _, c := range objectsFor(rec, model.KindAsset) {
+	for _, c := range objectsFor(rec, model.KindAsset, demodata.ProjBase, 0) {
 		if strings.HasPrefix(c.id, string(model.DefaultAssetID(""))) {
 			t.Errorf("default asset %q listed", c.id)
 		}
 	}
-	if len(objectsFor(rec, model.KindAsset)) == 0 || len(objectsFor(rec, model.KindAccount)) != len(rec.Accounts) || len(objectsFor(rec, model.KindGlobal)) != 0 {
+	objs := func(k model.ObjectKind) int { return len(objectsFor(rec, k, demodata.ProjBase, 0)) }
+	if objs(model.KindAsset) == 0 || objs(model.KindAccount) != len(rec.Accounts) || objs(model.KindGlobal) != 0 || objs(model.KindBudgetItem) != len(rec.Budget.Items) {
 		t.Error("wrong object lists")
 	}
 }

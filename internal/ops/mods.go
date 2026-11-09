@@ -112,20 +112,58 @@ func checkTarget(rec *model.Record, p *model.Projection, index int) error {
 	return nil
 }
 
-// itemsBefore returns the ids of the budget items that exist at index of p's modifications: the record's, those added by p's ancestors and those added by p's own modifications before index. p may be an edited copy; its ancestors are taken from rec.
-func itemsBefore(rec *model.Record, p *model.Projection, index int) (map[string]bool, error) {
+// AvailableItem is a budget item that exists at some position of a projection's modifications, and the projection that adds it; AddedBy is empty for an item of the record's budget.
+type AvailableItem struct {
+	Item    model.BudgetItem
+	AddedBy string
+}
+
+// ItemsBefore lists the budget items that exist at index of the projection's modifications (len(Mods) is the end of the list): the record's, those added by the projection's ancestors, root first, and those added by its own modifications before index. A modification of an item must come at a position the item exists at.
+func ItemsBefore(rec *model.Record, name string, index int) ([]AvailableItem, error) {
+	p := rec.Projection(name)
+	if p == nil {
+		return nil, errUnknown(name)
+	}
+	if index < 0 || index > len(p.Mods) {
+		return nil, fmt.Errorf("projection %q: modification index %d out of range", name, index)
+	}
+	return itemsAt(rec, p, index)
+}
+
+// itemsAt is ItemsBefore for p, which may be an edited copy; its ancestors are taken from rec.
+func itemsAt(rec *model.Record, p *model.Projection, index int) ([]AvailableItem, error) {
 	chain, err := rec.Chain(p.Name)
 	if err != nil {
 		return nil, err
 	}
-	ids := map[string]bool{}
+	var out []AvailableItem
 	for _, it := range rec.Budget.Items {
-		ids[it.ID] = true
+		out = append(out, AvailableItem{Item: it})
+	}
+	add := func(by string, mods []model.Modification) {
+		for _, m := range mods {
+			if m.Property == model.PropAddItem && m.Item != nil {
+				out = append(out, AvailableItem{Item: *m.Item, AddedBy: by})
+			}
+		}
 	}
 	for _, q := range chain[:len(chain)-1] {
-		addedItems(ids, q.Mods)
+		add(q.Name, q.Mods)
 	}
-	addedItems(ids, p.Mods[:index])
+	add(p.Name, p.Mods[:index])
+	return out, nil
+}
+
+// itemsBefore returns the ids of the items itemsAt lists.
+func itemsBefore(rec *model.Record, p *model.Projection, index int) (map[string]bool, error) {
+	items, err := itemsAt(rec, p, index)
+	if err != nil {
+		return nil, err
+	}
+	ids := map[string]bool{}
+	for _, a := range items {
+		ids[a.Item.ID] = true
+	}
 	return ids, nil
 }
 
@@ -178,6 +216,32 @@ func checkNoNewDangling(before, after *model.Record, rename *Rename) error {
 		}
 	}
 	return nil
+}
+
+// CheckMod returns the reason AddMod would refuse m at the end of the projection's modifications, nil if it would not. It is the check AddMod makes, for editors that show why an input cannot be added.
+func CheckMod(rec *model.Record, name string, m model.Modification) error {
+	p := rec.Projection(name)
+	if p == nil {
+		return errUnknown(name)
+	}
+	return insertMod(rec, p.Clone(), len(p.Mods), m)
+}
+
+// SetMod replaces the projection's modification at index with m, which can change its object and property as well as its values. m is checked as AddMod checks a modification added at index: its property must suit its object and a budget item must exist before index. A modification that adds a budget item is edited with EditItem, so neither the old nor the new one may be add_item. An edit after which a later modification points at an item that no longer exists is ErrUnknownTarget.
+func SetMod(st *store.Store, rec *model.Record, name string, index int, m model.Modification, o Options) (*Result, error) {
+	return editProjection(st, rec, o, name, func(p *model.Projection) error {
+		if index < 0 || index >= len(p.Mods) {
+			return fmt.Errorf("projection %q: modification index %d out of range", name, index)
+		}
+		if p.Mods[index].Property == model.PropAddItem || m.Property == model.PropAddItem {
+			return refuse(ErrInvalidValue, "a modification that adds a budget item is edited with EditItem, not replaced")
+		}
+		if err := checkMod(m); err != nil {
+			return err
+		}
+		p.Mods[index] = m
+		return checkTarget(rec, p, index)
+	})
 }
 
 // SetModValues replaces the values of the projection's modification at index, which is how its value and start change.

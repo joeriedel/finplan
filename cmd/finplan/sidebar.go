@@ -219,6 +219,12 @@ func (g *graphTab) addBandPopup() {
 	imgui.EndPopup()
 }
 
+// rowControls says which of a row's buttons are drawn: all of them while the row is hovered or a button of the row is held down, and else only the pin of a pinned line and the solo of a soloed one.
+func rowControls(hovered, pinned, soloed, buttonActive bool) (solo, pin, remove bool) {
+	show := hovered || buttonActive
+	return show || soloed, show || pinned, show
+}
+
 // row draws one line: visibility checkbox, solo button, colour swatch, asset name and projection, with pin and
 // remove buttons while hovered. Clicking the row selects the line.
 func (g *graphTab) row(ln graph.Line) {
@@ -240,7 +246,8 @@ func (g *graphTab) row(ln graph.Line) {
 	if imgui.SelectableBoolV("##row", false, imgui.SelectableFlagsAllowOverlap, imgui.NewVec2(w, h)) {
 		g.lines.Select(ln.ID)
 	}
-	hovered := imgui.IsWindowHovered() && imgui.IsMouseHoveringRectV(p, end, true)
+	// A button held down blocks the window's hover, so the row stays hovered while one is active.
+	hovered := imgui.IsWindowHoveredV(imgui.HoveredFlagsAllowWhenBlockedByActiveItem) && imgui.IsMouseHoveringRectV(p, end, true)
 	if selected {
 		dl.AddRectFilledV(p, end, u32(rgba(colSelect, 0.45)), 4*s, 0)
 	}
@@ -253,12 +260,12 @@ func (g *graphTab) row(ln graph.Line) {
 		g.fitY = true
 	}
 
-	// Solo button: faint while the row is hovered, lit while soloed. Ctrl-click clears every solo.
+	// The solo, pin and remove buttons are submitted on every frame, so that one pressed stays pressed until its release, and drawn only where rowControls says. Ctrl-click on solo clears every solo.
 	soloed := g.lines.Soloed(ln.ID)
 	sx := p.X + 4*s + fh + 2*s
 	imgui.SetCursorScreenPos(imgui.NewVec2(sx, p.Y+(h-fh)/2))
 	soloClicked := imgui.InvisibleButton("##solo", imgui.NewVec2(fh, fh))
-	soloHot := imgui.IsItemHovered()
+	soloHot, soloActive := imgui.IsItemHovered(), imgui.IsItemActive()
 	if soloClicked {
 		if imgui.IsKeyDown(imgui.ModCtrl) {
 			g.lines.ClearSolo()
@@ -267,7 +274,37 @@ func (g *graphTab) row(ln graph.Line) {
 		}
 		g.fitY = true
 	}
-	if soloed || hovered {
+	if soloHot {
+		imgui.SetTooltip("Solo: draw only soloed lines (Ctrl-click clears all)")
+	}
+
+	pinX := p.X + w - 2*fh - 4*s
+	imgui.SetCursorScreenPos(imgui.NewVec2(pinX, p.Y+(h-fh)/2))
+	if imgui.InvisibleButton("##pin", imgui.NewVec2(fh, fh)) {
+		g.lines.TogglePin(ln.ID)
+	}
+	pinHot, pinActive := imgui.IsItemHovered(), imgui.IsItemActive()
+	if pinHot {
+		tip := "Pin to " + g.lines.Switcher()
+		if ln.Pinned {
+			tip = "Unpin: follow the switcher"
+		}
+		tooltipText(tip)
+	}
+
+	removeX := p.X + w - fh - 2*s
+	imgui.SetCursorScreenPos(imgui.NewVec2(removeX, p.Y+(h-fh)/2))
+	if imgui.InvisibleButton("##remove", imgui.NewVec2(fh, fh)) {
+		g.lines.Remove(ln.ID)
+		g.fitY = true
+	}
+	removeHot, removeActive := imgui.IsItemHovered(), imgui.IsItemActive()
+	if removeHot {
+		imgui.SetTooltip("Remove line")
+	}
+	showSolo, showPin, showRemove := rowControls(hovered, ln.Pinned, soloed, soloActive || pinActive || removeActive)
+
+	if showSolo {
 		sc := imgui.NewVec2(sx+fh/2, p.Y+h/2)
 		half := fh * 0.4
 		sa := float32(0.35)
@@ -281,9 +318,6 @@ func (g *graphTab) row(ln graph.Line) {
 		}
 		ts := imgui.CalcTextSize("S")
 		dl.AddTextVec2(imgui.NewVec2(sc.X-ts.X/2, sc.Y-ts.Y/2), txtCol, "S")
-	}
-	if soloHot {
-		imgui.SetTooltip("Solo: draw only soloed lines (Ctrl-click clears all)")
 	}
 
 	sw := fh * 0.7
@@ -311,42 +345,22 @@ func (g *graphTab) row(ln graph.Line) {
 		dl.AddTextVec2(line2, u32(rgba(colAccentLit, 1)), proj)
 	}
 
-	// Pin and remove buttons.
-	if hovered || ln.Pinned {
+	if showPin {
 		pinAlpha := float32(0.35)
-		if ln.Pinned {
+		switch {
+		case pinHot:
+			pinAlpha = 1
+		case ln.Pinned:
 			pinAlpha = 0.9
 		}
-		bx := p.X + w - 2*fh - 4*s
-		imgui.SetCursorScreenPos(imgui.NewVec2(bx, p.Y+(h-fh)/2))
-		if imgui.InvisibleButton("##pin", imgui.NewVec2(fh, fh)) {
-			g.lines.TogglePin(ln.ID)
-		}
-		if imgui.IsItemHovered() {
-			pinAlpha = 1
-			tip := "Pin to " + g.lines.Switcher()
-			if ln.Pinned {
-				tip = "Unpin: follow the switcher"
-			}
-			tooltipText(tip)
-		}
-		if hovered || ln.Pinned {
-			drawPin(dl, imgui.NewVec2(bx+fh/2, p.Y+h/2), 13*s, u32(rgba(colText, pinAlpha)))
-		}
+		drawPin(dl, imgui.NewVec2(pinX+fh/2, p.Y+h/2), 13*s, u32(rgba(colText, pinAlpha)))
 	}
-	if hovered {
-		bx := p.X + w - fh - 2*s
-		imgui.SetCursorScreenPos(imgui.NewVec2(bx, p.Y+(h-fh)/2))
-		if imgui.InvisibleButton("##remove", imgui.NewVec2(fh, fh)) {
-			g.lines.Remove(ln.ID)
-			g.fitY = true
-		}
+	if showRemove {
 		alpha := float32(0.35)
-		if imgui.IsItemHovered() {
+		if removeHot {
 			alpha = 1
-			imgui.SetTooltip("Remove line")
 		}
-		c := imgui.NewVec2(bx+fh/2, p.Y+h/2)
+		c := imgui.NewVec2(removeX+fh/2, p.Y+h/2)
 		r := 4 * s
 		col := u32(rgba(colText, alpha))
 		dl.AddLineArgs(imgui.NewVec2(c.X-r, c.Y-r), imgui.NewVec2(c.X+r, c.Y+r), col, 1.5*s)

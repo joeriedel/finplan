@@ -53,7 +53,9 @@ type projTab struct {
 	addProp  string
 	addValue string
 	addStart string
-	addErr   string
+	// addNew switches the form to a new budget item, which addItem holds.
+	addNew  bool
+	addItem itemForm
 }
 
 func (t *projTab) reset() {
@@ -576,7 +578,9 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 	tip()
 
 	v, from, editable := constantOf(m.Values)
-	editable = editable && m.Property != model.PropAddItem
+	adds := m.Property == model.PropAddItem && m.Item != nil
+	editable = editable && !adds
+	_, ends := ops.EndedOn(m)
 	imgui.TableSetColumnIndex(1)
 	if editable {
 		start := ""
@@ -593,27 +597,53 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 	tip()
 
 	imgui.TableSetColumnIndex(2)
-	imgui.AlignTextToFramePadding()
-	imgui.TextUnformatted(objectText(rec, m.Target))
+	switch {
+	case adds:
+		t.itemFields("item"+strconv.Itoa(i), formOf(*m.Item), false, func(field, text string) { t.setItemField(p.Name, i, field, text) })
+	case editable:
+		kind, obj, prop := m.Target.Kind, m.Target.ID, rowProperty(m)
+		if k, changed := kindCombo("kind", kind, imgui.FontSize()*7); changed {
+			obj, prop = firstObject(rec, k, p.Name, i), propertiesFor(k)[0]
+			t.setModTarget(p.Name, i, k, obj, prop)
+		} else if kind != model.KindGlobal {
+			imgui.SameLine()
+			if o, changed := t.objectCombo("object", kind, p.Name, i, obj, -1); changed {
+				t.setModTarget(p.Name, i, kind, o, prop)
+			}
+		}
+	default:
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted(objectText(rec, m.Target))
+	}
 	tip()
 
 	imgui.TableSetColumnIndex(3)
-	imgui.AlignTextToFramePadding()
-	imgui.TextUnformatted(m.Property)
+	switch {
+	case adds:
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted("adds item")
+	case editable:
+		if pr, changed := propertyCombo("property", m.Target.Kind, rowProperty(m), -1); changed {
+			t.setModTarget(p.Name, i, m.Target.Kind, m.Target.ID, pr)
+		}
+	default:
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted(m.Property)
+	}
 	tip()
 
 	imgui.TableSetColumnIndex(4)
 	switch {
+	case editable && ends:
+		imgui.AlignTextToFramePadding()
+		imgui.TextDisabled("pays nothing")
 	case editable:
 		if text, done := t.field("value"+strconv.Itoa(i), "", formatValue(m.Property, v), -1); done {
 			t.commit("value"+strconv.Itoa(i), func() { t.setModValue(p.Name, i, strings.TrimSpace(text)) })
 		}
-	case m.Property == model.PropAddItem:
+	case adds:
 		imgui.AlignTextToFramePadding()
-		imgui.TextUnformatted("adds an item")
-		if imgui.IsItemHovered() {
-			imgui.SetTooltip("Budget item additions are edited with the timeline editor, which comes next.")
-		}
+		imgui.TextDisabled("see object")
 	default:
 		imgui.AlignTextToFramePadding()
 		imgui.TextUnformatted("varies")
@@ -645,6 +675,10 @@ func (t *projTab) setModStart(proj string, i int, text string) {
 			return
 		}
 		from = &d
+	}
+	if _, ends := ops.EndedOn(t.a.rec.Projection(proj).Mods[i]); ends && from == nil {
+		t.setErr("from"+strconv.Itoa(i), "enter the date it ends on as "+dateLayout)
+		return
 	}
 	v, _, _ := constantOf(t.a.rec.Projection(proj).Mods[i].Values)
 	t.a.edit("change modification", func() (*ops.Result, error) {
@@ -687,20 +721,18 @@ func objectText(rec *model.Record, o model.ObjectRef) string {
 			return "asset " + a.Name
 		}
 	case model.KindBudgetItem:
-		if i := slices.IndexFunc(rec.Budget.Items, func(b model.BudgetItem) bool { return b.ID == o.ID }); i >= 0 {
-			return "budget item " + rec.Budget.Items[i].Name
-		}
+		return "budget item " + itemName(rec, o.ID)
 	}
 	return string(o.Kind) + " " + o.ID
 }
 
-// propertiesFor lists the properties a modification of the kind can change that the engine applies and this tab edits.
+// propertiesFor lists the properties a modification of the kind can change that the engine applies and this tab edits; ending a budget item is one of them.
 func propertiesFor(kind model.ObjectKind) []string {
 	switch kind {
 	case model.KindAccount, model.KindAsset:
 		return []string{model.PropGrowth}
 	case model.KindBudgetItem:
-		return []string{model.PropAmount}
+		return []string{model.PropAmount, propEndsOn}
 	case model.KindGlobal:
 		return []string{model.PropInflation}
 	}
@@ -709,8 +741,8 @@ func propertiesFor(kind model.ObjectKind) []string {
 
 type objectChoice struct{ id, name string }
 
-// objectsFor lists what a modification of the kind can aim at. Default assets are left out: aiming at the account does the same.
-func objectsFor(rec *model.Record, kind model.ObjectKind) []objectChoice {
+// objectsFor lists what a modification of the kind can aim at when it is at index of the projection's modifications (len for the end of the list). Default assets are left out: aiming at the account does the same. A budget item is offered where it exists: the record's, those added by the projection's ancestors, and those its own modifications before index add.
+func objectsFor(rec *model.Record, kind model.ObjectKind, proj string, index int) []objectChoice {
 	var out []objectChoice
 	switch kind {
 	case model.KindAccount:
@@ -724,80 +756,245 @@ func objectsFor(rec *model.Record, kind model.ObjectKind) []objectChoice {
 			}
 		}
 	case model.KindBudgetItem:
-		for _, b := range rec.Budget.Items {
-			out = append(out, objectChoice{b.ID, b.Name})
+		items, _ := ops.ItemsBefore(rec, proj, index)
+		for _, it := range items {
+			name := it.Item.Name
+			if it.AddedBy != "" {
+				name += " (added by " + it.AddedBy + ")"
+			}
+			out = append(out, objectChoice{it.Item.ID, name})
 		}
 	}
 	return out
 }
 
+// firstObject is the object a modification switched to the kind starts with: the first one it can aim at.
+func firstObject(rec *model.Record, kind model.ObjectKind, proj string, index int) string {
+	if c := objectsFor(rec, kind, proj, index); len(c) > 0 {
+		return c[0].id
+	}
+	return ""
+}
+
+// ---- The pickers, which the rows and the Add form share.
+
+var objectKinds = []model.ObjectKind{model.KindAccount, model.KindAsset, model.KindBudgetItem, model.KindGlobal}
+
+// pick draws a combo previewing preview with an entry for each label and returns the index of the one chosen, else -1. A width of -1 fills the cell.
+func pick(id, preview string, width float32, labels []string, selected int) int {
+	chosen := -1
+	imgui.SetNextItemWidth(width)
+	if imgui.BeginComboV("##"+id, preview, 0) {
+		for i, l := range labels {
+			if imgui.SelectableBoolV(l+"##"+strconv.Itoa(i), i == selected, 0, imgui.NewVec2(0, 0)) && i != selected {
+				chosen = i
+			}
+		}
+		imgui.EndCombo()
+	}
+	return chosen
+}
+
+func kindCombo(id string, cur model.ObjectKind, width float32) (model.ObjectKind, bool) {
+	labels := make([]string, len(objectKinds))
+	for i, k := range objectKinds {
+		labels[i] = string(k)
+	}
+	if k := pick(id, string(cur), width, labels, slices.Index(objectKinds, cur)); k >= 0 {
+		return objectKinds[k], true
+	}
+	return cur, false
+}
+
+// objectCombo picks the object of a modification of the kind at index of the projection's modifications.
+func (t *projTab) objectCombo(id string, kind model.ObjectKind, proj string, index int, cur string, width float32) (string, bool) {
+	choices := objectsFor(t.a.rec, kind, proj, index)
+	preview := "choose an object"
+	if cur != "" {
+		preview = objectText(t.a.rec, model.ObjectRef{Kind: kind, ID: cur})
+	}
+	labels := make([]string, len(choices))
+	sel := -1
+	for i, c := range choices {
+		labels[i] = c.name
+		if c.id == cur {
+			sel, preview = i, c.name
+		}
+	}
+	if k := pick(id, preview, width, labels, sel); k >= 0 {
+		return choices[k].id, true
+	}
+	return cur, false
+}
+
+func propertyCombo(id string, kind model.ObjectKind, cur string, width float32) (string, bool) {
+	props := propertiesFor(kind)
+	if k := pick(id, cur, width, props, slices.Index(props, cur)); k >= 0 {
+		return props[k], true
+	}
+	return cur, false
+}
+
+// itemFields draws the fields of a budget item. set is called with the field and its new text or choice: at every keystroke if live, else once the user finishes a text field. id prefixes the field ids.
+func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, text string)) {
+	em := imgui.FontSize()
+	input := func(field, label, hint, value string, width float32) {
+		fid := id + field
+		imgui.AlignTextToFramePadding()
+		imgui.TextDisabled(label)
+		imgui.SameLine()
+		if live {
+			s := value
+			imgui.SetNextItemWidth(width)
+			if imgui.InputTextWithHint("##"+fid, hint, &s, 0, nil) {
+				set(field, s)
+			}
+			return
+		}
+		if s, done := t.field(fid, hint, value, width); done {
+			t.commit(fid, func() { set(field, strings.TrimSpace(s)) })
+		}
+	}
+	choose := func(field, label, preview string, width float32, values, names []string, cur string) {
+		imgui.AlignTextToFramePadding()
+		imgui.TextDisabled(label)
+		imgui.SameLine()
+		if k := pick(id+field, preview, width, names, slices.Index(values, cur)); k >= 0 {
+			set(field, values[k])
+		}
+		if e := t.errs[id+field]; e != "" && !live {
+			imgui.SameLine()
+			errorText("Not changed: " + e)
+		}
+	}
+	strs := func(n int, at func(i int) string) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = at(i)
+		}
+		return out
+	}
+	kinds := strs(len(formItemKinds), func(i int) string { return string(formItemKinds[i]) })
+	choose("kind", "kind", string(f.kind), em*7, kinds, kinds, string(f.kind))
+	imgui.SameLine()
+	input("name", "name", "name", f.name, em*14)
+	input("amount", "amount", "e.g. 1500", f.amount, em*8)
+	imgui.SameLine()
+	every := strs(len(formRecurrences), func(i int) string { return string(formRecurrences[i]) })
+	choose("every", "when", string(f.every), em*8, every, every, string(f.every))
+	switch f.every {
+	case model.OneTime:
+		input("date", "on", dateLayout, f.date, em*8)
+	case model.Biweekly:
+		input("date", "from", dateLayout, f.date, em*8)
+	case model.Monthly:
+		input("day", "on day", "1-31", f.day, em*4)
+		imgui.SameLine()
+		input("date", "from", "optional", f.date, em*8)
+	case model.Annual:
+		input("month", "in month", "1-12", f.month, em*4)
+		imgui.SameLine()
+		input("day", "day", "1-31", f.day, em*4)
+		imgui.SameLine()
+		input("date", "from", "optional", f.date, em*8)
+	default:
+		imgui.AlignTextToFramePadding()
+		imgui.TextDisabled(string(f.every) + " items are not edited here")
+	}
+	input("end", "until", "no end", f.end, em*8)
+
+	ids := []string{"", string(outsideAccount)}
+	names := []string{"choose an account", "outside the record"}
+	for _, a := range t.a.rec.Accounts {
+		ids, names = append(ids, string(a.ID)), append(names, a.Name)
+	}
+	account := func(field, label string, cur model.AccountID) {
+		// Only a transfer may name the outside; the first entry is no choice.
+		from := 2
+		if f.kind == model.ItemTransfer {
+			from = 1
+		}
+		preview := names[0]
+		if i := slices.Index(ids, string(cur)); i > 0 {
+			preview = names[i]
+		} else if cur != "" {
+			preview = string(cur)
+		}
+		choose(field, label, preview, em*12, ids[from:], names[from:], string(cur))
+	}
+	if f.kind == model.ItemTransfer {
+		account("from", "from", f.from)
+		imgui.SameLine()
+		account("to", "to", f.to)
+	} else {
+		account("account", "account", f.account)
+	}
+}
+
 func (t *projTab) addForm(p *model.Projection) {
 	rec := t.a.rec
 	imgui.Spacing()
-	imgui.SeparatorText("Add a modification")
-	kinds := []model.ObjectKind{model.KindAccount, model.KindAsset, model.KindBudgetItem, model.KindGlobal}
+	imgui.SeparatorText("Add to this projection")
+	modes := []string{"a modification", "a new budget item"}
+	mode := 0
+	if t.addNew {
+		mode = 1
+	}
+	t.label("Add")
+	if k := pick("addmode", modes[mode], imgui.FontSize()*16, modes, mode); k >= 0 {
+		t.addNew = k == 1
+	}
+	if t.addNew {
+		if t.addItem.kind == "" {
+			t.addItem = newItemForm()
+		}
+		t.itemFields("newitem", t.addItem, true, t.addItem.set)
+		addButton(itemProblem(rec, t.addItem), func() { t.addNewItem(p.Name) })
+		return
+	}
+
 	if t.addKind == "" {
 		t.addKind = model.KindAccount
 	}
 	t.label("Object kind")
-	imgui.SetNextItemWidth(imgui.FontSize() * 16)
-	if imgui.BeginComboV("##addkind", string(t.addKind), 0) {
-		for _, k := range kinds {
-			if imgui.SelectableBoolV(string(k), k == t.addKind, 0, imgui.NewVec2(0, 0)) && k != t.addKind {
-				t.addKind, t.addObj, t.addProp = k, "", ""
-			}
-		}
-		imgui.EndCombo()
+	if k, changed := kindCombo("addkind", t.addKind, imgui.FontSize()*16); changed {
+		t.addKind, t.addObj, t.addProp = k, "", ""
 	}
-
-	choices := objectsFor(rec, t.addKind)
 	if t.addKind != model.KindGlobal {
 		t.label("Object")
-		preview := t.addObj
-		for _, c := range choices {
-			if c.id == t.addObj {
-				preview = c.name
-			}
-		}
-		imgui.SetNextItemWidth(imgui.FontSize() * 16)
-		if imgui.BeginComboV("##addobj", preview, 0) {
-			for _, c := range choices {
-				if imgui.SelectableBoolV(c.name+"##"+c.id, c.id == t.addObj, 0, imgui.NewVec2(0, 0)) {
-					t.addObj = c.id
-				}
-			}
-			imgui.EndCombo()
-		}
+		t.addObj, _ = t.objectCombo("addobj", t.addKind, p.Name, len(p.Mods), t.addObj, imgui.FontSize()*24)
 	}
-
-	props := propertiesFor(t.addKind)
-	if !slices.Contains(props, t.addProp) {
-		t.addProp = props[0]
+	if !slices.Contains(propertiesFor(t.addKind), t.addProp) {
+		t.addProp = propertiesFor(t.addKind)[0]
 	}
 	t.label("Property")
-	imgui.SetNextItemWidth(imgui.FontSize() * 16)
-	if imgui.BeginComboV("##addprop", t.addProp, 0) {
-		for _, pr := range props {
-			if imgui.SelectableBoolV(pr, pr == t.addProp, 0, imgui.NewVec2(0, 0)) {
-				t.addProp = pr
-			}
-		}
-		imgui.EndCombo()
+	t.addProp, _ = propertyCombo("addprop", t.addKind, t.addProp, imgui.FontSize()*16)
+
+	if t.addProp == propEndsOn {
+		t.label("Date")
+		imgui.SetNextItemWidth(imgui.FontSize() * 16)
+		imgui.InputTextWithHint("##addstart", dateLayout, &t.addStart, 0, nil)
+	} else {
+		t.label("Value")
+		imgui.SetNextItemWidth(imgui.FontSize() * 16)
+		imgui.InputTextWithHint("##addvalue", valueHint(t.addProp), &t.addValue, 0, nil)
+		t.label("From (optional)")
+		imgui.SetNextItemWidth(imgui.FontSize() * 16)
+		imgui.InputTextWithHint("##addstart", "always; or "+dateLayout, &t.addStart, 0, nil)
 	}
+	addButton(modProblem(rec, p.Name, t.addKind, t.addObj, t.addProp, t.addValue, t.addStart), func() { t.addMod(p.Name) })
+}
 
-	t.label("Value")
-	imgui.SetNextItemWidth(imgui.FontSize() * 16)
-	imgui.InputTextWithHint("##addvalue", valueHint(t.addProp), &t.addValue, 0, nil)
-	t.label("From (optional)")
-	imgui.SetNextItemWidth(imgui.FontSize() * 16)
-	imgui.InputTextWithHint("##addstart", "always; or "+dateLayout, &t.addStart, 0, nil)
-
+// addButton draws the Add button, disabled with the reason beside it while problem is not empty.
+func addButton(problem string, add func()) {
+	imgui.BeginDisabledV(problem != "")
 	if imgui.Button("Add") {
-		t.addMod(p.Name)
+		add()
 	}
-	if t.addErr != "" {
+	imgui.EndDisabled()
+	if problem != "" {
 		imgui.SameLine()
-		errorText("Not added: " + t.addErr)
+		errorText("Not yet: " + problem)
 	}
 }
 
@@ -808,25 +1005,38 @@ func valueHint(prop string) string {
 	return "percent, e.g. 4"
 }
 
-func (t *projTab) addMod(proj string) {
-	m, err := newMod(t.addKind, t.addObj, t.addProp, t.addValue, t.addStart)
-	if err != nil {
-		t.addErr = err.Error()
-		return
+// addMod adds the modification the Add form describes, unless modProblem finds one. It reports whether it did.
+func (t *projTab) addMod(proj string) bool {
+	if modProblem(t.a.rec, proj, t.addKind, t.addObj, t.addProp, t.addValue, t.addStart) != "" {
+		return false
 	}
-	if _, err := ops.AddMod(t.a.st, t.a.rec, proj, m, ops.Options{DryRun: true}); errors.Is(err, ops.ErrNoObject) {
-		t.addErr = "pick an object"
-		return
+	m, _ := newMod(t.addKind, t.addObj, t.addProp, t.addValue, t.addStart)
+	if !t.a.edit("add modification", func() (*ops.Result, error) {
+		if from, ends := ops.EndedOn(m); ends && t.addProp == propEndsOn {
+			return ops.EndItem(t.a.st, t.a.rec, proj, t.addObj, from, ops.Options{})
+		}
+		return ops.AddMod(t.a.st, t.a.rec, proj, m, ops.Options{})
+	}) {
+		return false
 	}
-	if t.a.edit("add modification", func() (*ops.Result, error) { return ops.AddMod(t.a.st, t.a.rec, proj, m, ops.Options{}) }) {
-		t.addValue, t.addStart, t.addErr = "", "", ""
-	}
+	t.addValue, t.addStart = "", ""
+	return true
 }
 
 // ---- Parsing and formatting.
 
-// newMod builds the modification the Add form describes: the value from the optional start date on. ops validates it.
+// newMod builds the modification the Add form describes: the value from the optional start date on, or for propEndsOn what ops.EndItem stores, from the date in start. ops validates it.
 func newMod(kind model.ObjectKind, obj, prop, value, start string) (model.Modification, error) {
+	if prop == propEndsOn {
+		d, err := needDate(start, "the date it ends on")
+		if err != nil {
+			return model.Modification{}, err
+		}
+		return ops.EndMod(obj, d), nil
+	}
+	if strings.TrimSpace(value) == "" {
+		return model.Modification{}, errors.New("enter a value")
+	}
 	v, err := parseValue(prop, strings.TrimSpace(value))
 	if err != nil {
 		return model.Modification{}, err

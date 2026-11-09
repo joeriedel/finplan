@@ -295,7 +295,7 @@ func TestModificationEditing(t *testing.T) {
 	pt.addMod(demodata.ProjNewJob)
 	p := a.rec.Projection(demodata.ProjNewJob)
 	if len(p.Mods) != n+1 {
-		t.Fatalf("mods %d, notices %v, err %q", len(p.Mods), a.notices, pt.addErr)
+		t.Fatalf("mods %d, notices %v", len(p.Mods), a.notices)
 	}
 	v, from, ok := constantOf(p.Mods[n].Values)
 	if !ok || v != 0.045 || from == nil || *from != model.D(2027, 1, 1) {

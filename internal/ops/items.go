@@ -75,6 +75,12 @@ func checkItemAs(rec *model.Record, it model.BudgetItem, existing *model.BudgetI
 	return it, nil
 }
 
+// CheckItem returns the reason AddItem would refuse the item, nil if it would not. It is the check AddItem and EditItem make, for editors that show why an input cannot be added.
+func CheckItem(rec *model.Record, item model.BudgetItem) error {
+	_, err := checkItem(rec, item)
+	return err
+}
+
 // itemIDs returns the ids of the record's budget items and of every item added by a modification of any projection.
 func itemIDs(rec *model.Record) map[string]bool {
 	ids := map[string]bool{}
@@ -163,10 +169,23 @@ func EditItem(st *store.Store, rec *model.Record, name, itemID string, item mode
 
 // EndItem appends a modification that sets the amount of the budget item to zero from the date on, so that it pays nothing from then; before it the item is as it was. The item may be one of the record's or one added in the chain.
 func EndItem(st *store.Store, rec *model.Record, name, itemID string, from model.Date, o Options) (*Result, error) {
-	m := model.Modification{
+	return AddMod(st, rec, name, EndMod(itemID, from), o)
+}
+
+// EndMod is the modification EndItem adds.
+func EndMod(itemID string, from model.Date) model.Modification {
+	return model.Modification{
 		Target:   model.ObjectRef{Kind: model.KindBudgetItem, ID: itemID},
 		Property: model.PropAmount,
 		Values:   model.MustSchedule(model.Segment{From: from, Value: 0}),
 	}
-	return AddMod(st, rec, name, m, o)
+}
+
+// EndedOn reports whether m is exactly what EndItem stores, and the date it ends the item from.
+func EndedOn(m model.Modification) (model.Date, bool) {
+	segs := m.Values.Segments()
+	if m.Target.Kind != model.KindBudgetItem || m.Property != model.PropAmount || len(segs) != 1 || segs[0].Value != 0 || segs[0].End != nil || segs[0].From == model.MinDate {
+		return 0, false
+	}
+	return segs[0].From, true
 }

@@ -773,3 +773,198 @@ func TestCheckItemNeedsDateAndValidDay(t *testing.T) {
 		}
 	}
 }
+
+func TestSetMod(t *testing.T) {
+	// New job: mod 0 is an amount of salary-a, mod 1 the growth of the brokerage.
+	to := model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: "utilities"}, Property: model.PropAmount, Values: model.Constant(500)}
+	dryRunMatches(t, func(st *store.Store, rec *model.Record, o Options) (*Result, error) {
+		return SetMod(st, rec, demodata.ProjNewJob, 0, to, o)
+	})
+	st, rec := seed(t)
+	if _, err := SetMod(st, rec, demodata.ProjNewJob, 0, to, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	mods := reload(t, st).Projection(demodata.ProjNewJob).Mods
+	if !reflect.DeepEqual(mods[0], to) || len(mods) != len(rec.Projection(demodata.ProjNewJob).Mods) {
+		t.Errorf("mods %+v", mods)
+	}
+	// The kind and object of a modification can change with the property.
+	acct := model.Modification{Target: model.ObjectRef{Kind: model.KindAccount, ID: string(demodata.Checking)}, Property: model.PropGrowth, Values: model.Constant(0.01)}
+	if _, err := SetMod(st, rec, demodata.ProjNewJob, 1, acct, Options{DryRun: true}); err != nil {
+		t.Errorf("account to account: %v", err)
+	}
+	global := model.Modification{Target: model.ObjectRef{Kind: model.KindGlobal}, Property: model.PropInflation, Values: model.Constant(0.02)}
+	if _, err := SetMod(st, rec, demodata.ProjNewJob, 1, global, Options{DryRun: true}); err != nil {
+		t.Errorf("account to global: %v", err)
+	}
+
+	refuseSet := func(want error, proj string, index int, m model.Modification) {
+		t.Helper()
+		refused(t, want, func(st *store.Store, rec *model.Record) (*Result, error) {
+			return SetMod(st, rec, proj, index, m, Options{})
+		})
+	}
+	noObject := to
+	noObject.Target.ID = ""
+	refuseSet(ErrNoObject, demodata.ProjNewJob, 0, noObject)
+	wrongProp := to
+	wrongProp.Property = model.PropGrowth
+	refuseSet(ErrInvalidValue, demodata.ProjNewJob, 0, wrongProp)
+	unknown := to
+	unknown.Target.ID = "nope"
+	refuseSet(ErrUnknownTarget, demodata.ProjNewJob, 0, unknown)
+	big := to
+	big.Values = model.Constant(1e16)
+	refuseSet(ErrInvalidValue, demodata.ProjNewJob, 0, big)
+	refuseSet(ErrUnknownProjection, "Nowhere", 0, to)
+
+	// An item added by this projection's later modification does not exist yet at an earlier one.
+	own := model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: "side-gig-1"}, Property: model.PropAmount, Values: model.Constant(900)}
+	res, err := AddItem(st, rec, demodata.ProjNewJob, goodItem(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(res.Projection.Mods)
+	if _, err := SetMod(st, res.Record, demodata.ProjNewJob, 0, own, Options{DryRun: true}); !errors.Is(err, ErrUnknownTarget) {
+		t.Errorf("item before its addition: %v", err)
+	}
+	// The item exists after its addition, so a modification there may point at it.
+	later, err := AddMod(st, res.Record, demodata.ProjNewJob, to, Options{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetMod(st, later.Record, demodata.ProjNewJob, n, own, Options{DryRun: true}); err != nil {
+		t.Errorf("item after its addition: %v", err)
+	}
+
+	// An add_item modification is not replaced, and nothing becomes one.
+	add := res.Projection.Mods[n-1]
+	if _, err := SetMod(st, res.Record, demodata.ProjNewJob, n-1, to, Options{}); !errors.Is(err, ErrInvalidValue) {
+		t.Errorf("replacing add_item: %v", err)
+	}
+	if _, err := SetMod(st, res.Record, demodata.ProjNewJob, 0, add, Options{}); !errors.Is(err, ErrInvalidValue) {
+		t.Errorf("replacing with add_item: %v", err)
+	}
+	if _, err := SetMod(st, res.Record, demodata.ProjNewJob, 99, to, Options{}); err == nil {
+		t.Error("index out of range accepted")
+	}
+}
+
+func TestCheckModAndCheckItem(t *testing.T) {
+	_, rec := seed(t)
+	good := model.Modification{Target: model.ObjectRef{Kind: model.KindAccount, ID: string(demodata.Savings)}, Property: model.PropGrowth, Values: model.Constant(0.04)}
+	if err := CheckMod(rec, demodata.ProjNewJob, good); err != nil {
+		t.Errorf("good: %v", err)
+	}
+	noObject := good
+	noObject.Target.ID = ""
+	unknown := good
+	unknown.Target.ID = "nope"
+	wrongProp := good
+	wrongProp.Property = model.PropAmount
+	huge := good
+	huge.Values = model.Constant(1e16)
+	// A parent's added item exists in a child, not in a sibling.
+	ofParent := model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: "early-401k-withdrawal"}, Property: model.PropAmount, Values: model.Constant(1)}
+	for _, c := range []struct {
+		what string
+		proj string
+		m    model.Modification
+		want error
+	}{
+		{"no object", demodata.ProjNewJob, noObject, ErrNoObject},
+		{"unknown account", demodata.ProjNewJob, unknown, ErrUnknownTarget},
+		{"wrong property", demodata.ProjNewJob, wrongProp, ErrInvalidValue},
+		{"huge value", demodata.ProjNewJob, huge, ErrInvalidValue},
+		{"item of a sibling", demodata.ProjNewJob, ofParent, ErrUnknownTarget},
+		{"item of its own", demodata.ProjWithdraw, ofParent, nil},
+		{"unknown projection", "Nowhere", good, ErrUnknownProjection},
+	} {
+		if err := CheckMod(rec, c.proj, c.m); !errors.Is(err, c.want) || (c.want == nil && err != nil) {
+			t.Errorf("%s: %v, want %v", c.what, err, c.want)
+		}
+	}
+	if err := CheckItem(rec, goodItem()); err != nil {
+		t.Errorf("good item: %v", err)
+	}
+	it := goodItem()
+	it.Name = ""
+	if err := CheckItem(rec, it); !errors.Is(err, ErrInvalidValue) {
+		t.Errorf("nameless item: %v", err)
+	}
+	it = goodItem()
+	it.Account = "nope"
+	if err := CheckItem(rec, it); !errors.Is(err, ErrUnknownTarget) {
+		t.Errorf("unknown account: %v", err)
+	}
+}
+
+func TestItemsBefore(t *testing.T) {
+	st, rec := seed(t)
+	base := len(rec.Budget.Items)
+	res, err := NewProjection(st, rec, "Child", demodata.ProjWithdraw, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = AddItem(st, res.Record, "Child", goodItem(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = res.Record
+	ids := func(index int) []string {
+		t.Helper()
+		items, err := ItemsBefore(rec, "Child", index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, a := range items {
+			if a.AddedBy != "" {
+				out = append(out, a.Item.ID+" by "+a.AddedBy)
+			}
+		}
+		if len(items) < base {
+			t.Fatalf("lost record items: %d", len(items))
+		}
+		return out
+	}
+	if got := ids(0); !reflect.DeepEqual(got, []string{"early-401k-withdrawal by " + demodata.ProjWithdraw}) {
+		t.Errorf("start of the list: %v", got)
+	}
+	if got := ids(1); !reflect.DeepEqual(got, []string{"early-401k-withdrawal by " + demodata.ProjWithdraw, "side-gig-1 by Child"}) {
+		t.Errorf("end of the list: %v", got)
+	}
+	if _, err := ItemsBefore(rec, "Child", 2); err == nil {
+		t.Error("index past the end accepted")
+	}
+	if _, err := ItemsBefore(rec, "Nowhere", 0); !errors.Is(err, ErrUnknownProjection) {
+		t.Errorf("unknown projection: %v", err)
+	}
+	// The siblings of the parent see none of it.
+	if items, _ := ItemsBefore(rec, demodata.ProjNewJob, 0); len(items) != base {
+		t.Errorf("sibling sees %d items, want %d", len(items), base)
+	}
+}
+
+func TestEndModAndEndedOn(t *testing.T) {
+	from := model.D(2028, 1, 1)
+	m := EndMod("salary-a", from)
+	if d, ok := EndedOn(m); !ok || d != from {
+		t.Errorf("EndedOn(EndMod) = %v, %v", d, ok)
+	}
+	for what, change := range map[string]func(m *model.Modification){
+		"a value": func(m *model.Modification) { m.Values = model.MustSchedule(model.Segment{From: from, Value: 5}) },
+		"always":  func(m *model.Modification) { m.Values = model.Constant(0) },
+		"an end": func(m *model.Modification) {
+			m.Values = model.MustSchedule(model.Segment{From: from, End: model.Ptr(from.Add(9)), Value: 0})
+		},
+		"a property": func(m *model.Modification) { m.Property = model.PropGrowth },
+		"an account": func(m *model.Modification) { m.Target.Kind = model.KindAccount },
+	} {
+		x := EndMod("salary-a", from)
+		change(&x)
+		if _, ok := EndedOn(x); ok {
+			t.Errorf("%s counts as an end", what)
+		}
+	}
+}
