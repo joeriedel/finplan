@@ -203,7 +203,7 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 			case model.KindBudgetItem:
 				switch {
 				case m.Property == model.PropAmount && itemExists(m.Target.ID):
-					amounts[m.Target.ID] = m.Values
+					amounts[m.Target.ID] = amounts[m.Target.ID].Overlay(m.Values)
 				case m.Property == model.PropAmount:
 					skip("budget item not found")
 				case m.Property == model.PropAddItem && m.Item == nil:
@@ -235,7 +235,7 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 				}
 			case model.KindGlobal:
 				if m.Property == model.PropInflation {
-					infl = m.Values
+					infl = infl.Overlay(m.Values)
 				} else {
 					skip("unsupported property")
 				}

@@ -43,7 +43,7 @@ func fixture(t *testing.T) *model.Record {
 	late.AddSnapshot(d(2025, time.October, 1), 2000)
 	late.AddSnapshot(d(2025, time.October, 31), 2000)
 	bare := &model.Account{ID: "bare", Type: model.TypeSavings, Tax: model.Taxable}
-	bare.Default.Intervals = []model.Interval{{From: model.MinDate, To: d(2026, time.June, 30), Value: 500}}
+	bare.Default.Intervals = []model.Interval{{From: model.MinDate, To: model.Ptr(d(2026, time.June, 30)), Value: 500}}
 	for _, tx := range []model.Transaction{
 		{Date: d(2025, time.December, 15), Amount: 500, Kind: model.TxIncome},
 		{Date: d(2025, time.December, 16), Amount: -300, Kind: model.TxTransfer, Counter: "inv"},
@@ -229,7 +229,7 @@ func TestLaterScheduleOverwritesOnlyFromItsStart(t *testing.T) {
 	from := d(2027, time.January, 1)
 	must(t, rec.AddProjection(&model.Projection{Name: "later", Mods: []model.Modification{{
 		Target: model.ObjectRef{Kind: model.KindAccount, ID: "inv"}, Property: model.PropGrowth,
-		Values: model.NewSchedule(model.Segment{From: from, Value: 0.04}, model.Segment{From: from.Add(365), Value: 0.05}),
+		Values: model.MustSchedule(model.Segment{From: from, Value: 0.04}, model.Segment{From: from.Add(365), Value: 0.05}),
 	}}}))
 	for _, c := range []struct {
 		date model.Date
@@ -469,7 +469,7 @@ func TestBreakdownCauses(t *testing.T) {
 	}
 	// Defaults appear as their own cause where an account is read back from defaults.
 	acct := rec.Account("bare")
-	acct.Default.Intervals = append(acct.Default.Intervals, model.Interval{From: d(2025, time.December, 20), To: d(2026, time.January, 31), Value: 800})
+	acct.Default.Intervals = append(acct.Default.Intervals, model.Interval{From: d(2025, time.December, 20), To: model.Ptr(d(2026, time.January, 31)), Value: 800})
 	bd, err = Breakdown(rec, "", model.DefaultAssetID("bare"), d(2025, time.December, 10), d(2025, time.December, 25))
 	must(t, err)
 	if l := line(bd, CauseDefault); !near(l.Actual, 300) || len(bd.Lines) != 1 {
@@ -483,7 +483,7 @@ func TestModificationsAndSkipping(t *testing.T) {
 	raise := model.Modification{
 		Target:   model.ObjectRef{Kind: model.KindBudgetItem, ID: "salary"},
 		Property: model.PropAmount,
-		Values:   model.NewSchedule(model.Segment{From: d(2026, time.February, 1), Value: 2000}),
+		Values:   model.MustSchedule(model.Segment{From: d(2026, time.February, 1), Value: 2000}),
 	}
 	must(t, rec.AddProjection(&model.Projection{Name: "raise", Mods: []model.Modification{raise}}))
 	must(t, rec.AddProjection(&model.Projection{Name: "broken", Parent: "raise", Mods: []model.Modification{
@@ -583,7 +583,7 @@ func TestDeterministic(t *testing.T) {
 		a, b := fixture(t), fixture(t)
 		for _, rec := range []*model.Record{a, b} {
 			must(t, rec.AddAsset(&model.Asset{ID: "dflt", Members: []model.Member{model.AccountMember("bare"), model.AccountMember("chk")}}))
-			rec.Asset("dflt").Default.Intervals = []model.Interval{{From: model.MinDate, To: d(2026, time.June, 30), Value: 123.45}}
+			rec.Asset("dflt").Default.Intervals = []model.Interval{{From: model.MinDate, To: model.Ptr(d(2026, time.June, 30)), Value: 123.45}}
 		}
 		b1, err1 := Breakdown(a, "", "dflt", d(2025, time.November, 3), times[3])
 		b2, err2 := Breakdown(b, "", "dflt", d(2025, time.November, 3), times[3])
@@ -622,6 +622,86 @@ func TestInflationIndexing(t *testing.T) {
 	must(t, err)
 	if l := line(bd, CauseExpense); !near(l.Projected, flat) {
 		t.Errorf("zero inflation: got %v, want %v", l.Projected, flat)
+	}
+}
+
+func TestEndedGrowthSettingsOverlapInEitherOrder(t *testing.T) {
+	rec := fixture(t)
+	ended := model.Modification{
+		Target: model.ObjectRef{Kind: model.KindAccount, ID: "inv"}, Property: model.PropGrowth,
+		Values: model.MustSchedule(model.Segment{From: d(2026, time.March, 1), End: model.Ptr(d(2026, time.June, 1)), Value: 0.01}),
+	}
+	open := growthMod(model.KindAccount, "inv", 0.07)
+	addProjection(t, rec, "ended last", "", open, ended)
+	addProjection(t, rec, "ended first", "", ended, open)
+	for _, c := range []struct {
+		proj string
+		date model.Date
+		want float64
+	}{
+		{"ended last", d(2026, time.February, 1), 0.07},
+		{"ended last", d(2026, time.April, 1), 0.01},
+		{"ended last", d(2026, time.June, 1), 0.07},
+		{"ended first", d(2026, time.February, 1), 0.07},
+		{"ended first", d(2026, time.April, 1), 0.07}, // the later open-ended setting covers every date
+		{"ended first", d(2026, time.June, 1), 0.07},
+	} {
+		if got := rateOf(t, rec, c.proj, "all", "inv", c.date); !near(got, c.want) {
+			t.Errorf("%s on %v: got %v, want %v", c.proj, c.date, got, c.want)
+		}
+	}
+}
+
+func TestEndedBudgetAmountChange(t *testing.T) {
+	rec := fixture(t)
+	chk := model.DefaultAssetID("chk")
+	from, to := d(2026, time.January, 1), d(2026, time.March, 31)
+	bd, err := Breakdown(rec, "", chk, from, to)
+	must(t, err)
+	if l := line(bd, CauseExpense); !near(l.Projected, -600) {
+		t.Fatalf("base rent: got %v, want -600", l.Projected)
+	}
+	// Rent is cut to 100 for February only; January and March pay the base 200.
+	addProjection(t, rec, "cut", "", model.Modification{
+		Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: "rent"}, Property: model.PropAmount,
+		Values: model.MustSchedule(model.Segment{From: d(2026, time.February, 1), End: model.Ptr(d(2026, time.March, 1)), Value: 100}),
+	})
+	bd, err = Breakdown(rec, "cut", chk, from, to)
+	must(t, err)
+	if l := line(bd, CauseExpense); !near(l.Projected, -500) {
+		t.Errorf("cut rent: got %v, want -500", l.Projected)
+	}
+	// The unbounded rent item runs to the end of a long horizon.
+	bd, err = Breakdown(rec, "", chk, from, d(2027, time.January, 31))
+	must(t, err)
+	if l := line(bd, CauseExpense); !near(l.Projected, -2600) {
+		t.Errorf("open-ended rent: got %v, want -2600", l.Projected)
+	}
+}
+
+func TestEndedInflationChange(t *testing.T) {
+	rec := fixture(t)
+	rec.Globals[model.PropInflation] = model.Constant(0.10)
+	rec.Budget.Items[1].Indexed = true // rent
+	pause := d(2026, time.July, 1)
+	addProjection(t, rec, "pause", "", model.Modification{
+		Target: model.ObjectRef{Kind: model.KindGlobal}, Property: model.PropInflation,
+		Values: model.MustSchedule(model.Segment{From: model.MinDate, End: model.Ptr(pause), Value: 0}),
+	})
+	bd, err := Breakdown(rec, "pause", model.DefaultAssetID("chk"), d(2026, time.January, 1), d(2027, time.January, 31))
+	must(t, err)
+	// No inflation accrues before July; from then on the base 10% applies.
+	want := 0.0
+	for i := 0; i < 13; i++ {
+		date := d(2026, time.January+time.Month(i), 20)
+		f := 1.0
+		if date > pause {
+			f = math.Pow(1.10, float64(date-pause)/model.DaysPerYear)
+		}
+		want -= 200 * f
+	}
+	if l := line(bd, CauseExpense); !near(l.Projected, want) {
+		t.Errorf("got %v, want %v", l.Projected, want)
 	}
 }
 

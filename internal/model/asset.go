@@ -24,10 +24,11 @@ func accountOfDefault(id AssetID) (AccountID, bool) {
 	return AccountID(s), ok
 }
 
-// Interval is a default balance that applies from From to To, both inclusive.
+// Interval is a default balance that applies from From to To, both inclusive. A nil To leaves it open-ended.
 type Interval struct {
-	From, To Date
-	Value    float64
+	From  Date
+	To    *Date
+	Value float64
 }
 
 // DefaultBalance is a fallback value for dates with no actual data: a base of 0, overridden by intervals.
@@ -39,7 +40,7 @@ type DefaultBalance struct {
 // Where intervals overlap, the one added last wins.
 func (b DefaultBalance) Covers(d Date) (float64, bool) {
 	for i := len(b.Intervals) - 1; i >= 0; i-- {
-		if iv := b.Intervals[i]; d >= iv.From && d <= iv.To {
+		if iv := b.Intervals[i]; d >= iv.From && (iv.To == nil || d <= *iv.To) {
 			return iv.Value, true
 		}
 	}

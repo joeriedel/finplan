@@ -130,7 +130,7 @@ func Family() *model.Record {
 	for _, s := range accountSpecs {
 		a := &model.Account{ID: s.id, Name: s.name, Type: s.typ, Tax: s.tax, Owner: s.owner, StatedRate: s.rate}
 		if s.id == Roth {
-			a.Default.Intervals = []model.Interval{{From: model.MinDate, To: historyOpen.Add(-1), Value: 70000}}
+			a.Default.Intervals = []model.Interval{{From: model.MinDate, To: model.Ptr(historyOpen.Add(-1)), Value: 70000}}
 		}
 		must(rec.AddAccount(a))
 		generateHistory(rec, a, s)
@@ -157,7 +157,7 @@ func Family() *model.Record {
 		model.AssetMember(AllCash), model.AccountMember(Brokerage), model.AccountMember(Checking),
 	}}))
 
-	growth := model.NewSchedule(
+	growth := model.MustSchedule(
 		model.Segment{From: model.MinDate, Value: 0.04},
 		model.Segment{From: model.D(2029, time.January, 1), Value: 0.06},
 		model.Segment{From: model.D(2035, time.January, 1), Value: 0.02},
@@ -167,7 +167,7 @@ func Family() *model.Record {
 		{
 			Target:   model.ObjectRef{Kind: model.KindBudgetItem, ID: "salary-a"},
 			Property: model.PropAmount,
-			Values:   model.NewSchedule(model.Segment{From: model.D(2027, time.March, 1), Value: 6500}),
+			Values:   model.MustSchedule(model.Segment{From: model.D(2027, time.March, 1), Value: 6500}),
 		},
 		{
 			Target:   model.ObjectRef{Kind: model.KindAccount, ID: string(Brokerage)},

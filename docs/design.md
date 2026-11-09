@@ -46,7 +46,7 @@ Money lives only in accounts. Any asset can be asked for its balance on any date
 Every account and asset has a **default balance**: a fallback value for dates with no actual data. It is not added to anything and it does not grow; growth is a projection concept.
 
 - A **base** default of 0 fills every date.
-- The user can add **intervals** (from, to, value) that override the base on those dates, for example "use 40,000 for this account until its real data begins".
+- The user can add **intervals** (from, optional to, value) that override the base on those dates (a missing `to` leaves the interval open-ended, and `to` is inclusive), for example "use 40,000 for this account until its real data begins".
 - **Actual data always beats any default.** Defaults apply only on dates with no actual data.
 
 A balance query returns the value with a flag saying whether it came from actual data or from defaults.
@@ -75,7 +75,11 @@ The check runs whenever an asset is used, not only when it is edited, because ed
 
 Every behavioral property is a parameter: growth rate, allocation, contribution rules, withdrawal order, and so on. Every parameter is a **schedule over time**: piecewise values by date range ("4% until 2029, then 6% until 2035, then 2%"). A constant is a schedule with one segment.
 
-Settings apply **in order, the last applied winning**. For each account on a line (a line is an asset queried under a projection), the value starts as the account's own (for growth, its stated rate). Settings are then applied in sequence, each overwriting the value for the accounts it covers, on the dates its schedule is active; what remains is the value. There are no modes and no specificity rules: the order alone decides.
+A segment has a start (`From`), an optional end (`End`) and a value. The end is exclusive, so a segment covers [From, End). Without an end it runs until the next segment's start, or indefinitely if it is the last. Segments are sorted by start and never overlap: an end may equal the next segment's start but not be after it, and each end must be after its own start. `NewSchedule` rejects an unsorted, duplicate, overlapping or empty-length schedule with an error, and since segments are unexported every schedule goes through it.
+
+Dates that no segment covers (before the first segment, in a gap, or from the last segment's end on) are not covered by the setting, and the value beneath shows through. A setting's start is its first segment's start and its end is its last segment's end; there is no separate setting-level start or end. Compound growth over dates no segment covers contributes no growth.
+
+Settings apply **in order, the last applied winning**. For each account on a line (a line is an asset queried under a projection), the value starts as the account's own (for growth, its stated rate). Settings are then applied in sequence, each overwriting the value for the accounts it covers, on the dates its schedule covers; what remains is the value. There are no modes and no specificity rules: the order alone decides.
 
 The order is:
 
@@ -85,9 +89,9 @@ The order is:
 
 "All cash 7%" followed by "Checking 1%" gives Checking 1% and every other cash account 7%; in the reverse order Checking gets 7%. Overlapping siblings need no conflict rule: the later one wins.
 
-A schedule overwrites only from its first segment's date onward; before that, the earlier value stands. A constant overwrites entirely.
+Settings layer per covered date: a later setting overwrites the value beneath only on the dates its segments cover, and the earlier value stands everywhere else. A constant covers every date, so it overwrites entirely. This applies to growth and other parameter settings on asset definitions and in projections, to global inflation modifications and to budget item amount changes; inflation and amount modifications no longer replace the whole value.
 
-Per-asset start and `override_history` follow the same order and are projection settings, never properties of an asset definition: "Retirement 2024" followed by "TSP 2020" gives the TSP its 2020 start.
+Per-asset start and `override_history` follow the same order but are single values with no segments: each setting replaces the one before it (the last wins). They are projection settings, never properties of an asset definition: "Retirement 2024" followed by "TSP 2020" gives the TSP its 2020 start.
 
 A projection's setting reaches every account under its target asset on every line queried under that projection, even when the line's asset does not contain the target; a setting aimed at an account reaches just that account. An asset-definition setting applies only on lines whose asset is, or contains, that asset. An account may therefore show different values on different lines; that is intended. A setting that names an unknown asset is an error.
 
@@ -102,7 +106,7 @@ The budget is the forecast of every flow, and the shared context for extrapolati
 A budget item has:
 
 - an amount and a schedule: a calendar rule (biweekly, semimonthly, monthly on a given day, annual on a date) or a one-time date
-- optional start and end dates
+- optional start and end dates (the end is inclusive; a missing end means open-ended, and so does a missing start)
 - whether it is indexed to inflation
 - the account it lands in or draws from
 
@@ -219,7 +223,7 @@ Details the build settled, and the placeholders it uses until the real rules arr
 
 **Projection start.** The projection-wide start (default `Record.Today`) and `override_history` (default false) are taken from the last projection in the chain that sets them; they are the base value, and the per-asset settings that cover the account are applied over it in order.
 
-**Precedence.** Settings are applied in order, the last winning (`model.Apply`): asset-definition parameters first (`Resolution.AssetsAround`: the account's default asset, then inner before outer assets), then the projection chain root first, each projection's settings in list order. A schedule is written over the prior one from its first segment's date (`Schedule.Overlay`); start and `override_history` simply replace. A projection setting covers an account when it lies under the setting's target (resolved separately, so the target need not lie within the line's asset); an asset's own parameters cover only accounts it wraps within the line's scope. An `AssetSetting` naming an unknown asset is an error.
+**Precedence.** Settings are applied in order, the last winning (`model.Apply`): asset-definition parameters first (`Resolution.AssetsAround`: the account's default asset, then inner before outer assets), then the projection chain root first, each projection's settings in list order. A schedule is written over the prior one on the dates its segments cover (`Schedule.Overlay`), so gaps and ends let the value beneath show through; start and `override_history` simply replace. A projection setting covers an account when it lies under the setting's target (resolved separately, so the target need not lie within the line's asset); an asset's own parameters cover only accounts it wraps within the line's scope. An `AssetSetting` naming an unknown asset is an error.
 
 **Overlap.** The later-added member (by a record-wide sequence) is invalid as a whole, rule members included, is named with its duplicate and is left out of sums. It is checked on every resolve. A rule matching no accounts contributes 0; an empty rule matches every account. Default asset ids are `acct:<id>`.
 
@@ -248,6 +252,8 @@ In build order:
 ## UI
 
 Highly dynamic graphs: pan, zoom and scroll horizontally with no fixed end date. Several projections and reality overlaid. Per-series visibility and color. Views saved as presets. Fast and lightweight.
+
+**Setting editor (planned; no GUI for it yet):** the editor tabs will show each time-varying setting as a timeline strip of segment blocks. Touching segments share one draggable anchor; a gap gives each edge its own handle. Dragging an edge into the next segment pushes that segment's start later; if that segment would shrink to nothing, it moves along with any later segments it meets, so nothing is deleted silently. The last segment's end handle sets or clears the setting's end. Clicking a segment selects it, and the Delete key removes it.
 
 **Difference bands:** a shaded area between any two series, for example a 401k under a base projection and under one with an early withdrawal, showing the growing gap of tax, penalty and lost growth. The gap is readable at the cursor and optionally in today's dollars. Fill is translucent by default; hatching is optional and needs custom drawing clipped to the band, since ImPlot has no hatch patterns.
 

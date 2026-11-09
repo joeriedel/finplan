@@ -5,6 +5,7 @@ package model
 
 import (
 	"errors"
+	"math"
 	"slices"
 	"testing"
 	"time"
@@ -110,7 +111,7 @@ func TestOverlapIsCheckedWhenUsed(t *testing.T) {
 
 func TestDefaultVersusActual(t *testing.T) {
 	a := acct("a", TypeChecking, 0, 0)
-	a.Default.Intervals = []Interval{{From: MinDate, To: day(time.January, 9), Value: 40000}}
+	a.Default.Intervals = []Interval{{From: MinDate, To: Ptr(day(time.January, 9)), Value: 40000}}
 	a.AddSnapshot(day(time.January, 1), 100)
 	a.AddSnapshot(day(time.January, 10), 200)
 	if err := a.AddTransaction(Transaction{Date: day(time.January, 5), Amount: 50, Kind: TxIncome}); err != nil {
@@ -134,7 +135,7 @@ func TestDefaultVersusActual(t *testing.T) {
 		}
 	}
 	// An interval that does cover a date with no actual data supplies the value.
-	a.Default.Intervals = []Interval{{From: MinDate, To: day(time.December, 31), Value: 40000}}
+	a.Default.Intervals = []Interval{{From: MinDate, To: Ptr(day(time.December, 31)), Value: 40000}}
 	if got := balance(t, r, DefaultAssetID("a"), day(time.December, 20)); got.Amount != 40000 || got.Actual {
 		t.Errorf("default interval: got %+v", got)
 	}
@@ -143,15 +144,15 @@ func TestDefaultVersusActual(t *testing.T) {
 func TestNestedDefaultResolution(t *testing.T) {
 	known, other := day(time.March, 1), day(time.March, 1).Add(100)
 	a := acct("a", TypeChecking, 0, 0)
-	a.Default.Intervals = []Interval{{From: MinDate, To: MaxDate, Value: 10}}
+	a.Default.Intervals = []Interval{{From: MinDate, To: nil, Value: 10}}
 	b := acct("b", TypeSavings, known, 5) // actual only on one date
-	b.Default.Intervals = []Interval{{From: MinDate, To: MaxDate, Value: 20}}
+	b.Default.Intervals = []Interval{{From: MinDate, To: nil, Value: 20}}
 	c := acct("c", TypeSavings, 0, 0)
-	c.Default.Intervals = []Interval{{From: MinDate, To: MaxDate, Value: 7}}
+	c.Default.Intervals = []Interval{{From: MinDate, To: nil, Value: 7}}
 	r := newRecord(t, a, b, c)
 	addAsset(t, r, "x", AccountMember("a"), AccountMember("b"))
 	addAsset(t, r, "y", AssetMember("x"), AccountMember("c"))
-	r.Asset("y").Default.Intervals = []Interval{{From: MinDate, To: MaxDate, Value: 999}}
+	r.Asset("y").Default.Intervals = []Interval{{From: MinDate, To: nil, Value: 999}}
 
 	// Some account has actual data: the asset is the sum of its members, each resolved on its own.
 	// x has actual data (b), so it is a(default 10) + b(actual 5), and c is its default 7.
@@ -164,7 +165,7 @@ func TestNestedDefaultResolution(t *testing.T) {
 	}
 	// Without y's interval, x's interval beats a's and b's defaults, plus c's default.
 	r.Asset("y").Default.Intervals = nil
-	r.Asset("x").Default.Intervals = []Interval{{From: MinDate, To: MaxDate, Value: 100}}
+	r.Asset("x").Default.Intervals = []Interval{{From: MinDate, To: nil, Value: 100}}
 	if got := balance(t, r, "y", other); got.Amount != 107 {
 		t.Errorf("x default: got %+v, want 107", got)
 	}
@@ -294,7 +295,7 @@ func TestAssetsAroundListsDefaultAssetOnce(t *testing.T) {
 }
 
 func TestSchedule(t *testing.T) {
-	s := NewSchedule(Segment{day(time.January, 1), 0.06}, Segment{MinDate, 0.04}, Segment{day(time.June, 1), 0.02})
+	s := MustSchedule(Segment{From: MinDate, Value: 0.04}, Segment{From: day(time.January, 1), Value: 0.06}, Segment{From: day(time.June, 1), Value: 0.02})
 	for _, c := range []struct {
 		d    Date
 		want float64
@@ -314,10 +315,92 @@ func TestSchedule(t *testing.T) {
 	if got := c.Compound(day(time.January, 1), day(time.January, 1)); got != 1 {
 		t.Errorf("no time: got %v", got)
 	}
-	split := NewSchedule(Segment{MinDate, 0.10}, Segment{day(time.July, 1), 0.10})
+	split := MustSchedule(Segment{From: MinDate, Value: 0.10}, Segment{From: day(time.July, 1), Value: 0.10})
 	a, b := split.Compound(day(time.January, 1), day(time.December, 1)), c.Compound(day(time.January, 1), day(time.December, 1))
 	if d := a - b; d > 1e-12 || d < -1e-12 {
 		t.Errorf("split vs whole: %v vs %v", a, b)
+	}
+}
+
+func TestScheduleEnds(t *testing.T) {
+	var (
+		jan, mar, jun, sep = day(time.January, 1), day(time.March, 1), day(time.June, 1), day(time.September, 1)
+		dec                = day(time.December, 1)
+	)
+	check := func(name string, s Schedule, cases map[Date]float64, none ...Date) {
+		t.Helper()
+		for d, want := range cases {
+			if got, ok := s.At(d); !ok || got != want {
+				t.Errorf("%s At(%v): got %v %v, want %v", name, d, got, ok, want)
+			}
+		}
+		for _, d := range none {
+			if _, ok := s.At(d); ok {
+				t.Errorf("%s At(%v): has a value, want none", name, d)
+			}
+		}
+	}
+	// A segment with an End stops there (exclusive) and the schedule has no value after it.
+	ended := MustSchedule(Segment{From: jan, End: Ptr(mar), Value: 5})
+	check("ended", ended, map[Date]float64{jan: 5, mar.Add(-1): 5}, jan.Add(-1), mar, dec)
+	// A gap between segments is uncovered; the last segment without an End runs on.
+	gap := MustSchedule(Segment{From: jan, End: Ptr(mar), Value: 1}, Segment{From: jun, Value: 2})
+	check("gap", gap, map[Date]float64{jan: 1, jun: 2, dec: 2}, mar, sep.Add(-100))
+	// Touching ends are not overlaps.
+	if _, err := NewSchedule(Segment{From: jan, End: Ptr(mar), Value: 1}, Segment{From: mar, Value: 2}); err != nil {
+		t.Errorf("touching segments: %v", err)
+	}
+	for name, segs := range map[string][]Segment{
+		"overlap":   {{From: jan, End: Ptr(jun), Value: 1}, {From: mar, Value: 2}},
+		"unsorted":  {{From: mar, Value: 2}, {From: jan, Value: 1}},
+		"duplicate": {{From: jan, Value: 1}, {From: jan, Value: 2}},
+		"empty":     {{From: jan, End: Ptr(jan), Value: 1}},
+		"reversed":  {{From: mar, End: Ptr(jan), Value: 1}},
+	} {
+		if _, err := NewSchedule(segs...); err == nil {
+			t.Errorf("%s schedule accepted", name)
+		}
+	}
+	// Segments returns a copy.
+	cp := gap.Segments()
+	cp[0].Value = 99
+	*cp[0].End = dec
+	check("copy", gap, map[Date]float64{jan: 1}, mar)
+
+	// Overlay is per date: an ended upper segment reverts to the lower value after it.
+	base := Constant(0.01)
+	check("revert", base.Overlay(MustSchedule(Segment{From: mar, End: Ptr(jun), Value: 0.05})),
+		map[Date]float64{jan: 0.01, mar: 0.05, jun.Add(-1): 0.05, jun: 0.01, dec: 0.01})
+	// The lower schedule's own gaps stay uncovered.
+	lowerGap := MustSchedule(Segment{From: jan, End: Ptr(mar), Value: 1}, Segment{From: sep, Value: 3})
+	over := lowerGap.Overlay(MustSchedule(Segment{From: jun, End: Ptr(dec), Value: 7}))
+	check("lower gaps", over, map[Date]float64{jan: 1, jun: 7, sep: 7, dec: 3}, mar, jun.Add(-1))
+	// An open-ended upper schedule replaces everything from its start on.
+	open := lowerGap.Overlay(MustSchedule(Segment{From: jun, Value: 7}))
+	check("open", open, map[Date]float64{jan: 1, jun: 7, dec: 7}, mar)
+	if got := len(open.Segments()); got != 2 {
+		t.Errorf("open overlay segments: got %d, want 2", got)
+	}
+	// Uncovered dates compound as a factor of 1.
+	if got := ended.Compound(mar, dec); got != 1 {
+		t.Errorf("compound over uncovered dates: got %v", got)
+	}
+	if got, want := base.Overlay(MustSchedule(Segment{From: mar, End: Ptr(jun), Value: 0})).Compound(jan, dec), base.Compound(jan, mar)*base.Compound(jun, dec); math.Abs(got-want) > 1e-12 {
+		t.Errorf("compound with an ended zero: got %v, want %v", got, want)
+	}
+}
+
+func TestOpenEndedDefaultInterval(t *testing.T) {
+	a := acct("a", TypeChecking, 0, 0)
+	a.Default.Intervals = []Interval{{From: day(time.March, 1), Value: 77}}
+	r := newRecord(t, a)
+	for _, c := range []struct {
+		date Date
+		want float64
+	}{{day(time.February, 28), 0}, {day(time.March, 1), 77}, {D(2090, time.January, 1), 77}} {
+		if got := balance(t, r, DefaultAssetID("a"), c.date).Amount; got != c.want {
+			t.Errorf("%v: got %v, want %v", c.date, got, c.want)
+		}
 	}
 }
 

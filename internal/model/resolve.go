@@ -334,7 +334,7 @@ type Setting[T any] struct {
 // Replace is the overwrite for scalar settings: the setting's value replaces the prior one.
 func Replace[T any](_, v T) T { return v }
 
-// Apply returns the value that results from applying settings to base, in slice order: each setting whose asset covers reports true overwrites the value through overwrite(prior, setting value), and the last one applied wins. Callers must therefore keep settings lists in insertion order. It also returns the asset of the last setting applied, and false if none was.
+// Apply returns the value that results from applying settings to base, in slice order: each setting whose asset covers reports true overwrites the value through overwrite(prior, setting value), and the last one applied wins (for schedules, per date, with Schedule.Overlay). Callers must therefore keep settings lists in insertion order. It also returns the asset of the last setting applied, and false if none was.
 func Apply[T any](base T, settings []Setting[T], covers func(AssetID) bool, overwrite func(prior, v T) T) (value T, from AssetID, found bool) {
 	value = base
 	for _, s := range settings {
