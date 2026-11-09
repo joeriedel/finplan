@@ -126,3 +126,28 @@ func TestPresetRestoreSkipsMissing(t *testing.T) {
 		t.Fatalf("bands: %+v", bands)
 	}
 }
+
+func TestRenameProjection(t *testing.T) {
+	l := NewLines("Old")
+	l.Add("cash", false, "", RGB(1))
+	l.Add("cash", true, "Old", RGB(1))
+	l.Add("cash", true, "Other", RGB(1))
+	p := Capture("mine", l, 1, 2)
+
+	l.RenameProjection("Old", "New")
+	got := l.All()
+	if l.Switcher() != "New" || got[0].Projection != "" || got[1].Projection != "New" || got[2].Projection != "Other" {
+		t.Errorf("lines after rename: %q %+v", l.Switcher(), got)
+	}
+
+	q, changed := p.RenameProjection("Old", "New")
+	if !changed || q.Switcher != "New" || q.Lines[1].Projection != "New" || q.Lines[2].Projection != "Other" {
+		t.Errorf("renamed preset: %v %+v", changed, q)
+	}
+	if p.Switcher != "Old" || p.Lines[1].Projection != "Old" {
+		t.Error("renaming changed the original preset")
+	}
+	if _, changed := p.RenameProjection("Nope", "New"); changed {
+		t.Error("a preset that does not use the name changed")
+	}
+}

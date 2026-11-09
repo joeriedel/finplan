@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 // Command finplan is a personal financial planner. It shows the Graph tab of the record in its SQLite
-// database, the user's own or, with --demo, a throwaway one holding an invented family; the other tabs
-// are placeholders.
+// database, the user's own or, with --demo, a throwaway one holding an invented family, and edits its
+// projections in the Projections tab; the other tabs are placeholders.
 package main
 
 import (

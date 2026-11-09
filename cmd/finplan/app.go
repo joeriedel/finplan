@@ -12,6 +12,7 @@ import (
 	"github.com/joeriedel/finplan/internal/backend"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/store"
+	"github.com/joeriedel/finplan/internal/undo"
 )
 
 // app is the application shell: menu bar, tab bar and the tabs.
@@ -23,6 +24,13 @@ type app struct {
 	// notices are messages waiting for the user to dismiss them; backupOpen is set while the Backup save dialog is open.
 	notices    []string
 	backupOpen bool
+	// history holds the undoable edits (see edit); a reload from another program's changes clears it.
+	history undo.History[editStep]
+	proj    *projTab
+	// unchanged is whether the latest edit call ended as a no-change; field commits use it to drop their typed text.
+	unchanged bool
+	// showGraph selects the Graph tab for one frame.
+	showGraph bool
 	// reported holds the preset problems already queued, so that a reload does not queue them again.
 	reported map[string]bool
 }
@@ -40,6 +48,7 @@ func newApp(st *store.Store) (*app, error) {
 	a := &app{st: st, rec: rec, reported: map[string]bool{}}
 	a.notifyOnce(problems)
 	a.graph = newGraphTab(rec, presets, st, a.notify)
+	a.proj = &projTab{a: a}
 	return a, nil
 }
 
@@ -69,6 +78,7 @@ func (a *app) reload() {
 		return
 	}
 	a.rec = rec
+	a.history.Clear()
 	a.graph.reload(rec, presets)
 	a.notifyOnce(problems)
 }
@@ -107,7 +117,7 @@ func (a *app) drawNotices() {
 	}
 }
 
-// tabs lists the tab bar in order; only Graph is built.
+// tabs lists the tab bar in order; only Graph and Projections are built.
 var tabs = []string{"Graph", "Projections", "Assets", "Accounts", "Budget", "Markets"}
 
 func (a *app) draw() {
@@ -115,6 +125,7 @@ func (a *app) draw() {
 		a.backupOpen = false
 		a.backup(r)
 	}
+	a.shortcuts()
 	a.menuBar()
 	a.drawNotices()
 
@@ -133,15 +144,22 @@ func (a *app) draw() {
 		imgui.WindowDrawList().AddRectFilled(p, imgui.NewVec2(p.X+imgui.WindowSize().X, p.Y+stripH), u32(rgba(colStrip, 1)))
 		if imgui.BeginTabBarV("##tabs", imgui.TabBarFlagsNone) {
 			for i, name := range tabs {
-				if !imgui.BeginTabItemV(name, nil, imgui.TabItemFlagsNone) {
+				tabFlags := imgui.TabItemFlagsNone
+				if i == 0 && a.showGraph {
+					tabFlags, a.showGraph = imgui.TabItemFlagsSetSelected, false
+				}
+				if !imgui.BeginTabItemV(name, nil, tabFlags) {
 					continue
 				}
 				imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, pad)
 				imgui.PushStyleColorVec4(imgui.ColChildBg, rgba(colWindow, 1))
 				if imgui.BeginChildStrV("##content", imgui.NewVec2(0, 0), imgui.ChildFlagsAlwaysUseWindowPadding, imgui.WindowFlagsNoScrollbar|imgui.WindowFlagsNoScrollWithMouse) {
-					if i == 0 {
+					switch i {
+					case 0:
 						a.graph.draw()
-					} else {
+					case 1:
+						a.proj.draw()
+					default:
 						imgui.TextDisabled("The " + name + " tab is not built yet.")
 					}
 				}
@@ -157,7 +175,21 @@ func (a *app) draw() {
 	imgui.PopStyleVarV(3)
 }
 
-// menuBar draws the main menu. Only File > Backup and Quit do anything yet.
+// shortcuts handles Ctrl+Z (undo) and Ctrl+Shift+Z or Ctrl+Y (redo), except while a text field is being edited, which has
+// its own undo, or a message is waiting.
+func (a *app) shortcuts() {
+	if len(a.notices) > 0 || imgui.CurrentIO().WantTextInput() {
+		return
+	}
+	switch {
+	case imgui.IsKeyChordPressed(imgui.KeyChord(imgui.ModCtrl | imgui.KeyZ)):
+		a.undo()
+	case imgui.IsKeyChordPressed(imgui.KeyChord(imgui.ModCtrl | imgui.ModShift | imgui.KeyZ)), imgui.IsKeyChordPressed(imgui.KeyChord(imgui.ModCtrl | imgui.KeyY)):
+		a.redo()
+	}
+}
+
+// menuBar draws the main menu. File > Backup, Quit and Edit > Undo and Redo are the menu items that do anything yet.
 func (a *app) menuBar() {
 	if !imgui.BeginMainMenuBar() {
 		return
@@ -178,8 +210,19 @@ func (a *app) menuBar() {
 		imgui.EndMenu()
 	}
 	if imgui.BeginMenuV("Edit", true) {
-		imgui.MenuItemBoolV("Undo", "", false, false)
-		imgui.MenuItemBoolV("Redo", "", false, false)
+		undoLabel, redoLabel := "Undo", "Redo"
+		if s, ok := a.history.PeekUndo(); ok {
+			undoLabel += " " + s.Label
+		}
+		if s, ok := a.history.PeekRedo(); ok {
+			redoLabel += " " + s.Label
+		}
+		if imgui.MenuItemBoolV(undoLabel, "Ctrl+Z", false, a.history.CanUndo()) {
+			a.undo()
+		}
+		if imgui.MenuItemBoolV(redoLabel, "Ctrl+Shift+Z", false, a.history.CanRedo()) {
+			a.redo()
+		}
 		imgui.EndMenu()
 	}
 	if imgui.BeginMenuV("View", true) {

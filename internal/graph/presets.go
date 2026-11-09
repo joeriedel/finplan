@@ -61,6 +61,24 @@ func Capture(name string, l *Lines, from, to float64) Preset {
 	return p
 }
 
+// RenameProjection returns the preset with the projection from renamed to to in its switcher and pinned lines, and
+// whether anything changed. The result shares nothing with p.
+func (p Preset) RenameProjection(from, to string) (Preset, bool) {
+	out := p
+	out.Lines = append([]PresetLine(nil), p.Lines...)
+	out.Bands = append([]PresetBand(nil), p.Bands...)
+	changed := false
+	if out.Switcher == from {
+		out.Switcher, changed = to, true
+	}
+	for i, l := range out.Lines {
+		if l.Pinned && l.Projection == from {
+			out.Lines[i].Projection, changed = to, true
+		}
+	}
+	return out, changed
+}
+
 // Restore builds a line list from the preset, with new ids, the exact colours and no selection. has tells
 // whether the current record has the asset and, when projection is not empty, that projection; a line it
 // rejects is skipped, and so are the bands that use it. Bands whose line indexes are out of range or equal are

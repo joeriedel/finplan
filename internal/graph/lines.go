@@ -62,6 +62,18 @@ func (l *Lines) Add(asset model.AssetID, pinned bool, projection string, base Co
 	return ln.ID
 }
 
+// RenameProjection points the switcher and every pinned line that names the projection from at to instead.
+func (l *Lines) RenameProjection(from, to string) {
+	if l.switcher == from {
+		l.switcher = to
+	}
+	for i := range l.lines {
+		if l.lines[i].Pinned && l.lines[i].Projection == from {
+			l.lines[i].Projection = to
+		}
+	}
+}
+
 func (l *Lines) index(id LineID) int {
 	for i, ln := range l.lines {
 		if ln.ID == id {
