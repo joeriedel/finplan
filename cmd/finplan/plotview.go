@@ -362,9 +362,9 @@ func (g *graphTab) drawLanes(views []lineView, height, pitch float32) {
 			}
 		}
 		dl.PopClipRect()
-		label := lineColor(v.line.Color, 1)
+		label := lineColor(v.line.Color, 0.6)
 		if selected {
-			label = rgba(colText, 1)
+			label = lineColor(v.line.Color, 1)
 		}
 		dl.PushClipRectV(imgui.NewVec2(origin.X, y), imgui.NewVec2(left-4*s, y+barH), true)
 		dl.AddTextVec2(imgui.NewVec2(origin.X+4*s, y+(barH-imgui.TextLineHeight())/2), u32(label), v.name)
