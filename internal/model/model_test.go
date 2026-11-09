@@ -401,6 +401,29 @@ func TestScheduleEnds(t *testing.T) {
 	}
 }
 
+func TestScheduleEndAtMaxDate(t *testing.T) {
+	from, to := day(time.January, 1), day(time.January, 1).Add(365)
+	s := MustSchedule(Segment{From: MinDate, End: Ptr(MaxDate), Value: 0.05})
+	if got := s.Segments(); got[0].End != nil {
+		t.Errorf("End == MaxDate not normalized: %v", *got[0].End)
+	}
+	// A schedule holding an End of MaxDate by other means must not wrap either.
+	raw := Schedule{segs: []Segment{{From: MinDate, End: Ptr(MaxDate), Value: 0.05}}}
+	open := Constant(0.05)
+	for name, sc := range map[string]Schedule{"normalized": s, "raw": raw} {
+		if got, want := sc.Compound(from, to), open.Compound(from, to); got != want {
+			t.Errorf("%s compound: got %v, want %v", name, got, want)
+		}
+		o := Constant(0.01).Overlay(sc)
+		if v, ok := o.At(to); !ok || v != 0.05 {
+			t.Errorf("%s overlay At: got %v %v, want 0.05", name, v, ok)
+		}
+		if got := len(o.Segments()); got != 1 {
+			t.Errorf("%s overlay segments: got %d, want 1", name, got)
+		}
+	}
+}
+
 func TestOpenEndedDefaultInterval(t *testing.T) {
 	a := acct("a", TypeChecking, 0, 0)
 	a.Default.Intervals = []Interval{{From: day(time.March, 1), Value: 77}}

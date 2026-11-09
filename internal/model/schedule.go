@@ -42,7 +42,8 @@ func Constant(v float64) Schedule {
 
 // NewSchedule returns a schedule from segments, which must be sorted by strictly increasing From, each
 // End on or after its From and before the next segment's From. An End on the day before the next segment's
-// From touches it and is dropped, so touching segments have one representation.
+// From touches it and is dropped, so touching segments have one representation. An End of MaxDate means the
+// same as no End and is dropped too.
 func NewSchedule(segs ...Segment) (Schedule, error) {
 	for i, g := range segs {
 		if g.End != nil && *g.End < g.From {
@@ -61,7 +62,7 @@ func NewSchedule(segs ...Segment) (Schedule, error) {
 	}
 	s := make([]Segment, len(segs))
 	for i, g := range segs {
-		if g.End != nil && (i+1 == len(segs) || *g.End < segs[i+1].From-1) {
+		if g.End != nil && *g.End < MaxDate && (i+1 == len(segs) || *g.End < segs[i+1].From-1) {
 			g.End = Ptr(*g.End)
 		} else {
 			g.End = nil
@@ -120,7 +121,7 @@ func (s Schedule) Overlay(o Schedule) Schedule {
 	for _, sc := range []Schedule{s, o} {
 		for _, g := range sc.segs {
 			pts = append(pts, g.From)
-			if g.End != nil {
+			if g.End != nil && *g.End < MaxDate {
 				pts = append(pts, *g.End+1)
 			}
 		}
@@ -176,7 +177,7 @@ func (s Schedule) Compound(from, to Date) float64 {
 	for cur := from; cur < to; {
 		i, covered := s.find(cur)
 		end := to
-		if covered && s.segs[i].End != nil {
+		if covered && s.segs[i].End != nil && *s.segs[i].End < MaxDate {
 			end = min(end, *s.segs[i].End+1)
 		}
 		if next := sort.Search(len(s.segs), func(j int) bool { return s.segs[j].From > cur }); next < len(s.segs) {
