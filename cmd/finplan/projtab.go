@@ -275,8 +275,15 @@ func (t *projTab) field(id, hint, value string, width float32) (string, bool) {
 		t.dropBuf(id)
 	}
 	if e := t.errs[id]; e != "" {
-		imgui.SameLine()
-		imgui.TextColored(rgba(colError, 1), "Not changed: "+e)
+		if width < 0 {
+			// A field that fills a table cell has no room beside it, so the message goes below, wrapped to the cell.
+			imgui.PushTextWrapPos()
+			imgui.TextColored(rgba(colError, 1), "Not changed: "+e)
+			imgui.PopTextWrapPos()
+		} else {
+			imgui.SameLine()
+			imgui.TextColored(rgba(colError, 1), "Not changed: "+e)
+		}
 	}
 	return text, done
 }
