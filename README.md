@@ -1,8 +1,8 @@
 # finplan
 
-finplan is a personal financial planner for one user. It is a Linux desktop app written in Go, drawing its UI with Dear ImGui and ImPlot (via cimgui-go) on SDL3, as a native Wayland client. For now it shows an interactive plot of invented balance data.
+finplan is a personal financial planner for one user. It is a Linux desktop app written in Go, drawing its UI with Dear ImGui and ImPlot (via cimgui-go) on SDL3, as a native Wayland client. It shows a tabbed application shell with a working Graph tab over an invented family record; the other tabs are placeholders. The UI uses a dark theme and the bundled Inter font.
 
-The data model, projection engine and planned features are described in [docs/design.md](docs/design.md). The model and a placeholder engine exist as standalone Go packages, `internal/model` and `internal/engine`; the UI does not use them yet.
+The data model, projection engine and planned features are described in [docs/design.md](docs/design.md). The model and a placeholder engine exist as standalone Go packages, `internal/model` and `internal/engine` and the Graph tab draws from them.
 
 ## Prerequisites
 
@@ -25,4 +25,8 @@ Runs a gofmt check, `go vet` and `go test` in the container.
 
     bin/finplan
 
-Drag to pan, scroll to zoom, and click a legend entry to toggle a series.
+Drag to pan and scroll to zoom the plot. The toolbar has a Projection dropdown and range buttons (1Y, 5Y, 10Y, 30Y, All). In the line list, checkboxes toggle a line, "+ Add" adds one, and rows can be pinned to a projection, recoloured and removed. Click a line or row to select it, and hover over the plot for the crosshair and tooltip.
+
+## Fonts
+
+The Inter font is bundled under the SIL Open Font License; the licence text is in `cmd/finplan/fonts/OFL.txt`.
