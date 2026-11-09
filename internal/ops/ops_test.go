@@ -538,7 +538,9 @@ func TestModTargets(t *testing.T) {
 	if _, err := AddMod(st, rec, "Child", amountMod("early-401k-withdrawal", model.D(2027, 6, 1), 5000), Options{DryRun: true}); err != nil {
 		t.Errorf("parent's item: %v", err)
 	}
-	add("Child", 0, amountMod("nope", model.D(2030, 1, 1), 1), ErrUnknownTarget)
+	if _, err := InsertMod(st, rec, "Child", 0, amountMod("nope", model.D(2030, 1, 1), 1), Options{}); !errors.Is(err, ErrUnknownTarget) {
+		t.Errorf("unknown item under child: %v", err)
+	}
 	add(demodata.ProjNewJob, 0, amountMod("early-401k-withdrawal", model.D(2027, 6, 1), 5000), ErrUnknownTarget)
 	add(demodata.ProjNewJob, 0, model.Modification{Target: model.ObjectRef{Kind: model.KindAccount, ID: "nope"}, Property: model.PropGrowth, Values: model.Constant(0.01)}, ErrUnknownTarget)
 	add(demodata.ProjNewJob, 0, model.Modification{Target: model.ObjectRef{Kind: model.KindAsset, ID: "nope"}, Property: model.PropGrowth, Values: model.Constant(0.01)}, ErrUnknownTarget)
