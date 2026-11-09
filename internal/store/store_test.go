@@ -284,13 +284,30 @@ func TestMigrateFromVersion1(t *testing.T) {
 	}
 	db.Close()
 
-	// Write data through the version 1 schema, as an older build would have.
-	s1 := &Store{now: time.Now}
-	s1.db, _ = sql.Open("sqlite", path)
-	s1.db.SetMaxOpenConns(1)
+	// Populate the version 1 schema with SQL naming only the columns it had.
+	src, srcPath := openTemp(t)
 	want := demodata.Family()
-	mustSave(t, s1, want)
-	s1.Close()
+	mustSave(t, src, want)
+	src.Close()
+	db, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	for _, q := range []string{
+		`ATTACH DATABASE '` + srcPath + `' AS src`,
+		`INSERT INTO documents (kind, key, ordinal, format, body)
+			SELECT kind, key, ordinal, format, body FROM src.documents`,
+		`INSERT INTO entries (id, account, kind, date, amount, tx_kind, counter, memo, made_at)
+			SELECT id, account, kind, date, amount, tx_kind, counter, memo, made_at FROM src.entries`,
+		`INSERT INTO corrections (id, entry, date, amount, tx_kind, counter, memo, note, made_at)
+			SELECT id, entry, date, amount, tx_kind, counter, memo, note, made_at FROM src.corrections`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
 
 	s, err := Open(path)
 	if err != nil {
