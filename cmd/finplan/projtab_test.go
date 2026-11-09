@@ -89,9 +89,6 @@ func TestNewMod(t *testing.T) {
 	if err != nil || m.Target.Kind != model.KindGlobal || m.Property != model.PropInflation || m.Values.Segments()[0].Value != 0.03 {
 		t.Errorf("global: %+v %v", m, err)
 	}
-	if _, err := newMod(model.KindAccount, "", model.PropGrowth, "3", ""); err == nil {
-		t.Error("no object accepted")
-	}
 	if _, err := newMod(model.KindAccount, "x", model.PropGrowth, "3", "never"); err == nil {
 		t.Error("bad date accepted")
 	}

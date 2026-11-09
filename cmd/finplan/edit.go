@@ -6,77 +6,83 @@ package main
 import (
 	"errors"
 	"fmt"
-	"reflect"
+	"slices"
 
 	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/ops"
 )
-
-// renameOp is the rename of a projection, which also rewrites the graph lines and the saved presets that name it.
-type renameOp struct{ from, to string }
-
-func (r *renameOp) reverse() *renameOp {
-	if r == nil {
-		return nil
-	}
-	return &renameOp{r.to, r.from}
-}
-
-// errNoChange is returned by a change that left what it edits as it was; edit then saves nothing and keeps no step.
-var errNoChange = errors.New("no change")
 
 // editStep is what the history keeps of one edit: the projections before and after it, its rename if it had one, and
 // the Graph switcher before and after, which the edit moves when it deletes the projection the switcher names.
 // The lists are never changed once kept: edits change copies, and undo and redo install copies.
 type editStep struct {
 	before, after []*model.Projection
-	rename        *renameOp
+	rename        *ops.Rename
 	switchBefore  string
 	switchAfter   string
 }
 
-// edit is the one way an editor tab changes the record. It runs change on a copy of the editable documents and saves
-// the copy; only if that works does the copy replace the live record, the Graph tab see it and the history get a step
-// named label. If change or the save fails the live record stays as it was and the user is told why. A rename is the
-// projection rename change makes; it is carried out on the graph lines and saved presets as part of the edit. Record
-// entries (past history) are not edited this way. It reports whether the edit was made.
-func (a *app) edit(label string, rename *renameOp, change func(rec *model.Record) error) bool {
-	next := a.rec.EditableCopy()
+// edit is the one way an editor tab changes the record. do makes the edit through internal/ops against the live record,
+// which validates and saves it; only if that works does the new record replace the live one, the Graph tab see it and the
+// history get a step named label. If do fails the live record stays as it was and the user is told why; an edit that
+// changed nothing says nothing and sets a.unchanged. Record entries (past history) are not edited this way. It reports
+// whether the edit was made.
+func (a *app) edit(label string, do func() (*ops.Result, error)) bool {
 	a.unchanged = false
-	if err := change(next); err != nil {
-		if errors.Is(err, errNoChange) {
+	res, err := do()
+	if err != nil {
+		if errors.Is(err, ops.ErrNoChange) {
 			a.unchanged = true
-			return false
+		} else {
+			a.notifyFailed(label, err)
 		}
-		a.notify(fmt.Sprintf("Could not %s: %v", label, err))
 		return false
 	}
 	before, switchBefore := a.rec.Projections, a.graph.lines.Switcher()
-	if !a.install(label, next, rename) {
-		return false
-	}
-	a.history.Push(label, editStep{before, next.Projections, rename, switchBefore, a.graph.lines.Switcher()})
+	a.install(res)
+	a.history.Push(label, editStep{before, res.Record.Projections, res.Rename, switchBefore, a.graph.lines.Switcher()})
 	return true
 }
 
-// install saves next and, if that works, makes it the live record and brings the graph up to date.
-func (a *app) install(label string, next *model.Record, rename *renameOp) bool {
-	if err := a.st.Save(next); err != nil {
-		a.notify(fmt.Sprintf("Could not save the change (%s): %v\nNothing was changed.", label, err))
+// notifyFailed tells the user why the edit or step called label failed.
+func (a *app) notifyFailed(label string, err error) {
+	var se *ops.SaveError
+	if errors.As(err, &se) {
+		a.notify(fmt.Sprintf("Could not save the change (%s): %v\nNothing was changed.", label, se.Err))
+		return
+	}
+	a.notify(fmt.Sprintf("Could not %s: %v", label, err))
+}
+
+// install makes the record of a saved result the live one and brings the graph up to date.
+func (a *app) install(res *ops.Result) {
+	a.rec = res.Record
+	if r := res.Rename; r != nil {
+		a.graph.renameProjection(r.From, r.To, res.Rewritten)
+	}
+	for _, w := range res.Warnings {
+		a.notify(fmt.Sprintf("Could not save %v", w))
+	}
+	a.graph.setRecord(res.Record)
+}
+
+// restore saves the projections ps (with the rename the step they undo or redo made) through the same ops as an edit
+// and installs the result. It reports whether that worked.
+func (a *app) restore(label string, ps []*model.Projection, rename *ops.Rename) bool {
+	res, err := ops.RestoreProjections(a.st, a.rec, ps, rename, ops.Options{})
+	if err != nil {
+		a.notifyFailed(label, err)
 		return false
 	}
-	a.rec = next
-	if rename != nil {
-		a.graph.renameProjection(rename.from, rename.to)
-	}
-	a.graph.setRecord(next)
+	a.install(res)
 	return true
 }
 
 // undo reverts the latest step through the same save as an edit; if that fails the history stays where it is.
 func (a *app) undo() {
 	s, ok := a.history.PeekUndo()
-	if ok && a.install("undo "+s.Label, a.rec.WithProjections(s.Data.before), s.Data.rename.reverse()) {
+	if ok && a.restore("undo "+s.Label, s.Data.before, s.Data.rename.Reverse()) {
 		if s.Data.rename == nil && s.Data.switchBefore != s.Data.switchAfter {
 			a.graph.lines.SetSwitcher(s.Data.switchBefore)
 		}
@@ -87,31 +93,12 @@ func (a *app) undo() {
 // redo repeats the latest undone step; if the save fails the history stays where it is.
 func (a *app) redo() {
 	s, ok := a.history.PeekRedo()
-	if ok && a.install("redo "+s.Label, a.rec.WithProjections(s.Data.after), s.Data.rename) {
+	if ok && a.restore("redo "+s.Label, s.Data.after, s.Data.rename) {
 		if s.Data.rename == nil && s.Data.switchBefore != s.Data.switchAfter {
 			a.graph.lines.SetSwitcher(s.Data.switchAfter)
 		}
 		a.history.Redo()
 	}
-}
-
-// editProjection is edit for a change to one projection that is not a rename. A change that leaves the projection as it
-// was makes no edit.
-func (a *app) editProjection(name, label string, change func(p *model.Projection) error) bool {
-	return a.edit(label, nil, func(rec *model.Record) error {
-		p := rec.Projection(name)
-		if p == nil {
-			return fmt.Errorf("projection %q does not exist", name)
-		}
-		was := p.Clone()
-		if err := change(p); err != nil {
-			return err
-		}
-		if reflect.DeepEqual(was, p) {
-			return errNoChange
-		}
-		return nil
-	})
 }
 
 // setRecord switches the Graph tab to a record that differs from the current one in its editable documents, keeping
@@ -123,11 +110,11 @@ func (g *graphTab) setRecord(rec *model.Record) {
 	}
 }
 
-// renameProjection renames the projection on the graph lines and in the saved presets.
-func (g *graphTab) renameProjection(from, to string) {
+// renameProjection renames the projection on the graph lines and in the loaded presets that ops rewrote in the store.
+func (g *graphTab) renameProjection(from, to string, rewritten []string) {
 	g.lines.RenameProjection(from, to)
 	for i, p := range g.presets {
-		if np, changed := p.RenameProjection(from, to); changed && g.persist(np) {
+		if np, changed := p.RenameProjection(from, to); changed && slices.Contains(rewritten, p.Name) {
 			g.presets[i] = np
 		}
 	}

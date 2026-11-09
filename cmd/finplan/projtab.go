@@ -15,6 +15,7 @@ import (
 
 	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/ops"
 )
 
 const (
@@ -26,7 +27,7 @@ const (
 )
 
 // projTab is the Projections tab: the projection list on the left, the selected projection's header and
-// modifications on the right. Every change goes through app.edit.
+// modifications on the right. Every change goes through app.edit, which makes it with internal/ops.
 type projTab struct {
 	a *app
 
@@ -186,8 +187,8 @@ func (t *projTab) selectProjection(name string) {
 
 func (t *projTab) newProjection() {
 	name, parent := t.a.rec.UniqueProjectionName("New projection"), t.sel
-	if t.a.edit("add projection", nil, func(rec *model.Record) error {
-		return rec.AddProjection(&model.Projection{Name: name, Parent: parent})
+	if t.a.edit("add projection", func() (*ops.Result, error) {
+		return ops.NewProjection(t.a.st, t.a.rec, name, parent, ops.Options{})
 	}) {
 		t.selectProjection(name)
 	}
@@ -196,18 +197,17 @@ func (t *projTab) newProjection() {
 func (t *projTab) cloneProjection() {
 	from := t.sel
 	name := t.a.rec.UniqueProjectionName(from + " copy")
-	if t.a.edit("clone projection", nil, func(rec *model.Record) error {
-		_, err := rec.CloneProjection(from, name)
-		return err
+	if t.a.edit("clone projection", func() (*ops.Result, error) {
+		return ops.CloneProjection(t.a.st, t.a.rec, from, name, ops.Options{})
 	}) {
 		t.selectProjection(name)
 	}
 }
 
-// requestDelete asks for confirmation, or says why the projection cannot be deleted.
+// requestDelete asks for confirmation, or says why the projection cannot be deleted. A dry run of the delete finds out.
 func (t *projTab) requestDelete() {
-	if kids := t.a.rec.Children(t.sel); len(kids) > 0 {
-		t.a.notify(fmt.Sprintf("%q cannot be deleted while %q builds on it. Delete it or change what it builds on first.", t.sel, kids[0].Name))
+	if _, err := ops.DeleteProjection(t.a.st, t.a.rec, t.sel, ops.Options{DryRun: true}); errors.Is(err, ops.ErrHasChildren) {
+		t.a.notify(fmt.Sprintf("%q cannot be deleted while %q builds on it. Delete it or change what it builds on first.", t.sel, t.a.rec.Children(t.sel)[0].Name))
 		return
 	}
 	t.deleting, t.openDelete = t.sel, true
@@ -228,7 +228,9 @@ func (t *projTab) deletePopup() {
 		name := t.deleting
 		if p := t.a.rec.Projection(name); p != nil {
 			parent := p.Parent
-			if t.a.edit("delete projection", nil, func(rec *model.Record) error { return rec.RemoveProjection(name) }) {
+			if t.a.edit("delete projection", func() (*ops.Result, error) {
+				return ops.DeleteProjection(t.a.st, t.a.rec, name, ops.Options{})
+			}) {
 				t.selectProjection(parent)
 			}
 		}
@@ -356,7 +358,9 @@ func (t *projTab) header(p *model.Projection) {
 	if imgui.BeginComboV("##override", overrideText(p.OverrideHistory), 0) {
 		for _, v := range []*bool{nil, model.Ptr(true), model.Ptr(false)} {
 			if imgui.SelectableBoolV(overrideText(v), false, 0, imgui.NewVec2(0, 0)) {
-				t.a.editProjection(p.Name, "set override history", func(p *model.Projection) error { p.OverrideHistory = v; return nil })
+				t.a.edit("set override history", func() (*ops.Result, error) {
+					return ops.SetOverrideHistory(t.a.st, t.a.rec, p.Name, v, ops.Options{})
+				})
 			}
 		}
 		imgui.EndCombo()
@@ -380,7 +384,7 @@ func (t *projTab) setStart(proj, text string) {
 		}
 		d = &v
 	}
-	t.a.editProjection(proj, "set start date", func(p *model.Projection) error { p.Start = d; return nil })
+	t.a.edit("set start date", func() (*ops.Result, error) { return ops.SetStart(t.a.st, t.a.rec, proj, d, ops.Options{}) })
 }
 
 func orNone(name string) string {
@@ -416,27 +420,32 @@ func descendants(rec *model.Record, name string) map[string]bool {
 
 func (t *projTab) rename(to string) {
 	from := t.sel
+	_, err := ops.RenameProjection(t.a.st, t.a.rec, from, to, ops.Options{DryRun: true})
 	switch {
-	case to == from:
+	case errors.Is(err, ops.ErrNoChange):
 		t.dropBuf("name")
-	case to == "":
+	case errors.Is(err, ops.ErrEmptyName):
 		t.setErr("name", "A projection needs a name.")
-	case t.a.rec.Projection(to) != nil:
+	case errors.Is(err, ops.ErrNameTaken):
 		t.setErr("name", fmt.Sprintf("There is already a projection named %q.", to))
 	default:
-		if t.a.edit("rename projection", &renameOp{from, to}, func(rec *model.Record) error { return rec.RenameProjection(from, to) }) {
-			t.sel = to
+		if t.a.edit("rename projection", func() (*ops.Result, error) {
+			return ops.RenameProjection(t.a.st, t.a.rec, from, to, ops.Options{})
+		}) {
+			t.sel = strings.TrimSpace(to)
 		}
 	}
 }
 
 func (t *projTab) setParent(name, parent string) {
-	err := t.a.rec.EditableCopy().SetParent(name, parent)
+	_, err := ops.SetParent(t.a.st, t.a.rec, name, parent, ops.Options{DryRun: true})
 	if errors.Is(err, model.ErrCycle) {
 		t.setErr("", fmt.Sprintf("%q cannot build on %q: that would make a cycle.", name, parent))
 		return
 	}
-	t.a.edit("change parent", nil, func(rec *model.Record) error { return rec.SetParent(name, parent) })
+	t.a.edit("change parent", func() (*ops.Result, error) {
+		return ops.SetParent(t.a.st, t.a.rec, name, parent, ops.Options{})
+	})
 }
 
 // inflation draws the projection's inflation: a percentage when it has one constant inflation modification or none,
@@ -469,19 +478,11 @@ func (t *projTab) setInflation(proj, text string) {
 			return
 		}
 	}
-	t.a.editProjection(proj, "set inflation", func(p *model.Projection) error {
-		idx := slices.IndexFunc(p.Mods, isInflation)
-		switch {
-		case text == "" && idx >= 0:
-			return p.RemoveMod(idx)
-		case text == "":
-		case idx >= 0:
-			p.Mods[idx].Values = model.Constant(v)
-		default:
-			p.Mods = append(p.Mods, model.Modification{Target: model.ObjectRef{Kind: model.KindGlobal}, Property: model.PropInflation, Values: model.Constant(v)})
-		}
-		return nil
-	})
+	var val *float64
+	if text != "" {
+		val = &v
+	}
+	t.a.edit("set inflation", func() (*ops.Result, error) { return ops.SetInflation(t.a.st, t.a.rec, proj, val, ops.Options{}) })
 }
 
 func isInflation(m model.Modification) bool {
@@ -566,7 +567,9 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 	if imgui.BeginDragDropTarget() {
 		if pl := imgui.AcceptDragDropPayload(dragMod); pl != nil && pl.CData != nil && t.dragFrom != i {
 			from := t.dragFrom
-			t.a.editProjection(p.Name, "reorder modifications", func(p *model.Projection) error { return p.MoveMod(from, i) })
+			t.a.edit("reorder modifications", func() (*ops.Result, error) {
+				return ops.MoveMod(t.a.st, t.a.rec, p.Name, from, i, ops.Options{})
+			})
 		}
 		imgui.EndDragDropTarget()
 	}
@@ -624,7 +627,9 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 
 	imgui.TableSetColumnIndex(5)
 	if imgui.SmallButton("x") {
-		t.a.editProjection(p.Name, "remove modification", func(p *model.Projection) error { return p.RemoveMod(i) })
+		t.a.edit("remove modification", func() (*ops.Result, error) {
+			return ops.RemoveMod(t.a.st, t.a.rec, p.Name, i, ops.Options{})
+		})
 	}
 	if imgui.IsItemHovered() {
 		imgui.SetTooltip("Remove this modification")
@@ -641,10 +646,9 @@ func (t *projTab) setModStart(proj string, i int, text string) {
 		}
 		from = &d
 	}
-	t.a.editProjection(proj, "change modification", func(p *model.Projection) error {
-		v, _, _ := constantOf(p.Mods[i].Values)
-		p.Mods[i].Values = scheduleFrom(v, from)
-		return nil
+	v, _, _ := constantOf(t.a.rec.Projection(proj).Mods[i].Values)
+	t.a.edit("change modification", func() (*ops.Result, error) {
+		return ops.SetModValues(t.a.st, t.a.rec, proj, i, scheduleFrom(v, from), ops.Options{})
 	})
 }
 
@@ -655,10 +659,9 @@ func (t *projTab) setModValue(proj string, i int, text string) {
 		t.setErr("value"+strconv.Itoa(i), err.Error())
 		return
 	}
-	t.a.editProjection(proj, "change modification", func(p *model.Projection) error {
-		_, from, _ := constantOf(p.Mods[i].Values)
-		p.Mods[i].Values = scheduleFrom(v, from)
-		return nil
+	_, from, _ := constantOf(t.a.rec.Projection(proj).Mods[i].Values)
+	t.a.edit("change modification", func() (*ops.Result, error) {
+		return ops.SetModValues(t.a.st, t.a.rec, proj, i, scheduleFrom(v, from), ops.Options{})
 	})
 }
 
@@ -811,18 +814,19 @@ func (t *projTab) addMod(proj string) {
 		t.addErr = err.Error()
 		return
 	}
-	if t.a.editProjection(proj, "add modification", func(p *model.Projection) error { p.Mods = append(p.Mods, m); return nil }) {
+	if _, err := ops.AddMod(t.a.st, t.a.rec, proj, m, ops.Options{DryRun: true}); errors.Is(err, ops.ErrNoObject) {
+		t.addErr = "pick an object"
+		return
+	}
+	if t.a.edit("add modification", func() (*ops.Result, error) { return ops.AddMod(t.a.st, t.a.rec, proj, m, ops.Options{}) }) {
 		t.addValue, t.addStart, t.addErr = "", "", ""
 	}
 }
 
 // ---- Parsing and formatting.
 
-// newMod builds the modification the Add form describes: the value from the optional start date on.
+// newMod builds the modification the Add form describes: the value from the optional start date on. ops validates it.
 func newMod(kind model.ObjectKind, obj, prop, value, start string) (model.Modification, error) {
-	if kind != model.KindGlobal && obj == "" {
-		return model.Modification{}, errors.New("pick an object")
-	}
 	v, err := parseValue(prop, strings.TrimSpace(value))
 	if err != nil {
 		return model.Modification{}, err

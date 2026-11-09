@@ -11,6 +11,7 @@ import (
 	"github.com/joeriedel/finplan/internal/demodata"
 	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/ops"
 )
 
 func demoApp(t *testing.T) *app {
@@ -28,7 +29,7 @@ func demoApp(t *testing.T) *app {
 }
 
 func setStart(a *app, proj string, d *model.Date) bool {
-	return a.editProjection(proj, "set start date", func(p *model.Projection) error { p.Start = d; return nil })
+	return a.edit("set start date", func() (*ops.Result, error) { return ops.SetStart(a.st, a.rec, proj, d, ops.Options{}) })
 }
 
 func TestEditSavesSwapsAndPushesOneStep(t *testing.T) {
@@ -122,7 +123,7 @@ func TestFailedSaveChangesNothing(t *testing.T) {
 func TestEditRefusedByChange(t *testing.T) {
 	a := demoApp(t)
 	old := a.rec
-	if a.edit("break it", nil, func(*model.Record) error { return errors.New("no") }) {
+	if a.edit("break it", func() (*ops.Result, error) { return nil, errors.New("no") }) {
 		t.Error("a refused change was accepted")
 	}
 	if a.rec != old || a.history.CanUndo() || len(a.notices) != 1 {
@@ -174,8 +175,8 @@ func TestRenameRewritesLinesPresetsAndUndoes(t *testing.T) {
 	}
 	name := g.presets[idx].Name
 
-	ok := a.edit("rename projection", &renameOp{demodata.ProjBase, to}, func(rec *model.Record) error {
-		return rec.RenameProjection(demodata.ProjBase, to)
+	ok := a.edit("rename projection", func() (*ops.Result, error) {
+		return ops.RenameProjection(a.st, a.rec, demodata.ProjBase, to, ops.Options{})
 	})
 	if !ok {
 		t.Fatal(a.notices)
@@ -227,8 +228,10 @@ func TestDeleteRefusedWhileOthersBuildOnIt(t *testing.T) {
 	if len(a.notices) != 1 || a.proj.openDelete {
 		t.Errorf("delete of a parent: notices %v", a.notices)
 	}
-	if a.edit("delete projection", nil, func(rec *model.Record) error { return rec.RemoveProjection(demodata.ProjBase) }) {
-		t.Error("model removed a projection with children")
+	if a.edit("delete projection", func() (*ops.Result, error) {
+		return ops.DeleteProjection(a.st, a.rec, demodata.ProjBase, ops.Options{})
+	}) {
+		t.Error("ops removed a projection with children")
 	}
 }
 
@@ -313,7 +316,9 @@ func TestModificationEditing(t *testing.T) {
 	}
 
 	first := a.rec.Projection(demodata.ProjNewJob).Mods[0]
-	a.editProjection(demodata.ProjNewJob, "reorder modifications", func(p *model.Projection) error { return p.MoveMod(0, n) })
+	a.edit("reorder modifications", func() (*ops.Result, error) {
+		return ops.MoveMod(a.st, a.rec, demodata.ProjNewJob, 0, n, ops.Options{})
+	})
 	if !reflect.DeepEqual(a.rec.Projection(demodata.ProjNewJob).Mods[n], first) {
 		t.Error("move failed")
 	}
