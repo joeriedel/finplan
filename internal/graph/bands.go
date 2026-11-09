@@ -5,6 +5,7 @@ package graph
 
 import (
 	"math"
+	"sort"
 
 	"github.com/joeriedel/finplan/internal/model"
 )
@@ -197,41 +198,124 @@ func clipGE(g0, g1, lo, hi float64) (float64, float64) {
 
 // HatchStripes returns the 45 degree stripes (running up to the right, one every spacing pixels along each axis)
 // that lie between two pixel polylines sampled at the same x positions. Stripes are aligned to a fixed grid, so
-// they stay put as the band's edges change. Only the parts inside the rectangle from lo to hi are returned, so
-// the work is bounded by the rectangle however far the band extends beyond it.
+// they stay put as the band's edges change. Only the parts inside the rectangle from lo to hi are returned, and
+// only the samples that can reach it are read. A stripe's pieces in neighbouring strips are joined, so the result
+// has one segment per stripe and contiguous run inside the band, however many samples the edges have.
 func HatchStripes(a, b []Pt, spacing float32, lo, hi Pt) []Seg {
+	segs, _ := hatchStripes(a, b, spacing, lo, hi)
+	return segs
+}
+
+// hatchStripes is HatchStripes, also returning a count of the loop iterations it ran, for tests of its cost.
+//
+// The sweep goes strip by strip. A stripe can only enter or leave the band where its line x + y = c meets an
+// edge, and within a strip that is only for c between the edge's values of x + y at the strip's two ends. Only
+// those stripes are examined; every other stripe keeps the state it had, so a stripe running through many strips
+// costs nothing until it ends. The work is the visible strips, plus the stripes, plus how far the edges move
+// across the stripes inside the rectangle.
+func hatchStripes(a, b []Pt, spacing float32, lo, hi Pt) ([]Seg, int) {
 	if !(spacing > 0) {
-		return nil
+		return nil, 0
 	}
 	sp := float64(spacing)
-	var out []Seg
 	minX, maxX, minY, maxY := float64(lo.X), float64(hi.X), float64(lo.Y), float64(hi.Y)
-	for _, s := range bandStrips(a, b) {
-		if s.x1 < minX || s.x0 > maxX {
-			continue
-		}
-		// A stripe is x + y = c; its y is c - x. Within the strip's visible x span, only c in
-		// [vx0+minY, vx1+maxY] can reach the rectangle.
-		vx0, vx1 := math.Max(s.x0, minX), math.Min(s.x1, maxX)
-		cLo := math.Max(math.Min(s.x0+s.t0, s.x1+s.t1), vx0+minY)
-		cHi := math.Min(math.Max(s.x0+s.b0, s.x1+s.b1), vx1+maxY)
-		for c := math.Ceil(cLo/sp) * sp; c <= cHi; c += sp {
-			dx := s.x1 - s.x0
-			tLo, tHi := clipGE(c-s.x0-s.t0, c-s.x1-s.t1, 0, 1)
-			if tLo > tHi {
-				continue
-			}
-			tLo, tHi = clipGE(s.b0-(c-s.x0), s.b1-(c-s.x1), tLo, tHi)
-			if tLo > tHi {
-				continue
-			}
-			xa, xb := s.x0+dx*tLo, s.x0+dx*tHi
-			xa, xb = math.Max(xa, math.Max(minX, c-maxY)), math.Min(xb, math.Min(maxX, c-minY))
-			if xb-xa < 1e-4 {
-				continue
-			}
+	base := int(math.Ceil((minX + minY) / sp))
+	n := int(math.Floor((maxX+maxY)/sp)) - base + 1
+	if n <= 0 {
+		return nil, 0
+	}
+	// The samples from the last one left of the rectangle to the first one right of it.
+	m := min(len(a), len(b))
+	i0 := sort.Search(m, func(i int) bool { return float64(a[i].X) >= minX })
+	i0 = max(i0-1, 0)
+	i1 := min(sort.Search(m, func(i int) bool { return float64(a[i].X) > maxX })+1, m)
+	if i1-i0 < 2 {
+		return nil, 0
+	}
+	strips := bandStrips(a[i0:i1], b[i0:i1])
+	if len(strips) == 0 {
+		return nil, 0
+	}
+	work := len(strips) + 2*n
+
+	// open[k] says stripe base+k is inside the band, and from[k] is where its current run began.
+	open := make([]bool, n)
+	from := make([]float64, n)
+	var out []Seg
+	emit := func(k int, xa, xb float64) {
+		c := float64(base+k) * sp
+		xa, xb = math.Max(xa, math.Max(minX, c-maxY)), math.Min(xb, math.Min(maxX, c-minY))
+		if xb-xa >= 1e-4 {
 			out = append(out, Seg{Pt{float32(xa), float32(c - xa)}, Pt{float32(xb), float32(c - xb)}})
 		}
 	}
-	return out
+	// span is the stripes with c in [cLo, cHi], clamped to the rectangle's stripes.
+	span := func(cLo, cHi float64) (int, int) {
+		return max(int(math.Ceil((cLo-1e-6)/sp))-base, 0), min(int(math.Floor((cHi+1e-6)/sp))-base, n-1)
+	}
+	visit := func(s bandStrip, k int) {
+		c := float64(base+k) * sp
+		tLo, tHi := clipGE(c-s.x0-s.t0, c-s.x1-s.t1, 0, 1)
+		if tLo <= tHi {
+			tLo, tHi = clipGE(s.b0-(c-s.x0), s.b1-(c-s.x1), tLo, tHi)
+		}
+		if tLo > tHi {
+			if open[k] {
+				emit(k, from[k], s.x0)
+				open[k] = false
+			}
+			return
+		}
+		dx := s.x1 - s.x0
+		xa, xb := s.x0+dx*tLo, s.x0+dx*tHi
+		if open[k] && xa > s.x0+1e-3 {
+			emit(k, from[k], s.x0)
+			open[k] = false
+		}
+		if !open[k] {
+			open[k], from[k] = true, xa
+		}
+		// The stripe stays open past the strip if it is still between the edges at x1, to within the slack that
+		// span uses, so that the next strip's span is certain to visit it.
+		if c < s.x1+s.t1-1e-6 || c > s.x1+s.b1+1e-6 {
+			emit(k, from[k], xb)
+			open[k] = false
+		}
+	}
+	for i, s := range strips {
+		if i == 0 {
+			for k := range n {
+				visit(s, k)
+			}
+			continue
+		}
+		t0, t1 := span(math.Min(s.x0+s.t0, s.x1+s.t1), math.Max(s.x0+s.t0, s.x1+s.t1))
+		b0, b1 := span(math.Min(s.x0+s.b0, s.x1+s.b1), math.Max(s.x0+s.b0, s.x1+s.b1))
+		switch {
+		case t0 > t1:
+			t0, t1, b0, b1 = b0, b1, 1, 0
+		case b0 > b1:
+			b0, b1 = 1, 0
+		case b0 < t0:
+			t0, t1, b0, b1 = b0, b1, t0, t1
+		}
+		if t0 <= t1 && b0 <= t1+1 {
+			t1, b0, b1 = max(t1, b1), 1, 0
+		}
+		for k := t0; k <= t1; k++ {
+			visit(s, k)
+			work++
+		}
+		for k := b0; k <= b1; k++ {
+			visit(s, k)
+			work++
+		}
+	}
+	end := strips[len(strips)-1].x1
+	for k := range n {
+		if open[k] {
+			emit(k, from[k], end)
+		}
+	}
+	return out, work
 }

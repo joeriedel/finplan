@@ -52,8 +52,9 @@ func segmentClass(s engine.Status) int {
 	return faded // partly projected, or default balances only
 }
 
-// drawPolyline strokes a polyline in the style of its status class.
-func drawPolyline(dl *imgui.DrawList, pts []graph.Pt, class int, c graph.Color, width float32) {
+// drawPolyline strokes a polyline in the style of its status class. Dashes are only made within the plot
+// rectangle from lo to hi, so a line running far off it costs no more than one that does not.
+func drawPolyline(dl *imgui.DrawList, pts []graph.Pt, class int, c graph.Color, width float32, lo, hi graph.Pt) {
 	if len(pts) < 2 {
 		return
 	}
@@ -64,14 +65,15 @@ func drawPolyline(dl *imgui.DrawList, pts []graph.Pt, class int, c graph.Color, 
 		dl.AddPolyline(vecs(pts), int32(len(pts)), u32(lineColor(c, 0.45)), width)
 	default:
 		col := u32(lineColor(c, 0.9))
-		for _, s := range graph.Dash(pts, dashLen*uiScale, dashGap*uiScale) {
+		lo, hi = graph.Pt{X: lo.X - width, Y: lo.Y - width}, graph.Pt{X: hi.X + width, Y: hi.Y + width}
+		for _, s := range graph.DashClipped(pts, dashLen*uiScale, dashGap*uiScale, lo, hi) {
 			dl.AddLineArgs(vec(s.A), vec(s.B), col, width)
 		}
 	}
 }
 
-// drawLine strokes a whole line, with a halo and extra weight when selected.
-func drawLine(dl *imgui.DrawList, v lineView, pts []graph.Pt, selected bool) {
+// drawLine strokes a whole line, with a halo and extra weight when selected. The plot rectangle runs from lo to hi.
+func drawLine(dl *imgui.DrawList, v lineView, pts []graph.Pt, selected bool, lo, hi graph.Pt) {
 	width := lineWidth * uiScale
 	if selected {
 		width = selectedWidth * uiScale
@@ -83,7 +85,7 @@ func drawLine(dl *imgui.DrawList, v lineView, pts []graph.Pt, selected bool) {
 		for j < len(v.samples)-1 && segmentClass(v.samples[j].Status) == class {
 			j++
 		}
-		drawPolyline(dl, pts[i:j+1], class, v.line.Color, width)
+		drawPolyline(dl, pts[i:j+1], class, v.line.Color, width, lo, hi)
 		i = j
 	}
 }
@@ -138,7 +140,7 @@ func (g *graphTab) drawPlot(views []lineView) {
 	for pass := 0; pass < 2; pass++ {
 		for i, v := range views {
 			if (hasSel && v.line.ID == selID) == (pass == 1) && len(polys[i]) > 1 {
-				drawLine(dl, v, polys[i], pass == 1)
+				drawLine(dl, v, polys[i], pass == 1, graph.Pt{X: left, Y: top}, graph.Pt{X: right, Y: bottom})
 			}
 		}
 	}
