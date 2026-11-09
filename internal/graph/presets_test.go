@@ -99,7 +99,8 @@ func TestPresetRestoreSwitcher(t *testing.T) {
 }
 
 func TestPresetRestoreSkipsMissing(t *testing.T) {
-	p := Preset{Switcher: "Base",
+	p := Preset{
+		Switcher: "Base",
 		Lines: []PresetLine{
 			{Asset: "cash", Visible: true},
 			{Asset: "gone", Visible: true},
