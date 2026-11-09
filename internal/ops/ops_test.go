@@ -17,8 +17,7 @@ import (
 
 const presetName = "Base view"
 
-// seed returns a store holding the Family record and a view preset that pins a line under demodata.ProjBase, and the
-// record loaded from it.
+// seed returns a store holding the Family record and a view preset that pins a line under demodata.ProjBase, and the record loaded from it.
 func seed(t *testing.T) (*store.Store, *model.Record) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "ops.db"))
@@ -87,8 +86,7 @@ func snapshot(rec *model.Record) []*model.Projection {
 	return rec.WithProjections(rec.Projections).Projections
 }
 
-// dryRunMatches calls op as a dry run, checks that it saved nothing, then as a real run, and checks that the two
-// results agree and the real one was saved.
+// dryRunMatches calls op as a dry run, checks that it saved nothing, then as a real run, and checks that the two results agree and the real one was saved.
 func dryRunMatches(t *testing.T, op func(st *store.Store, rec *model.Record, o Options) (*Result, error)) {
 	t.Helper()
 	st, rec := seed(t)

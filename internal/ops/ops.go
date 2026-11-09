@@ -1,13 +1,9 @@
 // Copyright (c) 2026 Joseph Riedel
 // SPDX-License-Identifier: MIT
 
-// Package ops holds the edits of a record's projections. Every editor, whether the GUI or the command line, makes its
-// edit through these functions, so an edit is validated, applied and saved the same way whoever makes it.
+// Package ops holds the edits of a record's projections. Every editor, whether the GUI or the command line, makes its edit through these functions, so an edit is validated, applied and saved the same way whoever makes it.
 //
-// An operation takes the loaded record and the store it came from. It validates its input, applies the change to a copy
-// of the record's editable documents and saves the copy in one transaction. The record passed in is never changed; the
-// result carries the new one. If the operation fails, nothing was saved. With Options.DryRun the operation does all of
-// that except the saving.
+// An operation takes the loaded record and the store it came from. It validates its input, applies the change to a copy of the record's editable documents and saves the copy in one transaction. The record passed in is never changed; the result carries the new one. If the operation fails, nothing was saved. With Options.DryRun the operation does all of that except the saving.
 package ops
 
 import (
@@ -62,8 +58,7 @@ func (e *SaveError) Unwrap() error { return e.Err }
 
 // Options changes how an operation runs.
 type Options struct {
-	// DryRun validates and applies the edit to a copy and returns the result, but saves nothing: neither the record nor
-	// any preset.
+	// DryRun validates and applies the edit to a copy and returns the result, but saves nothing: neither the record nor any preset.
 	DryRun bool
 }
 
@@ -108,8 +103,7 @@ type Result struct {
 	Warnings []PresetWarning
 }
 
-// edit runs change on a copy of the editable documents of rec and commits the copy. It refuses a change that leaves the
-// projections as they were.
+// edit runs change on a copy of the editable documents of rec and commits the copy. It refuses a change that leaves the projections as they were.
 func edit(st *store.Store, rec *model.Record, o Options, change func(next *model.Record) (Result, error)) (*Result, error) {
 	next := rec.EditableCopy()
 	res, err := change(next)
@@ -154,8 +148,7 @@ func commit(st *store.Store, next *model.Record, res Result, o Options) (*Result
 	return &res, nil
 }
 
-// renamePresets rewrites each stored preset that names the renamed projection. A preset that cannot be decoded is
-// skipped, as the editors skip it when they load presets.
+// renamePresets rewrites each stored preset that names the renamed projection. A preset that cannot be decoded is skipped, as the editors skip it when they load presets.
 func renamePresets(st *store.Store, res *Result, o Options) {
 	rows, err := st.Presets()
 	if err != nil {

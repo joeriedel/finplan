@@ -23,11 +23,7 @@ type editStep struct {
 	switchAfter   string
 }
 
-// edit is the one way an editor tab changes the record. do makes the edit through internal/ops against the live record,
-// which validates and saves it; only if that works does the new record replace the live one, the Graph tab see it and the
-// history get a step named label. If do fails the live record stays as it was and the user is told why; an edit that
-// changed nothing says nothing and sets a.unchanged. Record entries (past history) are not edited this way. It reports
-// whether the edit was made.
+// edit is the one way an editor tab changes the record. do makes the edit through internal/ops against the live record, which validates and saves it; only if that works does the new record replace the live one, the Graph tab see it and the history get a step named label. If do fails the live record stays as it was and the user is told why; an edit that changed nothing says nothing and sets a.unchanged. Record entries (past history) are not edited this way. It reports whether the edit was made.
 func (a *app) edit(label string, do func() (*ops.Result, error)) bool {
 	a.unchanged = false
 	res, err := do()
@@ -67,8 +63,7 @@ func (a *app) install(res *ops.Result) {
 	a.graph.setRecord(res.Record)
 }
 
-// restore saves the projections ps (with the rename the step they undo or redo made) through the same ops as an edit
-// and installs the result. It reports whether that worked.
+// restore saves the projections ps (with the rename the step they undo or redo made) through the same ops as an edit and installs the result. It reports whether that worked.
 func (a *app) restore(label string, ps []*model.Projection, rename *ops.Rename) bool {
 	res, err := ops.RestoreProjections(a.st, a.rec, ps, rename, ops.Options{})
 	if err != nil {

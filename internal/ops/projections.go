@@ -59,9 +59,7 @@ func CloneProjection(st *store.Store, rec *model.Record, from, as string, o Opti
 	})
 }
 
-// RenameProjection renames the projection, points the projections that build on it at the new name and rewrites the
-// saved view presets that name it. A preset that cannot be rewritten is a warning in the result; the rename is saved
-// regardless. Renaming to the name it has is ErrNoChange.
+// RenameProjection renames the projection, points the projections that build on it at the new name and rewrites the saved view presets that name it. A preset that cannot be rewritten is a warning in the result; the rename is saved regardless. Renaming to the name it has is ErrNoChange.
 func RenameProjection(st *store.Store, rec *model.Record, from, to string, o Options) (*Result, error) {
 	return edit(st, rec, o, func(next *model.Record) (Result, error) {
 		if next.Projection(from) == nil {
@@ -97,8 +95,7 @@ func DeleteProjection(st *store.Store, rec *model.Record, name string, o Options
 	})
 }
 
-// SetParent makes the projection build on parent, or on nothing if parent is empty. It refuses an unknown parent and one
-// that would make a cycle; that error matches model.ErrCycle.
+// SetParent makes the projection build on parent, or on nothing if parent is empty. It refuses an unknown parent and one that would make a cycle; that error matches model.ErrCycle.
 func SetParent(st *store.Store, rec *model.Record, name, parent string, o Options) (*Result, error) {
 	return edit(st, rec, o, func(next *model.Record) (Result, error) {
 		p := next.Projection(name)
@@ -142,9 +139,7 @@ func copyPtr[T any](p *T) *T {
 	return &v
 }
 
-// RestoreProjections replaces the record's projections with copies of ps, which is how an editor undoes and redoes an
-// edit. rename, if not nil, is the rename that edit made; the presets that name its From are rewritten to its To. Nothing
-// is checked beyond what saving checks: ps comes from an earlier state of this record.
+// RestoreProjections replaces the record's projections with copies of ps, which is how an editor undoes and redoes an edit. rename, if not nil, is the rename that edit made; the presets that name its From are rewritten to its To. Nothing is checked beyond what saving checks: ps comes from an earlier state of this record.
 func RestoreProjections(st *store.Store, rec *model.Record, ps []*model.Projection, rename *Rename, o Options) (*Result, error) {
 	next := rec.WithProjections(ps)
 	return commit(st, next, Result{Rename: rename}, o)

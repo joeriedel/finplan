@@ -29,8 +29,7 @@ func checkMod(m model.Modification) error {
 	return checkSchedule(m.Values)
 }
 
-// SetInflation sets the projection's one global inflation modification to a constant v, adding the modification if
-// there is none; nil removes it. If there are several, the first is the one set or removed.
+// SetInflation sets the projection's one global inflation modification to a constant v, adding the modification if there is none; nil removes it. If there are several, the first is the one set or removed.
 func SetInflation(st *store.Store, rec *model.Record, name string, v *float64, o Options) (*Result, error) {
 	return editProjection(st, rec, o, name, func(p *model.Projection) error {
 		idx := slices.IndexFunc(p.Mods, func(m model.Modification) bool {
@@ -55,8 +54,7 @@ func SetInflation(st *store.Store, rec *model.Record, name string, v *float64, o
 	})
 }
 
-// AddMod appends the modification to the projection's. It refuses a non-global modification that names no object and a
-// value that is not a number within range.
+// AddMod appends the modification to the projection's. It refuses a non-global modification that names no object and a value that is not a number within range.
 func AddMod(st *store.Store, rec *model.Record, name string, m model.Modification, o Options) (*Result, error) {
 	return editProjection(st, rec, o, name, func(p *model.Projection) error {
 		if err := checkMod(m); err != nil {
