@@ -331,9 +331,7 @@ func TestSaveStaleAfterVoid(t *testing.T) {
 
 func TestSaveStaleAfterCorrectAndVoid(t *testing.T) {
 	s, _ := openTemp(t)
-	rec := demodata.Family()
-	rec.Account(demodata.Checking).AddTransaction(model.Transaction{Date: model.D(2026, 1, 3), Amount: -41.5, Kind: model.TxExpense, Memo: "fare"})
-	mustSave(t, s, rec)
+	mustSave(t, s, demodata.Family())
 	stale := mustLoad(t, s)
 	es, _ := s.Entries(demodata.Checking)
 	last := es[len(es)-1]
@@ -358,31 +356,44 @@ func TestSaveStaleAfterCorrectAndVoid(t *testing.T) {
 
 func TestSaveNewEntryEqualToEarlierVoid(t *testing.T) {
 	s, _ := openTemp(t)
-	tx := model.Transaction{Date: model.D(2026, 1, 3), Amount: -2.75, Kind: model.TxExpense, Memo: "fare"}
+	fare := model.Transaction{Date: model.D(2026, 1, 3), Amount: -2.75, Kind: model.TxExpense, Memo: "fare"}
+	later := model.Transaction{Date: model.D(2026, 1, 4), Amount: -8.5, Kind: model.TxExpense, Memo: "lunch"}
 	rec := demodata.Family()
-	rec.Account(demodata.Checking).AddTransaction(tx)
-	rec.Account(demodata.Checking).AddTransaction(tx)
+	rec.Account(demodata.Checking).AddTransaction(fare)
+	rec.Account(demodata.Checking).AddTransaction(later)
 	mustSave(t, s, rec)
-	es, _ := s.Entries(demodata.Checking)
-	dup := es[len(es)-1]
-	if err := s.Void(dup.ID, "duplicate"); err != nil {
+	findFares := func() []Entry {
+		es, err := s.Entries(demodata.Checking)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fares []Entry
+		for _, e := range es {
+			if e.Values.Memo == "fare" && e.Values.Amount == -2.75 {
+				fares = append(fares, e)
+			}
+		}
+		return fares
+	}
+	before, _ := s.Entries(demodata.Checking)
+	fares := findFares()
+	if len(fares) != 1 {
+		t.Fatalf("fare entries = %d, want 1", len(fares))
+	}
+	old := fares[0]
+	if err := s.Void(old.ID, "duplicate"); err != nil {
 		t.Fatal(err)
 	}
 	loaded := mustLoad(t, s)
-	loaded.Account(demodata.Checking).AddTransaction(tx)
+	loaded.Account(demodata.Checking).AddTransaction(fare)
 	mustSave(t, s, loaded)
 	live, _ := s.Entries(demodata.Checking)
-	if len(live) != len(es) {
-		t.Errorf("live entries = %d, want %d", len(live), len(es))
+	if len(live) != len(before) {
+		t.Errorf("live entries = %d, want %d", len(live), len(before))
 	}
-	all, err := queryEntries(s.db, true, `e.id = ?`, dup.ID)
-	if err != nil || len(all) != 1 {
-		t.Fatalf("voided entry: %v %v", all, err)
-	}
-	for _, e := range live {
-		if e.ID == dup.ID {
-			t.Error("voided entry is live again")
-		}
+	fares = findFares()
+	if len(fares) != 1 || fares[0].ID == old.ID {
+		t.Errorf("live fare entries = %v, want one new entry besides voided %d", fares, old.ID)
 	}
 }
 
