@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Joseph Riedel
 // SPDX-License-Identifier: MIT
 
-// Command finplan is a personal financial planner. For now it shows an interactive plot of
-// invented balance data.
+// Command finplan is a personal financial planner. It shows the Graph tab of the invented family
+// record; the other tabs are placeholders.
 package main
 
 import (
@@ -39,9 +39,12 @@ func main() {
 	}
 	defer backend.Shutdown()
 
-	imgui.StyleColorsDark()
+	loadFont()
+	applySlate(imgui.CurrentStyle())
+	applySlatePlot()
 	scale := float32(1)
-	plot := newBalancePlot(demodata.Generate(1))
+	uiScale = scale
+	app := newApp(demodata.Family())
 
 	frames := settleFrames
 	for {
@@ -65,7 +68,7 @@ func main() {
 			// Scaling is not repeatable on a live style (sizes are truncated), so rebuild it from defaults.
 			cur := imgui.CurrentStyle()
 			base := imgui.NewStyle()
-			imgui.StyleColorsDarkV(base)
+			applySlate(base)
 			base.ScaleAllSizes(s)
 			base.SetFontSizeBase(cur.FontSizeBase())
 			base.SetFontScaleMain(cur.FontScaleMain())
@@ -73,12 +76,16 @@ func main() {
 			*cur.CData = *base.CData
 			base.Destroy()
 			scale = s
+			uiScale = s
 		}
 
 		backend.NewFrame()
 		imgui.NewFrame()
-		plot.draw()
+		app.draw()
 		imgui.Render()
 		backend.Render()
+		if app.quit {
+			return
+		}
 	}
 }

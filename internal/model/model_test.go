@@ -340,22 +340,33 @@ func TestScheduleEnds(t *testing.T) {
 			}
 		}
 	}
-	// A segment with an End stops there (exclusive) and the schedule has no value after it.
-	ended := MustSchedule(Segment{From: jan, End: Ptr(mar), Value: 5})
+	// A segment with an End stops there (inclusive) and the schedule has no value after it.
+	ended := MustSchedule(Segment{From: jan, End: Ptr(mar.Add(-1)), Value: 5})
 	check("ended", ended, map[Date]float64{jan: 5, mar.Add(-1): 5}, jan.Add(-1), mar, dec)
 	// A gap between segments is uncovered; the last segment without an End runs on.
-	gap := MustSchedule(Segment{From: jan, End: Ptr(mar), Value: 1}, Segment{From: jun, Value: 2})
+	gap := MustSchedule(Segment{From: jan, End: Ptr(mar.Add(-1)), Value: 1}, Segment{From: jun, Value: 2})
 	check("gap", gap, map[Date]float64{jan: 1, jun: 2, dec: 2}, mar, sep.Add(-100))
-	// Touching ends are not overlaps.
-	if _, err := NewSchedule(Segment{From: jan, End: Ptr(mar), Value: 1}, Segment{From: mar, Value: 2}); err != nil {
-		t.Errorf("touching segments: %v", err)
+	// An End on the day before the next From touches it and is normalized away.
+	touch, err := NewSchedule(Segment{From: jan, End: Ptr(mar.Add(-1)), Value: 1}, Segment{From: mar, Value: 2})
+	if err != nil {
+		t.Fatalf("touching segments: %v", err)
+	}
+	if got := touch.Segments(); got[0].End != nil {
+		t.Errorf("touching End not normalized: %v", *got[0].End)
+	}
+	check("touch", touch, map[Date]float64{jan: 1, mar.Add(-1): 1, mar: 2})
+	// A one-day segment is valid, and so is an End well before the next From.
+	oneDay := MustSchedule(Segment{From: jan, End: Ptr(jan), Value: 4}, Segment{From: mar, Value: 2})
+	check("one day", oneDay, map[Date]float64{jan: 4, mar: 2}, jan.Add(1), mar.Add(-1))
+	if got := oneDay.Segments(); got[0].End == nil || *got[0].End != jan {
+		t.Errorf("one-day End lost: %v", got[0].End)
 	}
 	for name, segs := range map[string][]Segment{
 		"overlap":   {{From: jan, End: Ptr(jun), Value: 1}, {From: mar, Value: 2}},
 		"unsorted":  {{From: mar, Value: 2}, {From: jan, Value: 1}},
 		"duplicate": {{From: jan, Value: 1}, {From: jan, Value: 2}},
-		"empty":     {{From: jan, End: Ptr(jan), Value: 1}},
-		"reversed":  {{From: mar, End: Ptr(jan), Value: 1}},
+		"reversed":  {{From: mar, End: Ptr(mar.Add(-1)), Value: 1}},
+		"on next":   {{From: jan, End: Ptr(mar), Value: 1}, {From: mar, Value: 2}},
 	} {
 		if _, err := NewSchedule(segs...); err == nil {
 			t.Errorf("%s schedule accepted", name)
@@ -369,11 +380,11 @@ func TestScheduleEnds(t *testing.T) {
 
 	// Overlay is per date: an ended upper segment reverts to the lower value after it.
 	base := Constant(0.01)
-	check("revert", base.Overlay(MustSchedule(Segment{From: mar, End: Ptr(jun), Value: 0.05})),
+	check("revert", base.Overlay(MustSchedule(Segment{From: mar, End: Ptr(jun.Add(-1)), Value: 0.05})),
 		map[Date]float64{jan: 0.01, mar: 0.05, jun.Add(-1): 0.05, jun: 0.01, dec: 0.01})
 	// The lower schedule's own gaps stay uncovered.
-	lowerGap := MustSchedule(Segment{From: jan, End: Ptr(mar), Value: 1}, Segment{From: sep, Value: 3})
-	over := lowerGap.Overlay(MustSchedule(Segment{From: jun, End: Ptr(dec), Value: 7}))
+	lowerGap := MustSchedule(Segment{From: jan, End: Ptr(mar.Add(-1)), Value: 1}, Segment{From: sep, Value: 3})
+	over := lowerGap.Overlay(MustSchedule(Segment{From: jun, End: Ptr(dec.Add(-1)), Value: 7}))
 	check("lower gaps", over, map[Date]float64{jan: 1, jun: 7, sep: 7, dec: 3}, mar, jun.Add(-1))
 	// An open-ended upper schedule replaces everything from its start on.
 	open := lowerGap.Overlay(MustSchedule(Segment{From: jun, Value: 7}))
@@ -385,7 +396,7 @@ func TestScheduleEnds(t *testing.T) {
 	if got := ended.Compound(mar, dec); got != 1 {
 		t.Errorf("compound over uncovered dates: got %v", got)
 	}
-	if got, want := base.Overlay(MustSchedule(Segment{From: mar, End: Ptr(jun), Value: 0})).Compound(jan, dec), base.Compound(jan, mar)*base.Compound(jun, dec); math.Abs(got-want) > 1e-12 {
+	if got, want := base.Overlay(MustSchedule(Segment{From: mar, End: Ptr(jun.Add(-1)), Value: 0})).Compound(jan, dec), base.Compound(jan, mar)*base.Compound(jun, dec); math.Abs(got-want) > 1e-12 {
 		t.Errorf("compound with an ended zero: got %v, want %v", got, want)
 	}
 }

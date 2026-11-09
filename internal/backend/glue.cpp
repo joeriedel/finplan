@@ -122,7 +122,7 @@ void FinplanBackend_Render(void)
 {
     ImGuiIO& io = ImGui::GetIO();
     g_glViewport(0, 0, (int)(io.DisplaySize.x * io.DisplayFramebufferScale.x), (int)(io.DisplaySize.y * io.DisplayFramebufferScale.y));
-    g_glClearColor(0.10f, 0.10f, 0.12f, 1.0f);
+    g_glClearColor(0.137f, 0.149f, 0.180f, 1.0f);
     g_glClear(GL_COLOR_BUFFER_BIT_);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     SDL_GL_SwapWindow(g_Window);

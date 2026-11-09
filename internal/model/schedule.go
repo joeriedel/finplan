@@ -18,8 +18,8 @@ const (
 	PropAddItem   = "add_item"
 )
 
-// Segment is one piece of a schedule: Value holds on [From, End). End is exclusive, unlike the inclusive
-// BudgetItem.End and Interval.To. Without an End the segment runs until the next segment's From, or
+// Segment is one piece of a schedule: Value holds on [From, End], both inclusive like BudgetItem.End and
+// Interval.To. Without an End the segment runs until the day before the next segment's From, or
 // indefinitely if it is the last.
 type Segment struct {
 	From  Date
@@ -29,7 +29,7 @@ type Segment struct {
 
 // Schedule is a piecewise-constant value over time. A constant is one segment starting at MinDate.
 // The schedule has no value before its first segment, in a gap between an ended segment and the next, or
-// from the last segment's End on. Segments are sorted by From, never overlap, and each End is after its From.
+// after the last segment's End. Segments are sorted by From, never overlap, and each End is on or after its From.
 // The zero Schedule is valid and empty.
 type Schedule struct {
 	segs []Segment
@@ -41,11 +41,12 @@ func Constant(v float64) Schedule {
 }
 
 // NewSchedule returns a schedule from segments, which must be sorted by strictly increasing From, each
-// End after its From and not after the next segment's From.
+// End on or after its From and before the next segment's From. An End on the day before the next segment's
+// From touches it and is dropped, so touching segments have one representation.
 func NewSchedule(segs ...Segment) (Schedule, error) {
 	for i, g := range segs {
-		if g.End != nil && *g.End <= g.From {
-			return Schedule{}, fmt.Errorf("model: schedule segment %d: end must be after from", i)
+		if g.End != nil && *g.End < g.From {
+			return Schedule{}, fmt.Errorf("model: schedule segment %d: end must not be before from", i)
 		}
 		if i == 0 {
 			continue
@@ -54,14 +55,16 @@ func NewSchedule(segs ...Segment) (Schedule, error) {
 		if g.From <= prev.From {
 			return Schedule{}, fmt.Errorf("model: schedule segment %d: from must be after the previous segment's from", i)
 		}
-		if prev.End != nil && *prev.End > g.From {
+		if prev.End != nil && *prev.End >= g.From {
 			return Schedule{}, fmt.Errorf("model: schedule segment %d overlaps the previous segment", i)
 		}
 	}
 	s := make([]Segment, len(segs))
 	for i, g := range segs {
-		if g.End != nil {
+		if g.End != nil && (i+1 == len(segs) || *g.End < segs[i+1].From-1) {
 			g.End = Ptr(*g.End)
+		} else {
+			g.End = nil
 		}
 		s[i] = g
 	}
@@ -92,7 +95,7 @@ func (s Schedule) Segments() []Segment {
 // find returns the index of the segment covering d.
 func (s Schedule) find(d Date) (int, bool) {
 	i := sort.Search(len(s.segs), func(i int) bool { return s.segs[i].From > d }) - 1
-	if i < 0 || (s.segs[i].End != nil && d >= *s.segs[i].End) {
+	if i < 0 || (s.segs[i].End != nil && d > *s.segs[i].End) {
 		return 0, false
 	}
 	return i, true
@@ -118,7 +121,7 @@ func (s Schedule) Overlay(o Schedule) Schedule {
 		for _, g := range sc.segs {
 			pts = append(pts, g.From)
 			if g.End != nil {
-				pts = append(pts, *g.End)
+				pts = append(pts, *g.End+1)
 			}
 		}
 	}
@@ -160,7 +163,7 @@ func (s Schedule) Overlay(o Schedule) Schedule {
 	for i, p := range ps {
 		segs[i] = p.seg
 		if p.end != nil && (i+1 == len(ps) || ps[i+1].seg.From != *p.end) {
-			segs[i].End = p.end
+			segs[i].End = Ptr(*p.end - 1)
 		}
 	}
 	return Schedule{segs: segs}
@@ -174,7 +177,7 @@ func (s Schedule) Compound(from, to Date) float64 {
 		i, covered := s.find(cur)
 		end := to
 		if covered && s.segs[i].End != nil {
-			end = min(end, *s.segs[i].End)
+			end = min(end, *s.segs[i].End+1)
 		}
 		if next := sort.Search(len(s.segs), func(j int) bool { return s.segs[j].From > cur }); next < len(s.segs) {
 			end = min(end, s.segs[next].From)

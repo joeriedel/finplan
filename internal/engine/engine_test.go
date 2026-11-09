@@ -629,7 +629,7 @@ func TestEndedGrowthSettingsOverlapInEitherOrder(t *testing.T) {
 	rec := fixture(t)
 	ended := model.Modification{
 		Target: model.ObjectRef{Kind: model.KindAccount, ID: "inv"}, Property: model.PropGrowth,
-		Values: model.MustSchedule(model.Segment{From: d(2026, time.March, 1), End: model.Ptr(d(2026, time.June, 1)), Value: 0.01}),
+		Values: model.MustSchedule(model.Segment{From: d(2026, time.March, 1), End: model.Ptr(d(2026, time.May, 31)), Value: 0.01}),
 	}
 	open := growthMod(model.KindAccount, "inv", 0.07)
 	addProjection(t, rec, "ended last", "", open, ended)
@@ -664,7 +664,7 @@ func TestEndedBudgetAmountChange(t *testing.T) {
 	// Rent is cut to 100 for February only; January and March pay the base 200.
 	addProjection(t, rec, "cut", "", model.Modification{
 		Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: "rent"}, Property: model.PropAmount,
-		Values: model.MustSchedule(model.Segment{From: d(2026, time.February, 1), End: model.Ptr(d(2026, time.March, 1)), Value: 100}),
+		Values: model.MustSchedule(model.Segment{From: d(2026, time.February, 1), End: model.Ptr(d(2026, time.February, 28)), Value: 100}),
 	})
 	bd, err = Breakdown(rec, "cut", chk, from, to)
 	must(t, err)
@@ -686,7 +686,7 @@ func TestEndedInflationChange(t *testing.T) {
 	pause := d(2026, time.July, 1)
 	addProjection(t, rec, "pause", "", model.Modification{
 		Target: model.ObjectRef{Kind: model.KindGlobal}, Property: model.PropInflation,
-		Values: model.MustSchedule(model.Segment{From: model.MinDate, End: model.Ptr(pause), Value: 0}),
+		Values: model.MustSchedule(model.Segment{From: model.MinDate, End: model.Ptr(pause.Add(-1)), Value: 0}),
 	})
 	bd, err := Breakdown(rec, "pause", model.DefaultAssetID("chk"), d(2026, time.January, 1), d(2027, time.January, 31))
 	must(t, err)
