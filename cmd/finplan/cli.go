@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"slices"
 	"strconv"
@@ -19,7 +20,7 @@ import (
 	"github.com/joeriedel/finplan/internal/store"
 )
 
-// The command line interface: finplan <command> prints one JSON document on stdout, success or error. Commands are data (see commands), and both the parser and the help output are generated from that data.
+// The command line interface: finplan <command> prints one JSON document on stdout, success or error. Commands are data (see commands), and both the parser and the help output are generated from that data. Read commands never write the database; write commands (see cliwrite.go) change it only through internal/ops.
 
 // Exit codes.
 const (
@@ -57,6 +58,8 @@ const (
 	typeString = "string"
 	typeDate   = "date"
 	typeEnum   = "enum"
+	typeNumber = "number"
+	typeInt    = "int"
 )
 
 // flagDef describes a flag. A date flag takes YYYY-MM-DD or YYYY-MM; the month means its first day, or its last day when EndOfMonth is set.
@@ -77,6 +80,9 @@ type command struct {
 	Args    []argDef  `json:"args"`
 	Flags   []flagDef `json:"flags"`
 	Output  string    `json:"output"`
+	// Write marks a command that changes the database; it takes --dry-run. Input, if not empty, describes the JSON the command reads from --json-file or stdin.
+	Write bool   `json:"write"`
+	Input string `json:"input,omitempty"`
 
 	run func(c *call) (any, error)
 }
@@ -99,6 +105,7 @@ type call struct {
 	}
 	// commands is the command table, for help.
 	commands []*command
+	stdin    io.Reader
 
 	st      *store.Store
 	rec     *model.Record
@@ -143,12 +150,50 @@ func parseCLIDate(s string, endOfMonth bool) (model.Date, error) {
 	return 0, fmt.Errorf("%q is not a date: use YYYY-MM-DD or YYYY-MM", s)
 }
 
-// open returns the store and record the command reads, opening them on first use.
+// number returns the number flag's value; a flag that is not set gives false.
+func (c *call) number(name string) (float64, bool, error) {
+	if !c.set[name] {
+		return 0, false, nil
+	}
+	v, err := parseNumber(c.vals[name])
+	if err != nil {
+		return 0, false, usageErr("--%s: %v", name, err)
+	}
+	return v, true, nil
+}
+
+func parseNumber(s string) (float64, error) {
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, fmt.Errorf("%q is not a number", s)
+	}
+	return v, nil
+}
+
+// integer returns the int flag's value; a flag that is not set gives false.
+func (c *call) integer(name string) (int, bool, error) {
+	if !c.set[name] {
+		return 0, false, nil
+	}
+	v, err := strconv.Atoi(c.vals[name])
+	if err != nil {
+		return 0, false, usageErr("--%s: %q is not a whole number", name, c.vals[name])
+	}
+	return v, true, nil
+}
+
+// open returns the store and record the command uses, opening them on first use. A write command opens the database for writing.
 func (c *call) open() (*store.Store, *model.Record, error) {
 	if c.rec != nil {
 		return c.st, c.rec, nil
 	}
-	st, err := c.openReadOnly()
+	var st *store.Store
+	var err error
+	if c.cmd.Write {
+		st, err = c.openWrite()
+	} else {
+		st, err = c.openReadOnly()
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -160,36 +205,77 @@ func (c *call) open() (*store.Store, *model.Record, error) {
 	return st, rec, nil
 }
 
-// openReadOnly opens the selected database without creating, migrating or writing it. A demo database is removed when the command ends.
-func (c *call) openReadOnly() (*store.Store, error) {
-	if c.global.demo {
-		st, cleanup, err := openDemo()
-		if err != nil {
-			return nil, failErr("database", "%v", err)
-		}
-		c.cleanup = append(c.cleanup, cleanup)
-		return st, nil
-	}
-	path := c.global.db
-	if path == "" {
-		var err error
-		if path, err = databasePath(os.Getenv, os.UserHomeDir); err != nil {
-			return nil, failErr("database", "%v", err)
-		}
-	}
-	st, err := store.OpenReadOnly(path)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return nil, failErr("no_database", "there is no database at %s", path)
-	case errors.Is(err, store.ErrOldSchema):
-		return nil, failErr("old_schema", "the database at %s was written by an older version of finplan: open it with the app first so it can be upgraded", path)
-	case errors.Is(err, store.ErrFutureSchema):
-		return nil, failErr("future_schema", "the database at %s was written by a newer version of finplan", path)
-	case err != nil:
+// openDemoStore opens a throwaway demo database, removed when the command ends.
+func (c *call) openDemoStore() (*store.Store, error) {
+	st, cleanup, err := openDemo()
+	if err != nil {
 		return nil, failErr("database", "%v", err)
+	}
+	c.cleanup = append(c.cleanup, cleanup)
+	return st, nil
+}
+
+// dbPath returns the path of the database --db or the default names.
+func (c *call) dbPath() (string, error) {
+	if c.global.db != "" {
+		return c.global.db, nil
+	}
+	path, err := databasePath(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		return "", failErr("database", "%v", err)
+	}
+	return path, nil
+}
+
+// openWrite opens the selected database for writing, migrating it if it is older. It never creates a database.
+func (c *call) openWrite() (*store.Store, error) {
+	if c.global.demo {
+		return c.openDemoStore()
+	}
+	path, err := c.dbPath()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil, failErr("no_database", "there is no database at %s", path)
+	}
+	st, err := store.Open(path)
+	if err != nil {
+		return nil, openErr(err, path)
 	}
 	c.cleanup = append(c.cleanup, func() { st.Close() })
 	return st, nil
+}
+
+// openReadOnly opens the selected database without creating, migrating or writing it. A demo database is removed when the command ends.
+func (c *call) openReadOnly() (*store.Store, error) {
+	if c.global.demo {
+		return c.openDemoStore()
+	}
+	path, err := c.dbPath()
+	if err != nil {
+		return nil, err
+	}
+	st, err := store.OpenReadOnly(path)
+	if err != nil {
+		return nil, openErr(err, path)
+	}
+	c.cleanup = append(c.cleanup, func() { st.Close() })
+	return st, nil
+}
+
+// openErr turns the failure to open the database at path into a CLI error.
+func openErr(err error, path string) error {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return failErr("no_database", "there is no database at %s", path)
+	case errors.Is(err, store.ErrOldSchema):
+		return failErr("old_schema", "the database at %s was written by an older version of finplan: open it with the app first so it can be upgraded", path)
+	case errors.Is(err, store.ErrFutureSchema):
+		return failErr("future_schema", "the database at %s was written by a newer version of finplan", path)
+	default:
+		return failErr("database", "%v", err)
+	}
 }
 
 // isCLI reports whether the arguments name a command, that is, hold something other than flags. The only flag that takes a separate value before the command is --db.
@@ -303,10 +389,21 @@ func (cmd *command) parse(args []string) (*call, error) {
 		return nil, usageErr("%s: unexpected argument %q", cmd.Name, c.args[len(cmd.Args)])
 	}
 	for _, f := range cmd.Flags {
+		if c.set[f.Name] && (f.Type == typeNumber || f.Type == typeInt) {
+			var err error
+			if f.Type == typeNumber {
+				_, _, err = c.number(f.Name)
+			} else {
+				_, _, err = c.integer(f.Name)
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
 		if f.Required && !c.set[f.Name] {
 			return nil, usageErr("%s: missing flag --%s", cmd.Name, f.Name)
 		}
-		if f.Type == typeEnum && !slices.Contains(f.Choices, c.vals[f.Name]) {
+		if f.Type == typeEnum && (c.set[f.Name] || f.Default != "") && !slices.Contains(f.Choices, c.vals[f.Name]) {
 			return nil, usageErr("--%s: %q is not one of %s", f.Name, c.vals[f.Name], strings.Join(f.Choices, ", "))
 		}
 	}
@@ -323,6 +420,7 @@ func runCLI(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var result any
 	if err == nil {
 		c.commands = commands
+		c.stdin = stdin
 		defer func() {
 			for _, f := range slices.Backward(c.cleanup) {
 				f()

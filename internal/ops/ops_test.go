@@ -481,3 +481,265 @@ func TestFailedSaveIsASaveError(t *testing.T) {
 		t.Errorf("%v %v", res, err)
 	}
 }
+
+func amountMod(id string, from model.Date, v float64) model.Modification {
+	return model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: id}, Property: model.PropAmount, Values: model.MustSchedule(model.Segment{From: from, Value: v})}
+}
+
+func TestInsertMod(t *testing.T) {
+	m := amountMod("salary-a", model.D(2030, 1, 1), 7000)
+	dryRunMatches(t, func(st *store.Store, rec *model.Record, o Options) (*Result, error) {
+		return InsertMod(st, rec, demodata.ProjNewJob, 1, m, o)
+	})
+	st, rec := seed(t)
+	n := len(rec.Projection(demodata.ProjNewJob).Mods)
+	if _, err := InsertMod(st, rec, demodata.ProjNewJob, 1, m, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	mods := reload(t, st).Projection(demodata.ProjNewJob).Mods
+	if len(mods) != n+1 || !reflect.DeepEqual(mods[1], m) {
+		t.Errorf("mods %+v", mods)
+	}
+	if _, err := InsertMod(st, rec, demodata.ProjNewJob, n, m, Options{DryRun: true}); err != nil {
+		t.Errorf("insert at the end: %v", err)
+	}
+	for _, i := range []int{-1, n + 1} {
+		st, rec := seed(t)
+		if _, err := InsertMod(st, rec, demodata.ProjNewJob, i, m, Options{}); err == nil {
+			t.Errorf("index %d accepted", i)
+		}
+	}
+}
+
+func TestModTargets(t *testing.T) {
+	add := func(proj string, i int, m model.Modification, want error) {
+		t.Helper()
+		refused(t, want, func(st *store.Store, rec *model.Record) (*Result, error) {
+			return InsertMod(st, rec, proj, i, m, Options{})
+		})
+	}
+	// Existing items, accounts and assets resolve.
+	st, rec := seed(t)
+	for _, m := range []model.Modification{
+		amountMod("salary-a", model.D(2030, 1, 1), 1),
+		{Target: model.ObjectRef{Kind: model.KindAccount, ID: string(demodata.Checking)}, Property: model.PropGrowth, Values: model.Constant(0.01)},
+		{Target: model.ObjectRef{Kind: model.KindAsset, ID: string(demodata.NetWorth)}, Property: model.PropGrowth, Values: model.Constant(0.01)},
+	} {
+		if _, err := AddMod(st, rec, demodata.ProjNewJob, m, Options{DryRun: true}); err != nil {
+			t.Errorf("%+v: %v", m.Target, err)
+		}
+	}
+	// A parent's added item resolves from a child; a sibling's does not.
+	child := model.Projection{Name: "Child", Parent: demodata.ProjWithdraw}
+	rec.Projections = append(rec.Projections, &child)
+	if err := st.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddMod(st, rec, "Child", amountMod("early-401k-withdrawal", model.D(2027, 6, 1), 5000), Options{DryRun: true}); err != nil {
+		t.Errorf("parent's item: %v", err)
+	}
+	add("Child", 0, amountMod("nope", model.D(2030, 1, 1), 1), ErrUnknownTarget)
+	add(demodata.ProjNewJob, 0, amountMod("early-401k-withdrawal", model.D(2027, 6, 1), 5000), ErrUnknownTarget)
+	add(demodata.ProjNewJob, 0, model.Modification{Target: model.ObjectRef{Kind: model.KindAccount, ID: "nope"}, Property: model.PropGrowth, Values: model.Constant(0.01)}, ErrUnknownTarget)
+	add(demodata.ProjNewJob, 0, model.Modification{Target: model.ObjectRef{Kind: model.KindAsset, ID: "nope"}, Property: model.PropGrowth, Values: model.Constant(0.01)}, ErrUnknownTarget)
+	// The property must suit the object.
+	add(demodata.ProjNewJob, 0, model.Modification{Target: model.ObjectRef{Kind: model.KindAccount, ID: string(demodata.Checking)}, Property: model.PropAmount, Values: model.Constant(1)}, ErrInvalidValue)
+	add(demodata.ProjNewJob, 0, model.Modification{Target: model.ObjectRef{Kind: model.KindGlobal}, Property: model.PropGrowth, Values: model.Constant(1)}, ErrInvalidValue)
+	bare := amountMod("salary-a", 0, 1)
+	bare.Property = model.PropAddItem
+	add(demodata.ProjNewJob, 0, bare, ErrInvalidValue)
+}
+
+func TestModTargetAddedLaterIsRefused(t *testing.T) {
+	st, rec := seed(t)
+	item := model.BudgetItem{Name: "Gift", Kind: model.ItemIncome, Amount: 100, Account: demodata.Checking, Recurrence: model.Recurrence{Kind: model.OneTime, Anchor: model.D(2028, 1, 1)}}
+	res, err := AddItem(st, rec, demodata.ProjNewJob, item, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(res.Projection.Mods)
+	if _, err := InsertMod(st, res.Record, demodata.ProjNewJob, n-1, amountMod("gift", model.D(2029, 1, 1), 1), Options{}); !errors.Is(err, ErrUnknownTarget) {
+		t.Errorf("before the add_item: %v", err)
+	}
+	if _, err := AddMod(st, res.Record, demodata.ProjNewJob, amountMod("gift", model.D(2029, 1, 1), 1), Options{DryRun: true}); err != nil {
+		t.Errorf("after the add_item: %v", err)
+	}
+}
+
+func TestNoNewDangling(t *testing.T) {
+	// "Withdraw $100k" adds early-401k-withdrawal; a child ends it.
+	setup := func(t *testing.T) (*store.Store, *model.Record) {
+		st, rec := seed(t)
+		res, err := NewProjection(st, rec, "Child", demodata.ProjWithdraw, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err = AddMod(st, res.Record, "Child", amountMod("early-401k-withdrawal", model.D(2027, 6, 1), 5000), Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st, res.Record
+	}
+	st, rec := setup(t)
+	if _, err := RemoveMod(st, rec, demodata.ProjWithdraw, 0, Options{}); !errors.Is(err, ErrUnknownTarget) {
+		t.Errorf("remove the add_item: %v", err)
+	}
+	if _, err := SetParent(st, rec, "Child", demodata.ProjBase, Options{}); !errors.Is(err, ErrUnknownTarget) {
+		t.Errorf("reparent: %v", err)
+	}
+	if _, err := SetParent(st, rec, demodata.ProjWithdraw, "Child", Options{}); !errors.Is(err, model.ErrCycle) {
+		t.Errorf("cycle: %v", err)
+	}
+	// Moving the amount mod is fine; removing it is fine.
+	if _, err := RemoveMod(st, rec, "Child", 0, Options{DryRun: true}); err != nil {
+		t.Errorf("remove the amount mod: %v", err)
+	}
+	// A mod that dangled before does not block an edit.
+	rec.Projection("Child").Mods = append(rec.Projection("Child").Mods, amountMod("ghost", model.D(2030, 1, 1), 1))
+	if _, err := SetStart(st, rec, "Child", model.Ptr(model.D(2031, 1, 1)), Options{DryRun: true}); err != nil {
+		t.Errorf("dangling before: %v", err)
+	}
+	if _, err := RemoveMod(st, rec, "Child", 1, Options{DryRun: true}); err != nil {
+		t.Errorf("remove dangling: %v", err)
+	}
+	// Moving an amount mod before its add_item in the same projection is refused.
+	res, err := AddItem(st, rec, "Child", model.BudgetItem{Name: "Gift", Kind: model.ItemIncome, Amount: 1, Account: demodata.Checking, Recurrence: model.Recurrence{Kind: model.OneTime, Anchor: model.D(2028, 1, 1)}}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = EndItem(st, res.Record, "Child", "gift", model.D(2029, 1, 1), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(res.Projection.Mods)
+	if _, err := MoveMod(st, res.Record, "Child", n-1, n-2, Options{}); !errors.Is(err, ErrUnknownTarget) {
+		t.Errorf("move before the add_item: %v", err)
+	}
+}
+
+func goodItem() model.BudgetItem {
+	return model.BudgetItem{
+		Name: "Side Gig #1!", Kind: model.ItemIncome, Amount: 800, Account: demodata.Checking,
+		Recurrence: model.Recurrence{Kind: model.Monthly, Day: 15}, Start: model.Ptr(model.D(2027, 1, 1)),
+	}
+}
+
+func TestAddItem(t *testing.T) {
+	dryRunMatches(t, func(st *store.Store, rec *model.Record, o Options) (*Result, error) {
+		return AddItem(st, rec, demodata.ProjNewJob, goodItem(), o)
+	})
+	st, rec := seed(t)
+	res, err := AddItem(st, rec, demodata.ProjNewJob, goodItem(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mods := reload(t, st).Projection(demodata.ProjNewJob).Mods
+	m := mods[len(mods)-1]
+	if m.Property != model.PropAddItem || m.Target != (model.ObjectRef{Kind: model.KindBudgetItem, ID: "side-gig-1"}) || m.Item == nil || m.Item.ID != "side-gig-1" || m.Item.Amount != 800 {
+		t.Errorf("added %+v", m)
+	}
+	// The same name gets the next free id.
+	res, err = AddItem(st, res.Record, demodata.ProjWithdraw, goodItem(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Projection.Mods[len(res.Projection.Mods)-1].Item.ID; got != "side-gig-1-2" {
+		t.Errorf("id %q", got)
+	}
+	// A transfer with one outside account.
+	tr := model.BudgetItem{ID: "to-friend", Name: "Gift", Kind: model.ItemTransfer, Amount: 50, From: demodata.Checking, To: "outside", Recurrence: model.Recurrence{Kind: model.Annual, Month: 12, Day: 25}}
+	if _, err := AddItem(st, rec, demodata.ProjNewJob, tr, Options{DryRun: true}); err != nil {
+		t.Errorf("transfer to outside: %v", err)
+	}
+
+	refuseItem := func(want error, change func(it *model.BudgetItem)) {
+		t.Helper()
+		it := goodItem()
+		change(&it)
+		refused(t, want, func(st *store.Store, rec *model.Record) (*Result, error) {
+			return AddItem(st, rec, demodata.ProjNewJob, it, Options{})
+		})
+	}
+	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.Name = " " })
+	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.Amount = 0 })
+	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.Amount = 1e16 })
+	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.Kind = "gift" })
+	refuseItem(ErrUnknownTarget, func(it *model.BudgetItem) { it.Account = "nope" })
+	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.Recurrence.Day = 32 })
+	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.Recurrence = model.Recurrence{Kind: model.Annual, Month: 13, Day: 1} })
+	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) {
+		it.Recurrence = model.Recurrence{Kind: model.Semimonthly, Day: 1, Day2: 15}
+	})
+	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.End = model.Ptr(model.D(2026, 1, 1)) })
+	refuseItem(ErrNameTaken, func(it *model.BudgetItem) { it.ID = "salary-a" })
+	refuseItem(ErrNameTaken, func(it *model.BudgetItem) { it.ID = "early-401k-withdrawal" })
+	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) {
+		*it = model.BudgetItem{Name: "x", Kind: model.ItemTransfer, Amount: 1, From: demodata.Checking, To: demodata.Checking, Recurrence: it.Recurrence}
+	})
+	refuseItem(ErrUnknownTarget, func(it *model.BudgetItem) {
+		*it = model.BudgetItem{Name: "x", Kind: model.ItemTransfer, Amount: 1, From: "a", To: "b", Recurrence: it.Recurrence}
+	})
+	refused(t, ErrUnknownProjection, func(st *store.Store, rec *model.Record) (*Result, error) {
+		return AddItem(st, rec, "Nowhere", goodItem(), Options{})
+	})
+}
+
+func TestEditItem(t *testing.T) {
+	op := func(st *store.Store, rec *model.Record, o Options) (*Result, error) {
+		it := *rec.Projection(demodata.ProjWithdraw).Mods[0].Item
+		it.Amount = 90000
+		return EditItem(st, rec, demodata.ProjWithdraw, "early-401k-withdrawal", it, o)
+	}
+	dryRunMatches(t, op)
+	st, rec := seed(t)
+	if _, err := op(st, rec, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	m := reload(t, st).Projection(demodata.ProjWithdraw).Mods[0]
+	if m.Item.Amount != 90000 || m.Item.ID != "early-401k-withdrawal" || m.Target.ID != "early-401k-withdrawal" {
+		t.Errorf("edited %+v", m.Item)
+	}
+	refused(t, ErrUnknownTarget, func(st *store.Store, rec *model.Record) (*Result, error) {
+		return EditItem(st, rec, demodata.ProjNewJob, "early-401k-withdrawal", goodItem(), Options{})
+	})
+	refused(t, ErrInvalidValue, func(st *store.Store, rec *model.Record) (*Result, error) {
+		it := goodItem()
+		it.ID = "other"
+		return EditItem(st, rec, demodata.ProjWithdraw, "early-401k-withdrawal", it, Options{})
+	})
+	refused(t, ErrInvalidValue, func(st *store.Store, rec *model.Record) (*Result, error) {
+		it := goodItem()
+		it.Amount = -1
+		return EditItem(st, rec, demodata.ProjWithdraw, "early-401k-withdrawal", it, Options{})
+	})
+	refused(t, ErrNoChange, func(st *store.Store, rec *model.Record) (*Result, error) {
+		return EditItem(st, rec, demodata.ProjWithdraw, "early-401k-withdrawal", *rec.Projection(demodata.ProjWithdraw).Mods[0].Item, Options{})
+	})
+}
+
+func TestEndItem(t *testing.T) {
+	from := model.D(2028, 1, 1)
+	dryRunMatches(t, func(st *store.Store, rec *model.Record, o Options) (*Result, error) {
+		return EndItem(st, rec, demodata.ProjNewJob, "salary-a", from, o)
+	})
+	st, rec := seed(t)
+	if _, err := EndItem(st, rec, demodata.ProjNewJob, "salary-a", from, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	mods := reload(t, st).Projection(demodata.ProjNewJob).Mods
+	m := mods[len(mods)-1]
+	if segs := m.Values.Segments(); m.Property != model.PropAmount || len(segs) != 1 || segs[0].From != from || segs[0].Value != 0 || segs[0].End != nil {
+		t.Errorf("end mod %+v", m)
+	}
+	// An item a parent adds can be ended from a child.
+	res, err := NewProjection(st, rec, "Child", demodata.ProjWithdraw, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EndItem(st, res.Record, "Child", "early-401k-withdrawal", from, Options{DryRun: true}); err != nil {
+		t.Errorf("parent's item: %v", err)
+	}
+	refused(t, ErrUnknownTarget, func(st *store.Store, rec *model.Record) (*Result, error) {
+		return EndItem(st, rec, demodata.ProjNewJob, "nope", from, Options{})
+	})
+}

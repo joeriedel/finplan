@@ -29,7 +29,7 @@ var commands = []*command{
 	{
 		Name: "help", Summary: "describe the commands and their flags",
 		Flags:  []flagDef{{Name: "json", Type: typeBool, Default: "false", Description: "print the description as JSON for programs"}},
-		Output: "text; with --json {global_flags: [{name, type, default, required, description}], commands: [{name, summary, args, flags, output}]}. " + jsonNote,
+		Output: "text; with --json {global_flags: [{name, type, default, required, description}], commands: [{name, summary, args, flags, output, write, input}]}; write is true for a command that changes the database. " + jsonNote,
 		run:    cmdHelp,
 	},
 	{
@@ -415,6 +415,11 @@ func cmdProjectionShow(c *call) (any, error) {
 	if p == nil {
 		return nil, failErr("not_found", "there is no projection named %q", c.args[0])
 	}
+	return projectionJSON(p), nil
+}
+
+// projectionJSON is the JSON shape of a projection and its modifications, as projection show prints it and the write commands print the projection they changed.
+func projectionJSON(p *model.Projection) any {
 	type jsetting struct {
 		Asset           string `json:"asset"`
 		Start           *jdate `json:"start"`
@@ -457,7 +462,7 @@ func cmdProjectionShow(c *call) (any, error) {
 		}
 		out.Modifications = append(out.Modifications, jm)
 	}
-	return out, nil
+	return out
 }
 
 type jdiagnostics struct {

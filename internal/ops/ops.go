@@ -30,8 +30,10 @@ var (
 	ErrHasChildren = errors.New("ops: projection has projections building on it")
 	// ErrNoObject is returned for a modification that needs an object and names none.
 	ErrNoObject = errors.New("ops: a modification needs an object")
-	// ErrInvalidValue is returned for a modification value that is not a number within range.
+	// ErrInvalidValue is returned for a modification or budget item with a value that is not valid: a number out of range, a property that does not suit the object, an item that is incomplete.
 	ErrInvalidValue = errors.New("ops: value out of range")
+	// ErrUnknownTarget is returned for a modification whose object the record does not have or, for a budget item, that no earlier add_item mod in the chain adds; and for an edit that would leave a modification that resolved before pointing at nothing.
+	ErrUnknownTarget = errors.New("ops: unknown modification target")
 )
 
 // maxValue is the largest magnitude a modification value may have.
@@ -112,6 +114,9 @@ func edit(st *store.Store, rec *model.Record, o Options, change func(next *model
 	}
 	if reflect.DeepEqual(rec.Projections, next.Projections) {
 		return nil, ErrNoChange
+	}
+	if err := checkNoNewDangling(rec, next); err != nil {
+		return nil, err
 	}
 	return commit(st, next, res, o)
 }
