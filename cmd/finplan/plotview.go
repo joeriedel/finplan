@@ -303,8 +303,9 @@ func lanesHeight(n int) (height, pitch float32) {
 	return float32(n)*pitch + 8*uiScale, pitch
 }
 
-// drawLanes draws one bar per visible line under the plot on the plot's own time axis: solid where the
-// data is actual, medium where partly projected and faint where projected.
+// drawLanes draws one bar per drawn line under the plot on the plot's own time axis: striped where the
+// data is projected, medium where partly projected and strong where actual. A lane lights on hover, shows the
+// row's selection fill when its line is selected, and selects its line when clicked.
 func (g *graphTab) drawLanes(views []lineView, height, pitch float32) {
 	if height == 0 {
 		return
@@ -318,30 +319,55 @@ func (g *graphTab) drawLanes(views []lineView, height, pitch float32) {
 	dl := imgui.WindowDrawList()
 	left, right := g.plotPos.X, g.plotPos.X+g.plotSize.X
 	barH := pitch - 4*s
+	top := origin.Y + 4*s
 	xOf := func(d model.Date) float32 {
 		return g.plotPos.X + float32((float64(d)*secondsPerDay-g.xMin)/(g.xMax-g.xMin))*g.plotSize.X
 	}
+	hover := -1
+	if m := imgui.MousePos(); imgui.IsWindowHovered() && m.X >= origin.X && m.X <= right {
+		hover = graph.LaneAt(m.Y, top, pitch, barH, len(views))
+	}
+	if hover >= 0 && imgui.IsMouseClickedBool(imgui.MouseButtonLeft) {
+		g.lines.Select(views[hover].line.ID)
+	}
+	selID, hasSel := g.lines.Selected()
 	for i, v := range views {
-		y := origin.Y + 4*s + float32(i)*pitch
+		y := top + float32(i)*pitch
+		selected := hasSel && v.line.ID == selID
+		if selected {
+			dl.AddRectFilledV(imgui.NewVec2(origin.X, y-2*s), imgui.NewVec2(right, y+barH+2*s), u32(rgba(colSelect, 0.45)), 4*s, 0)
+		} else if i == hover {
+			dl.AddRectFilledV(imgui.NewVec2(origin.X, y-2*s), imgui.NewVec2(right, y+barH+2*s), u32(rgba(colSelect, 0.18)), 4*s, 0)
+		}
 		dl.PushClipRectV(imgui.NewVec2(left, y), imgui.NewVec2(right, y+barH), true)
 		dl.AddRectFilled(imgui.NewVec2(left, y), imgui.NewVec2(right, y+barH), u32(rgba(colInput, 1)))
 		for _, sp := range graph.StatusSpans(v.samples) {
-			alpha := float32(0)
+			x0 := max(xOf(sp.From), left)
+			x1 := min(max(xOf(sp.To), xOf(sp.From)+1), right)
+			if x1 <= x0 {
+				continue
+			}
 			switch sp.Status {
 			case engine.StatusActual:
-				alpha = 0.95
+				dl.AddRectFilled(imgui.NewVec2(x0, y), imgui.NewVec2(x1, y+barH), u32(lineColor(v.line.Color, 0.95)))
 			case engine.StatusPartlyProjected:
-				alpha = 0.55
+				dl.AddRectFilled(imgui.NewVec2(x0, y), imgui.NewVec2(x1, y+barH), u32(lineColor(v.line.Color, 0.55)))
 			case engine.StatusProjected:
-				alpha = 0.25
-			}
-			if alpha > 0 {
-				dl.AddRectFilled(imgui.NewVec2(xOf(sp.From), y), imgui.NewVec2(max(xOf(sp.To), xOf(sp.From)+1), y+barH), u32(lineColor(v.line.Color, alpha)))
+				dl.PushClipRectV(imgui.NewVec2(x0, y), imgui.NewVec2(x1, y+barH), true)
+				col := u32(lineColor(v.line.Color, 0.7))
+				for x := x0 - barH; x < x1; x += 5 * s {
+					dl.AddLineArgs(imgui.NewVec2(x, y+barH), imgui.NewVec2(x+barH, y), col, s)
+				}
+				dl.PopClipRect()
 			}
 		}
 		dl.PopClipRect()
+		label := lineColor(v.line.Color, 1)
+		if selected {
+			label = rgba(colText, 1)
+		}
 		dl.PushClipRectV(imgui.NewVec2(origin.X, y), imgui.NewVec2(left-4*s, y+barH), true)
-		dl.AddTextVec2(imgui.NewVec2(origin.X, y+(barH-imgui.TextLineHeight())/2), u32(lineColor(v.line.Color, 1)), v.name)
+		dl.AddTextVec2(imgui.NewVec2(origin.X+4*s, y+(barH-imgui.TextLineHeight())/2), u32(label), v.name)
 		dl.PopClipRect()
 	}
 	if t := xOf(g.rec.Today); t >= left && t <= right {

@@ -126,11 +126,11 @@ func (g *graphTab) toolbar() {
 	}
 }
 
-// visible returns the visible lines sampled on the grid, in list order.
+// visible returns the drawn lines sampled on the grid, in list order.
 func (g *graphTab) visible(grid graph.Grid) []lineView {
 	var out []lineView
 	for _, ln := range g.lines.All() {
-		if !ln.Visible {
+		if !g.lines.Drawn(ln.ID) {
 			continue
 		}
 		proj, _ := g.lines.Effective(ln.ID)
@@ -139,7 +139,7 @@ func (g *graphTab) visible(grid graph.Grid) []lineView {
 	return out
 }
 
-// fitToData sets the y limits to the visible lines within the visible dates, with a margin.
+// fitToData sets the y limits to the drawn lines within the visible dates, with a margin.
 func (g *graphTab) fitToData(views []lineView) {
 	lo, hi := math.Inf(1), math.Inf(-1)
 	from, to := dateOf(g.xMin), dateOf(g.xMax)

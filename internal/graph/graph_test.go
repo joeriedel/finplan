@@ -630,3 +630,71 @@ func TestInRange(t *testing.T) {
 		}
 	}
 }
+
+func TestSolo(t *testing.T) {
+	l := NewLines("Base")
+	a := l.Add("cash", false, "", ColorCash)
+	b := l.Add("stock", false, "", ColorCash)
+	c := l.Add("bond", false, "", ColorCash)
+	l.SetVisible(c, false)
+	drawn := func() [3]bool { return [3]bool{l.Drawn(a), l.Drawn(b), l.Drawn(c)} }
+	if got := drawn(); got != [3]bool{true, true, false} {
+		t.Errorf("no solo: drawn %v, want Visible", got)
+	}
+	l.ToggleSolo(a)
+	if got := drawn(); got != [3]bool{true, false, false} {
+		t.Errorf("solo a: drawn %v", got)
+	}
+	l.ToggleSolo(c)
+	if got := drawn(); got != [3]bool{true, false, true} || l.SoloCount() != 2 {
+		t.Errorf("solo a and c: drawn %v, count %d; solo wins over Visible=false", got, l.SoloCount())
+	}
+	for _, ln := range l.All() {
+		if want := ln.ID != c; ln.Visible != want {
+			t.Errorf("line %d Visible %v after solo, want untouched", ln.ID, ln.Visible)
+		}
+	}
+	l.ToggleSolo(c)
+	l.ToggleSolo(a)
+	if l.SoloCount() != 0 || drawn() != [3]bool{true, true, false} {
+		t.Errorf("unsoloing all: drawn %v, want the prior visibility", drawn())
+	}
+	l.ToggleSolo(a)
+	l.ToggleSolo(b)
+	l.ClearSolo()
+	if l.SoloCount() != 0 || l.Soloed(a) || drawn() != [3]bool{true, true, false} {
+		t.Errorf("ClearSolo: drawn %v, count %d", drawn(), l.SoloCount())
+	}
+	l.ToggleSolo(99)
+	if l.SoloCount() != 0 {
+		t.Error("soloing an unknown id was recorded")
+	}
+	if l.Drawn(99) {
+		t.Error("unknown id drawn")
+	}
+}
+
+func TestSoloRemove(t *testing.T) {
+	l := NewLines("Base")
+	a := l.Add("cash", false, "", ColorCash)
+	b := l.Add("stock", false, "", ColorCash)
+	l.ToggleSolo(a)
+	l.Remove(a)
+	if l.SoloCount() != 0 || !l.Drawn(b) {
+		t.Errorf("after removing the soloed line: count %d, b drawn %v; want solo cleared", l.SoloCount(), l.Drawn(b))
+	}
+}
+
+func TestLaneAt(t *testing.T) {
+	for _, c := range []struct {
+		y    float32
+		want int
+	}{{9, -1}, {10, 0}, {22, 0}, {23, -1}, {25, -1}, {26, 1}, {38, 1}, {42, 2}, {58, -1}, {200, -1}} {
+		if got := LaneAt(c.y, 10, 16, 12, 3); got != c.want {
+			t.Errorf("LaneAt(%v) = %d, want %d", c.y, got, c.want)
+		}
+	}
+	if LaneAt(5, 0, 16, 12, 0) != -1 || LaneAt(5, 0, 0, 12, 3) != -1 {
+		t.Error("LaneAt with no lanes or no pitch should miss")
+	}
+}

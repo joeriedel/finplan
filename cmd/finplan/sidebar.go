@@ -43,12 +43,18 @@ func (g *graphTab) sidebar() {
 	g.addPopup()
 	imgui.Separator()
 
+	if n := g.lines.SoloCount(); n > 0 {
+		if imgui.SmallButton("Solo: " + strconv.Itoa(n) + " · Clear") {
+			g.lines.ClearSolo()
+			g.fitY = true
+		}
+	}
 	for _, ln := range g.lines.All() {
 		g.row(ln)
 	}
 }
 
-// row draws one line: visibility checkbox, colour swatch, asset name and projection, with pin and
+// row draws one line: visibility checkbox, solo button, colour swatch, asset name and projection, with pin and
 // remove buttons while hovered. Clicking the row selects the line.
 func (g *graphTab) row(ln graph.Line) {
 	s := uiScale
@@ -81,8 +87,42 @@ func (g *graphTab) row(ln graph.Line) {
 		g.lines.SetVisible(ln.ID, vis)
 		g.fitY = true
 	}
+
+	// Solo button: faint while the row is hovered, lit while soloed. Ctrl-click clears every solo.
+	soloed := g.lines.Soloed(ln.ID)
+	sx := p.X + 4*s + fh + 2*s
+	imgui.SetCursorScreenPos(imgui.NewVec2(sx, p.Y+(h-fh)/2))
+	soloClicked := imgui.InvisibleButton("##solo", imgui.NewVec2(fh, fh))
+	soloHot := imgui.IsItemHovered()
+	if soloClicked {
+		if imgui.IsKeyDown(imgui.ModCtrl) {
+			g.lines.ClearSolo()
+		} else {
+			g.lines.ToggleSolo(ln.ID)
+		}
+		g.fitY = true
+	}
+	if soloed || hovered {
+		sc := imgui.NewVec2(sx+fh/2, p.Y+h/2)
+		half := fh * 0.4
+		sa := float32(0.35)
+		if soloHot {
+			sa = 0.8
+		}
+		txtCol := u32(rgba(colText, sa))
+		if soloed {
+			dl.AddRectFilledV(imgui.NewVec2(sc.X-half, sc.Y-half), imgui.NewVec2(sc.X+half, sc.Y+half), u32(rgba(colAccent, 1)), 3*s, 0)
+			txtCol = u32(rgba(colWindow, 1))
+		}
+		ts := imgui.CalcTextSize("S")
+		dl.AddTextVec2(imgui.NewVec2(sc.X-ts.X/2, sc.Y-ts.Y/2), txtCol, "S")
+	}
+	if soloHot {
+		imgui.SetTooltip("Solo: draw only soloed lines (Ctrl-click clears all)")
+	}
+
 	sw := fh * 0.7
-	imgui.SetCursorScreenPos(imgui.NewVec2(p.X+4*s+fh+6*s, p.Y+(h-sw)/2))
+	imgui.SetCursorScreenPos(imgui.NewVec2(p.X+4*s+2*fh+8*s, p.Y+(h-sw)/2))
 	if imgui.ColorButtonV("##swatch", lineColor(ln.Color, 1), imgui.ColorEditFlagsNoTooltip|imgui.ColorEditFlagsNoAlpha, imgui.NewVec2(sw, sw)) {
 		g.editColor = colorFloats(ln.Color)
 		imgui.OpenPopupStrV("recolour", 0)
@@ -95,7 +135,7 @@ func (g *graphTab) row(ln graph.Line) {
 	}
 
 	// Names.
-	textX := p.X + 4*s + fh + 6*s + sw + 8*s
+	textX := p.X + 4*s + 2*fh + 8*s + sw + 8*s
 	dl.AddTextVec2(imgui.NewVec2(textX, p.Y+pad), u32(rgba(colText, 1)), g.assetName(ln.Asset))
 	proj, _ := g.lines.Effective(ln.ID)
 	line2 := imgui.NewVec2(textX, p.Y+pad+imgui.TextLineHeight())

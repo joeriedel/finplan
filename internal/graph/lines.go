@@ -25,6 +25,7 @@ type Lines struct {
 	nextID   LineID
 	switcher string
 	selected LineID
+	solo     map[LineID]bool
 }
 
 // NewLines returns an empty list whose switcher shows the projection.
@@ -64,7 +65,7 @@ func (l *Lines) index(id LineID) int {
 	return -1
 }
 
-// Remove deletes the line, and clears the selection if it was selected.
+// Remove deletes the line, and clears its selection and solo.
 func (l *Lines) Remove(id LineID) {
 	i := l.index(id)
 	if i < 0 {
@@ -74,6 +75,7 @@ func (l *Lines) Remove(id LineID) {
 	if l.selected == id {
 		l.selected = 0
 	}
+	delete(l.solo, id)
 }
 
 // Get returns the line with the id.
@@ -138,3 +140,40 @@ func (l *Lines) Select(id LineID) {
 
 // Selected returns the selected line, if any.
 func (l *Lines) Selected() (LineID, bool) { return l.selected, l.selected != 0 }
+
+// ToggleSolo solos the line, or unsolos it if it is soloed. An unknown id is ignored.
+func (l *Lines) ToggleSolo(id LineID) {
+	if l.index(id) < 0 {
+		return
+	}
+	if l.solo[id] {
+		delete(l.solo, id)
+		return
+	}
+	if l.solo == nil {
+		l.solo = map[LineID]bool{}
+	}
+	l.solo[id] = true
+}
+
+// ClearSolo unsolos every line. Line.Visible is untouched.
+func (l *Lines) ClearSolo() { l.solo = nil }
+
+// Soloed reports whether the line is soloed.
+func (l *Lines) Soloed(id LineID) bool { return l.solo[id] }
+
+// SoloCount returns the number of soloed lines.
+func (l *Lines) SoloCount() int { return len(l.solo) }
+
+// Drawn reports whether the line is drawn. While any line is soloed, exactly the soloed lines are drawn,
+// whatever their Visible; otherwise Visible decides.
+func (l *Lines) Drawn(id LineID) bool {
+	i := l.index(id)
+	if i < 0 {
+		return false
+	}
+	if len(l.solo) > 0 {
+		return l.solo[id]
+	}
+	return l.lines[i].Visible
+}
