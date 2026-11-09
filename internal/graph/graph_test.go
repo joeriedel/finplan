@@ -5,6 +5,7 @@ package graph
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -488,22 +489,128 @@ func TestAxisLabelWorstCase(t *testing.T) {
 	}
 }
 
-func TestClampTag(t *testing.T) {
-	lo, hi, size := Pt{100, 50}, Pt{300, 250}, Pt{40, 16}
-	cases := []struct{ at, want Pt }{
-		{Pt{120, 80}, Pt{120, 80}},
-		{Pt{80, 80}, Pt{100, 80}},
-		{Pt{290, 80}, Pt{260, 80}},
-		{Pt{120, 20}, Pt{120, 50}},
-		{Pt{120, 400}, Pt{120, 234}},
+func TestValueTagPos(t *testing.T) {
+	pos, sz, size := Pt{100, 50}, Pt{200, 200}, Pt{60, 16}
+	cases := []struct{ y, wantY float32 }{
+		{150, 142},
+		{50, 50},
+		{20, 50},
+		{250, 234},
+		{900, 234},
 	}
 	for _, c := range cases {
-		if got := ClampTag(c.at, size, lo, hi); got != c.want {
-			t.Errorf("ClampTag(%v) = %v, want %v", c.at, got, c.want)
+		got := ValueTagPos(c.y, size, pos, sz)
+		if got.X != 40 || got.Y != c.wantY {
+			t.Errorf("ValueTagPos(%v) = %v, want {40 %v}", c.y, got, c.wantY)
 		}
 	}
-	if got := ClampTag(Pt{150, 60}, Pt{500, 16}, lo, hi); got.X != lo.X {
-		t.Errorf("oversized tag at x %v, want %v", got.X, lo.X)
+	if got := ValueTagPos(100, Pt{60, 500}, pos, sz); got.Y != pos.Y {
+		t.Errorf("oversized tag at y %v, want %v", got.Y, pos.Y)
+	}
+}
+
+func TestDateTagPos(t *testing.T) {
+	pos, sz, size := Pt{100, 50}, Pt{200, 200}, Pt{80, 16}
+	cases := []struct{ x, wantX float32 }{
+		{200, 160},
+		{100, 100},
+		{0, 100},
+		{300, 220},
+		{900, 220},
+	}
+	for _, c := range cases {
+		got := DateTagPos(c.x, size, pos, sz)
+		if got.X != c.wantX || got.Y != 250 {
+			t.Errorf("DateTagPos(%v) = %v, want {%v 250}", c.x, got, c.wantX)
+		}
+	}
+	if got := DateTagPos(150, Pt{500, 16}, pos, sz); got.X != pos.X {
+		t.Errorf("oversized tag at x %v, want %v", got.X, pos.X)
+	}
+}
+
+func TestFormatTagMoney(t *testing.T) {
+	cases := []struct {
+		v    float64
+		want string
+	}{
+		{0, "$0"},
+		{1234, "$1,234"},
+		{9999999, "$9,999,999"},
+		{-9999999, "-$9,999,999"},
+		{9999999.4, "$9,999,999"},
+		{9999999.6, "$10.0M"},
+		{10000000, "$10.0M"},
+		{-10000000, "-$10.0M"},
+		{123600000, "$124M"},
+		{99940000, "$99.9M"},
+		{99960000, "$100M"},
+		{999499999, "$999M"},
+		{999500000, "$1.00B"},
+		{999950000, "$1.00B"},
+		{1240000000, "$1.24B"},
+		{999500000000, "$1.00T"},
+		{-3500000000000, "-$3.50T"},
+		{999400000000000, "$999T"},
+		{999500000000000, ">$999T"},
+		{-999500000000000, "<-$999T"},
+		{math.MaxFloat64, ">$999T"},
+		{-math.MaxFloat64, "<-$999T"},
+		{math.Inf(1), ">$999T"},
+		{math.Inf(-1), "<-$999T"},
+		{math.NaN(), "$?"},
+	}
+	for _, c := range cases {
+		got := FormatTagMoney(c.v)
+		if got != c.want {
+			t.Errorf("FormatTagMoney(%v) = %q, want %q", c.v, got, c.want)
+		}
+		if len(got) > len("-$9,999,999") {
+			t.Errorf("FormatTagMoney(%v) = %q is unbounded", c.v, got)
+		}
+	}
+}
+
+func TestTagWidthWorstCase(t *testing.T) {
+	fixed := func(s string) float32 { return float32(len(s)) }
+	if got := TagWidthWorstCase(fixed, 3); got != float32(len("-$9,999,999"))+6 {
+		t.Errorf("fixed font width %v", got)
+	}
+	// A proportional font where 7 is the widest digit and the short forms are narrow.
+	prop := func(s string) float32 {
+		var w float32
+		for _, c := range s {
+			switch c {
+			case '7':
+				w += 10
+			case ',', '.':
+				w += 3
+			case 'M', 'B', 'T':
+				w += 12
+			default:
+				w += 8
+			}
+		}
+		return w
+	}
+	// "-$7,777,777": '-'8 '$'8 seven 7s 70 two commas 6 = 92, plus padding 2*4.
+	if got := TagWidthWorstCase(prop, 4); got != 100 {
+		t.Errorf("proportional width %v, want 100", got)
+	}
+}
+
+func TestGutterLabel(t *testing.T) {
+	measure := func(s string) float32 { return float32(len(s)) }
+	// "-$9,999,999" (11) is wider than the 9-wide axis label, so two spaces are needed even without padding.
+	if got := GutterLabel(measure, 0); got != "  -$888.88M" {
+		t.Errorf("no padding: %q", got)
+	}
+	got := GutterLabel(measure, 5)
+	if want := float32(len("-$9,999,999") + 10); measure(got) != want || strings.TrimLeft(got, " ") != "-$888.88M" {
+		t.Errorf("padded label %q measures %v, want %v", got, measure(got), want)
+	}
+	if got := GutterLabel(func(string) float32 { return 0 }, 5); got != "-$888.88M" {
+		t.Errorf("zero-width font: %q", got)
 	}
 }
 

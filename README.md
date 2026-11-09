@@ -25,7 +25,7 @@ Runs a gofmt check, `go vet` and `go test` in the container.
 
     bin/finplan
 
-Drag to pan and scroll to zoom the plot. The toolbar has a Projection dropdown and range buttons (1Y, 5Y, 10Y, 30Y, All). In the line list, checkboxes toggle a line, "+ Add" adds one, and rows can be pinned to a projection, recoloured and removed. Click a line or row to select it, and hover over the plot for the crosshair, value and date tags, and tooltip.
+Drag to pan and scroll to zoom the plot. The toolbar has a Projection dropdown and range buttons (1Y, 5Y, 10Y, 30Y, All). In the line list, checkboxes toggle a line, "+ Add" adds one, and rows can be pinned to a projection, recoloured and removed. Click a line or row to select it, and hover over the plot for the crosshair and tooltip, with value tags in the y-axis gutter and the date tag below the plot.
 
 ## Fonts
 

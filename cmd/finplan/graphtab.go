@@ -185,15 +185,16 @@ func (g *graphTab) plotArea() {
 		implot.SetupAxisV(implot.AxisY1, "", implot.AxisFlagsNoLabel)
 		implot.SetupAxisLimitsConstraints(implot.AxisX1, float64(model.D(1971, 1, 1))*secondsPerDay, float64(model.D(2200, 1, 1))*secondsPerDay)
 		implot.SetupAxisZoomConstraints(implot.AxisX1, 7*secondsPerDay, 200*365*secondsPerDay)
-		// ImPlot sizes the y gutter to the widest tick label. A last tick far outside the visible range, labelled with
-		// the widest label a tick can have, is never drawn but keeps the gutter the same width however the view moves.
+		// ImPlot sizes the y gutter to the widest tick label. A last tick far outside the visible range, never drawn, is
+		// labelled (space-padded if need be) to be as wide as the widest tick label or value tag, which keeps the gutter
+		// the same width however the view moves and wide enough for the tags drawn in it.
 		ticks := graph.NiceTicks(g.yMin, g.yMax, max(3, int(g.plotSize.Y/(48*uiScale))))
 		labels := make([]string, len(ticks), len(ticks)+1)
 		for i, t := range ticks {
 			labels[i] = graph.FormatMoneyCompact(t)
 		}
 		ticks = append(ticks, g.yMin-1000*max(g.yMax-g.yMin, math.Abs(g.yMin), 1))
-		labels = append(labels, graph.AxisLabelWorstCase(func(s string) float32 { return imgui.CalcTextSize(s).X }))
+		labels = append(labels, graph.GutterLabel(func(s string) float32 { return imgui.CalcTextSize(s).X }, implot.GetStyle().AnnotationPadding().X))
 		implot.SetupAxisTicksdoublePtrV(implot.AxisY1, &ticks[0], int32(len(ticks)), labels, false)
 		condX, condY := implot.CondOnce, implot.CondOnce
 		if g.applyX {
