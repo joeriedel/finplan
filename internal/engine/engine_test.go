@@ -132,6 +132,88 @@ func TestProjectionStartRule(t *testing.T) {
 	}
 }
 
+func TestProjectionSettingModes(t *testing.T) {
+	rec := fixture(t)
+	must(t, rec.AddAsset(&model.Asset{ID: "grp", Members: []model.Member{model.AccountMember("chk")}}))
+	must(t, rec.AddAsset(&model.Asset{ID: "top", Members: []model.Member{model.AssetMember("grp"), model.AccountMember("inv")}}))
+	chk := model.DefaultAssetID("chk")
+	outer, inner := d(2025, time.December, 5), d(2025, time.December, 12)
+	fallback := d(2025, time.December, 20)
+	for name, settings := range map[string][]model.AssetSetting{
+		"default":        {{Asset: "top", Start: model.Ptr(outer), OverrideHistory: model.Ptr(false)}, {Asset: "grp", Start: model.Ptr(inner), OverrideHistory: model.Ptr(true)}},
+		"override":       {{Asset: "top", Start: model.Ptr(outer), OverrideHistory: model.Ptr(false), Mode: model.ModeOverride}, {Asset: "grp", Start: model.Ptr(inner), OverrideHistory: model.Ptr(true)}},
+		"nested":         {{Asset: "top", Start: model.Ptr(outer), OverrideHistory: model.Ptr(true), Mode: model.ModeOverride}, {Asset: "grp", Start: model.Ptr(inner), OverrideHistory: model.Ptr(false), Mode: model.ModeOverride}, {Asset: chk, Start: model.Ptr(inner), Mode: model.ModeOverride}},
+		"inner override": {{Asset: "top", Start: model.Ptr(outer), OverrideHistory: model.Ptr(false)}, {Asset: "grp", Start: model.Ptr(inner), OverrideHistory: model.Ptr(true), Mode: model.ModeOverride}},
+	} {
+		must(t, rec.AddProjection(&model.Projection{Name: name, Start: model.Ptr(fallback), AssetSettings: settings}))
+	}
+	cases := []struct {
+		proj     string
+		chkStart model.Date
+		chkOv    bool
+		invStart model.Date
+	}{
+		{"default", inner, true, outer},
+		{"override", outer, false, outer},
+		{"nested", outer, true, outer},
+		{"inner override", inner, true, outer},
+	}
+	for _, c := range cases {
+		starts, err := Starts(rec, c.proj, "top")
+		must(t, err)
+		got := map[model.AccountID]AccountStart{}
+		for _, s := range starts {
+			got[s.Account] = s
+		}
+		if got["chk"].ProjectionStart != c.chkStart || got["chk"].OverrideHistory != c.chkOv || got["inv"].ProjectionStart != c.invStart {
+			t.Errorf("%s: got chk %+v inv %+v", c.proj, got["chk"], got["inv"])
+		}
+	}
+	// A setting no asset covers an account for leaves the projection-wide value in force.
+	must(t, rec.AddProjection(&model.Projection{Name: "partial", Start: model.Ptr(fallback), AssetSettings: []model.AssetSetting{
+		{Asset: "grp", Start: model.Ptr(inner), Mode: model.ModeOverride},
+	}}))
+	starts, err := Starts(rec, "partial", "top")
+	must(t, err)
+	for _, s := range starts {
+		if s.Account == "inv" && s.ProjectionStart != fallback {
+			t.Errorf("projection-wide fallback: got %+v", s)
+		}
+		if s.Account == "chk" && s.ProjectionStart != inner {
+			t.Errorf("per-asset start: got %+v", s)
+		}
+	}
+}
+
+func TestProjectionGrowthModes(t *testing.T) {
+	rec := fixture(t)
+	must(t, rec.AddAsset(&model.Asset{ID: "grp", Members: []model.Member{model.AccountMember("inv")}}))
+	must(t, rec.AddAsset(&model.Asset{ID: "top", Members: []model.Member{model.AssetMember("grp")}}))
+	mod := func(kind model.ObjectKind, id string, rate float64, mode model.Mode) model.Modification {
+		return model.Modification{Target: model.ObjectRef{Kind: kind, ID: id}, Property: model.PropGrowth, Values: model.Constant(rate), Mode: mode}
+	}
+	add := func(name string, mods ...model.Modification) {
+		must(t, rec.AddProjection(&model.Projection{Name: name, Mods: mods}))
+	}
+	add("top only", mod(model.KindAsset, "top", 0.20, model.ModeDefault))
+	add("inner only", mod(model.KindAccount, "inv", 0.01, model.ModeDefault))
+	add("default", mod(model.KindAsset, "top", 0.20, model.ModeDefault), mod(model.KindAccount, "inv", 0.01, model.ModeDefault))
+	add("override", mod(model.KindAsset, "top", 0.20, model.ModeOverride), mod(model.KindAccount, "inv", 0.01, model.ModeDefault))
+	add("nested overrides", mod(model.KindAsset, "top", 0.20, model.ModeOverride), mod(model.KindAsset, "grp", 0.01, model.ModeOverride))
+	add("inner override", mod(model.KindAsset, "top", 0.20, model.ModeDefault), mod(model.KindAsset, "grp", 0.01, model.ModeOverride))
+	date := d(2026, time.February, 1)
+	amt := func(proj string) float64 { return sample(t, rec, proj, "top", date).Amount }
+	hi, lo := amt("top only"), amt("inner only")
+	if !(hi > lo) {
+		t.Fatalf("fixture: %v should exceed %v", hi, lo)
+	}
+	for proj, want := range map[string]float64{"default": lo, "override": hi, "nested overrides": hi, "inner override": lo} {
+		if got := amt(proj); !near(got, want) {
+			t.Errorf("%s: got %v, want %v", proj, got, want)
+		}
+	}
+}
+
 func TestOverrideHistoryIgnoresLaterRealData(t *testing.T) {
 	rec := fixture(t)
 	must(t, rec.AddProjection(&model.Projection{Name: "back", Start: model.Ptr(d(2025, time.December, 10)), OverrideHistory: model.Ptr(true)}))
@@ -385,7 +467,7 @@ func TestGrowthPrecedence(t *testing.T) {
 	must(t, rec.AddProjection(&model.Projection{Name: "low", Mods: []model.Modification{
 		{Target: model.ObjectRef{Kind: model.KindAccount, ID: "inv"}, Property: model.PropGrowth, Values: model.Constant(0)},
 	}}))
-	// The projection is outermost: it beats the wrapper, which is outside the account's default asset.
+	// The projection layer beats the wrapper's own Params.
 	low := sample(t, rec, "low", "wrap", date).Amount
 	if !(low < stated) {
 		t.Errorf("projection growth 0: %v should be below %v", low, stated)

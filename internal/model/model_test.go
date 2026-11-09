@@ -239,15 +239,36 @@ func TestPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := func(asset AssetID, v float64) Setting[float64] { return Setting[float64]{asset, v} }
-
-	// The outermost asset wins, whatever order the settings are listed in.
-	got := Precedence(res, "a", "growth", []Setting[float64]{set("inner", 1), set("outer", 2), set(DefaultAssetID("a"), 3)})
-	if !got.Found || got.Value != 2 || got.From != "outer" || got.Conflict != nil {
-		t.Errorf("outer wins: got %+v", got)
+	set := func(asset AssetID, v float64) Setting[float64] { return Setting[float64]{Asset: asset, Value: v} }
+	over := func(asset AssetID, v float64) Setting[float64] {
+		return Setting[float64]{Asset: asset, Value: v, Mode: ModeOverride}
 	}
-	// An earlier layer (the projection) beats every later layer.
-	got = Precedence(res, "a", "growth", []Setting[float64]{set("inner", 9)}, []Setting[float64]{set("outer", 2)})
+
+	// Among defaults the most specific wins, whatever order the settings are listed in.
+	got := Precedence(res, "a", "growth", []Setting[float64]{set("inner", 1), set("outer", 2), set(DefaultAssetID("a"), 3)})
+	if !got.Found || got.Value != 3 || got.From != DefaultAssetID("a") || got.Conflict != nil {
+		t.Errorf("most specific default wins: got %+v", got)
+	}
+	got = Precedence(res, "a", "growth", []Setting[float64]{set("outer", 2), set("inner", 1)})
+	if got.Value != 1 || got.From != "inner" {
+		t.Errorf("inner default beats outer default: got %+v", got)
+	}
+	// An override beats defaults nested inside it; the outermost override beats inner overrides too.
+	got = Precedence(res, "a", "growth", []Setting[float64]{over("outer", 2), set("inner", 1), set(DefaultAssetID("a"), 3)})
+	if got.Value != 2 || got.From != "outer" {
+		t.Errorf("override beats nested defaults: got %+v", got)
+	}
+	got = Precedence(res, "a", "growth", []Setting[float64]{over("inner", 1), over("outer", 2), over(DefaultAssetID("a"), 3)})
+	if got.Value != 2 || got.From != "outer" || got.Conflict != nil {
+		t.Errorf("outermost override wins: got %+v", got)
+	}
+	// An inner override beats an outer default.
+	got = Precedence(res, "a", "growth", []Setting[float64]{set("outer", 2), over("inner", 1)})
+	if got.Value != 1 || got.From != "inner" {
+		t.Errorf("inner override beats outer default: got %+v", got)
+	}
+	// An earlier layer (the projection) beats every later layer, even one marked override.
+	got = Precedence(res, "a", "growth", []Setting[float64]{set("inner", 9)}, []Setting[float64]{over("outer", 2)})
 	if got.Value != 9 || got.From != "inner" {
 		t.Errorf("layer order: got %+v", got)
 	}
@@ -276,7 +297,7 @@ func TestSiblingConflictIsReported(t *testing.T) {
 	if len(res.Overlaps) != 1 {
 		t.Fatalf("overlaps: got %v", res.Overlaps)
 	}
-	layer := []Setting[Schedule]{{"left", Constant(0.04)}, {"right", Constant(0.05)}}
+	layer := []Setting[Schedule]{{Asset: "left", Value: Constant(0.04)}, {Asset: "right", Value: Constant(0.05)}}
 	got := Precedence(res, "shared", "growth", layer)
 	if got.Conflict == nil {
 		t.Fatal("no conflict reported")
@@ -292,14 +313,18 @@ func TestSiblingConflictIsReported(t *testing.T) {
 	if got := Precedence(res, "solo", "growth", layer); got.Conflict != nil || got.From != "left" {
 		t.Errorf("solo: got %+v", got)
 	}
-	same := []Setting[Schedule]{{"left", Constant(0.04)}, {"right", Constant(0.04)}}
+	same := []Setting[Schedule]{{Asset: "left", Value: Constant(0.04)}, {Asset: "right", Value: Constant(0.04)}}
 	if got := Precedence(res, "shared", "growth", same); got.Conflict != nil {
 		t.Errorf("equal values: got conflict %+v", got.Conflict)
 	}
-	// Setting the value at an outer level settles it.
-	settled := append(layer, Setting[Schedule]{"top", Constant(0.07)})
+	// An override at an outer level settles it; a default there does not, as the siblings are more specific.
+	settled := append(layer, Setting[Schedule]{Asset: "top", Value: Constant(0.07), Mode: ModeOverride})
 	if got := Precedence(res, "shared", "growth", settled); got.Conflict != nil || got.From != "top" {
 		t.Errorf("settled: got %+v", got)
+	}
+	unsettled := append(layer[:2:2], Setting[Schedule]{Asset: "top", Value: Constant(0.07)})
+	if got := Precedence(res, "shared", "growth", unsettled); got.Conflict == nil || got.From != "left" {
+		t.Errorf("outer default: got %+v", got)
 	}
 }
 

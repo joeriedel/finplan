@@ -75,9 +75,16 @@ The check runs whenever an asset is used, not only when it is edited, because ed
 
 Every behavioral property is a parameter: growth rate, allocation, contribution rules, withdrawal order, and so on. Every parameter is a **schedule over time**: piecewise values by date range ("4% until 2029, then 6% until 2035, then 2%"). A constant is a schedule with one segment.
 
-An asset can override the parameters of anything it wraps. One precedence rule applies: **the setting closest to the outside wins**, down to the account's own default. A projection is the outermost layer, so its settings beat every asset's. A variant such as "all cash at 5%" is a new asset wrapping "all cash" and setting 5%, which leaves "all cash" untouched everywhere else.
+There are two layers of settings, and the projection layer as a whole beats the asset layer.
 
-When two sibling members of the same asset set different values for the same shared account, nothing decides between them; that is reported as a conflict and settled by setting the value at an outer level.
+- **Asset definitions** (the layer below): an asset can override the parameters of anything it wraps, and the setting closest to the outside wins, down to the account's own default. A variant such as "all cash at 5%" is a new asset wrapping "all cash" and setting 5%, which leaves "all cash" untouched everywhere else.
+- **A projection** can give settings to assets (per-asset start date, `override_history`, parameter modifications). Each carries a **mode**, `default` unless set; a projection stored without a mode behaves as default.
+  - **default**: the most specific setting wins, the one closest to the account. "All cash 7%" plus "Checking 1%", both default, gives Checking 1% and every other cash account 7%.
+  - **override**: the outermost override wins, beating every default and every override nested inside it, for the accounts under it. Defaults matter only where no override covers an account. "All cash 7%" as an override gives Checking 7%, whatever is set on Checking.
+
+Per-asset start and `override_history` are projection settings, never properties of an asset definition.
+
+When two sibling members of the same asset set different values in the same mode for the same shared account, and neither wraps the other, nothing decides between them; that is reported as a conflict (the earlier-added sibling's value is used meanwhile) and settled by setting the value at an outer level.
 
 The engine still computes each account individually, because flows land on accounts and tax treatment differs per account; the assets supply the resolved parameters.
 
@@ -127,7 +134,7 @@ A plotted line is an asset under a projection, or under reality. A report is an 
 
 ### Projection start
 
-A projection has a global **projection start date**. Each asset in it may be given its own start date, and its own `override_history` setting. The engine applies the rule to each account, using the start date and `override_history` resolved from the assets that wrap it (the outer setting wins):
+A projection has a global **projection start date**. Each asset in it may be given its own start date, and its own `override_history` setting. The engine applies the rule to each account, using the start date and `override_history` resolved from the projection's settings on the assets that wrap it (by mode, see Parameters and precedence); the projection-wide values apply only where no per-asset setting covers the account:
 
     if override_history:
         start = min(last_actual_data_date, projection_start_date)
@@ -203,9 +210,9 @@ Details the build settled, and the placeholders it uses until the real rules arr
 
 **Sample status.** Each sample is actual, projected, partly projected (an aggregate with some members projected) or default (no underlying account has data).
 
-**Projection start.** For both the per-asset start and `override_history`, the outermost asset that sets one wins; the projection-wide value applies only where no asset sets one.
+**Projection start.** For both the per-asset start and `override_history`, the projection's per-asset settings are resolved by mode (most specific default, or outermost override); the projection-wide value applies only where no per-asset setting covers the account.
 
-**Precedence.** The projection layer is consulted first, then the assets' own parameters; within a layer the outermost asset wins. Overlapping siblings that differ are reported as a conflict, and the earlier-added sibling's value is used.
+**Precedence.** The projection layer is consulted first, then the assets' own parameters. Within a layer, the outermost override wins if any covers the account, otherwise the most specific default; the asset layer marks its settings as overrides, so there the outermost asset wins. A `Mode` (default is the zero value) is carried by `AssetSetting` and by `Modification`. Overlapping siblings that differ are reported as a conflict, and the earlier-added sibling's value is used.
 
 **Overlap.** The later-added member (by a record-wide sequence) is invalid as a whole, rule members included, is named with its duplicate and is left out of sums. It is checked on every resolve. A rule matching no accounts contributes 0; an empty rule matches every account. Default asset ids are `acct:<id>`.
 

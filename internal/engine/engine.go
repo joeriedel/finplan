@@ -172,10 +172,10 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 		}
 		for _, s := range p.AssetSettings {
 			if s.Start != nil {
-				starts = append(starts, model.Setting[model.Date]{Asset: s.Asset, Value: *s.Start})
+				starts = append(starts, model.Setting[model.Date]{Asset: s.Asset, Value: *s.Start, Mode: s.Mode})
 			}
 			if s.OverrideHistory != nil {
-				overrides = append(overrides, model.Setting[bool]{Asset: s.Asset, Value: *s.OverrideHistory})
+				overrides = append(overrides, model.Setting[bool]{Asset: s.Asset, Value: *s.OverrideHistory, Mode: s.Mode})
 			}
 		}
 		for i, m := range p.Mods {
@@ -212,7 +212,7 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 				case !found:
 					skip("target not found")
 				case m.Property == model.PropGrowth:
-					growth = append(growth, model.Setting[model.Schedule]{Asset: asset, Value: m.Values})
+					growth = append(growth, model.Setting[model.Schedule]{Asset: asset, Value: m.Values, Mode: m.Mode})
 				default:
 					skip("unsupported property")
 				}
@@ -228,6 +228,8 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 		}
 	}
 
+	// Asset definitions keep outer-wins (a wrapper's Params beat what it wraps), which is what
+	// ModeOverride gives.
 	var assetGrowth []model.Setting[model.Schedule]
 	scope := slices.Clone(res.Scope())
 	for _, id := range res.Accounts {
@@ -235,7 +237,7 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 	}
 	for _, id := range scope {
 		if s, ok := rec.Asset(id).Params[model.PropGrowth]; ok {
-			assetGrowth = append(assetGrowth, model.Setting[model.Schedule]{Asset: id, Value: s})
+			assetGrowth = append(assetGrowth, model.Setting[model.Schedule]{Asset: id, Value: s, Mode: model.ModeOverride})
 		}
 	}
 

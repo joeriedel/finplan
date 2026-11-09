@@ -332,10 +332,12 @@ func (res *Resolution) LastActual() (Date, bool) {
 type Setting[T any] struct {
 	Asset AssetID
 	Value T
+	Mode  Mode
 }
 
 // Conflict reports sibling settings that disagree for one account: none wraps another, so nothing
-// decides between them. Set the value at an outer level to settle it. Chosen is the one used meanwhile.
+// decides between them. Set the value on an asset that wraps them, as an override, to settle
+// it. Chosen is the one used meanwhile.
 type Conflict struct {
 	Name    string
 	Account AccountID
@@ -354,10 +356,13 @@ type Resolved[T any] struct {
 // Precedence picks the value of parameter name for an account from layers of settings, outermost layer
 // first (a projection's settings, then assets' own). Only settings on assets that wrap the account
 // under the resolved root count, through any member: an overlapping member is left out of sums but
-// its settings are still seen, so they are reported rather than silently ignored. Within a layer the setting on the outermost asset wins; when several
-// assets qualify and none wraps another, differing values are reported as a Conflict. Several settings
-// on one asset in a layer: the last wins. An asset's default asset (see DefaultAssetID) is the
-// innermost asset of its account.
+// its settings are still seen, so they are reported rather than silently ignored. Within a layer, if
+// any covering setting is an override, the outermost override wins, beating every default and every
+// nested override; otherwise the most specific default wins (the one on the innermost asset). When
+// several assets qualify and none wraps another, differing values are reported as a Conflict. Several
+// settings on one asset in a layer: the last wins. An asset's default asset (see DefaultAssetID) is
+// the innermost asset of its account. A layer where the outermost asset should win simply marks its
+// settings ModeOverride.
 func Precedence[T any](res *Resolution, acct AccountID, name string, layers ...[]Setting[T]) Resolved[T] {
 	for _, layer := range layers {
 		var cands []Setting[T]
@@ -371,9 +376,19 @@ func Precedence[T any](res *Resolution, acct AccountID, name string, layers ...[
 				cands = append(cands, s)
 			}
 		}
+		// Overrides, if any, are the pool and the outermost wins; otherwise the defaults are and the innermost wins.
+		pool := slices.DeleteFunc(slices.Clone(cands), func(c Setting[T]) bool { return c.Mode != ModeOverride })
+		outer := len(pool) > 0
+		if !outer {
+			pool = cands
+		}
 		var top []Setting[T]
-		for _, c := range cands {
-			if !slices.ContainsFunc(cands, func(o Setting[T]) bool { return res.wraps(o.Asset, c.Asset) }) {
+		for _, c := range pool {
+			if outer {
+				if !slices.ContainsFunc(pool, func(o Setting[T]) bool { return res.wraps(o.Asset, c.Asset) }) {
+					top = append(top, c)
+				}
+			} else if !slices.ContainsFunc(pool, func(o Setting[T]) bool { return res.wraps(c.Asset, o.Asset) }) {
 				top = append(top, c)
 			}
 		}
