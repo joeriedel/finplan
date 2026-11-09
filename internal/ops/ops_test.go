@@ -602,6 +602,16 @@ func TestNoNewDangling(t *testing.T) {
 	if _, err := RemoveMod(st, rec, "Child", 1, Options{DryRun: true}); err != nil {
 		t.Errorf("remove dangling: %v", err)
 	}
+	// Renaming or cloning a projection with a mod that dangled before is fine, and so is doing so to its child.
+	if res, err := NewProjection(st, rec, "Grandchild", "Child", Options{}); err != nil {
+		t.Errorf("new child: %v", err)
+	} else if _, err := RenameProjection(st, res.Record, "Child", "Kid", Options{DryRun: true}); err != nil {
+		t.Errorf("rename with a dangling mod: %v", err)
+	} else if _, err := CloneProjection(st, res.Record, "Child", "Copy", Options{DryRun: true}); err != nil {
+		t.Errorf("clone with a dangling mod: %v", err)
+	} else if _, err := CloneProjection(st, res.Record, "Grandchild", "Copy", Options{DryRun: true}); err != nil {
+		t.Errorf("clone a child of a dangling projection: %v", err)
+	}
 	// Moving an amount mod before its add_item in the same projection is refused.
 	res, err := AddItem(st, rec, "Child", model.BudgetItem{Name: "Gift", Kind: model.ItemIncome, Amount: 1, Account: demodata.Checking, Recurrence: model.Recurrence{Kind: model.OneTime, Anchor: model.D(2028, 1, 1)}}, Options{})
 	if err != nil {
@@ -742,4 +752,22 @@ func TestEndItem(t *testing.T) {
 	refused(t, ErrUnknownTarget, func(st *store.Store, rec *model.Record) (*Result, error) {
 		return EndItem(st, rec, demodata.ProjNewJob, "nope", from, Options{})
 	})
+}
+
+func TestCheckItemNeedsDateAndValidDay(t *testing.T) {
+	st, rec := seed(t)
+	base := model.BudgetItem{Name: "Gift", Kind: model.ItemIncome, Amount: 1, Account: demodata.Checking}
+	for _, r := range []model.Recurrence{
+		{Kind: model.OneTime},
+		{Kind: model.Biweekly},
+		{Kind: model.Annual, Month: 13, Day: 1},
+		{Kind: model.Annual, Month: 2, Day: 30},
+		{Kind: model.Monthly, Day: 32},
+	} {
+		it := base
+		it.Recurrence = r
+		if _, err := AddItem(st, rec, demodata.ProjBase, it, Options{DryRun: true}); !errors.Is(err, ErrInvalidValue) {
+			t.Errorf("recurrence %+v: %v", r, err)
+		}
+	}
 }

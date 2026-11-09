@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/joeriedel/finplan/internal/model"
@@ -44,6 +45,9 @@ func checkItem(rec *model.Record, it model.BudgetItem) (model.BudgetItem, error)
 	start := it.Start
 	switch r.Kind {
 	case model.OneTime, model.Biweekly:
+		if r.Anchor == 0 {
+			return it, refuse(ErrInvalidValue, "a %s item needs a date", r.Kind)
+		}
 		if start == nil {
 			start = &r.Anchor
 		}
@@ -52,8 +56,8 @@ func checkItem(rec *model.Record, it model.BudgetItem) (model.BudgetItem, error)
 			return it, refuse(ErrInvalidValue, "the day of the month %d must be from 1 to 31", r.Day)
 		}
 	case model.Annual:
-		if r.Month < 1 || r.Month > 12 || r.Day < 1 || r.Day > 31 {
-			return it, refuse(ErrInvalidValue, "an annual item needs a month from 1 to 12 and a day from 1 to 31")
+		if r.Month < 1 || r.Month > 12 || r.Day < 1 || r.Day > time.Date(2024, time.Month(r.Month)+1, 0, 0, 0, 0, 0, time.UTC).Day() {
+			return it, refuse(ErrInvalidValue, "an annual item needs a month from 1 to 12 and a day in that month")
 		}
 	default:
 		return it, refuse(ErrInvalidValue, "the recurrence %q must be one-time, monthly, biweekly or annual", r.Kind)

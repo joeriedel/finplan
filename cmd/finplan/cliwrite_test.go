@@ -467,6 +467,8 @@ func TestCLIRefusedEditsLeaveFileAlone(t *testing.T) {
 	write(t, path, "", "mod", "add", "Child", "--target", "item:early-401k-withdrawal", "--property", "amount", "--value", "5")
 	refusedWrite(t, path, "", 1, "unknown_target", "mod", "remove", "Withdraw $100k", "0")
 	refusedWrite(t, path, "", 1, "unknown_target", "projection", "set-parent", "Child", "Base")
+	// A one-time item needs its date.
+	refusedWrite(t, path, `{"name":"Gift","kind":"income","amount":500,"account":"checking","recurrence":{"kind":"one-time"}}`, 1, "invalid", "item", "add", "Base")
 }
 
 func TestCLIWriteHelp(t *testing.T) {

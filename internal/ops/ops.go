@@ -115,7 +115,7 @@ func edit(st *store.Store, rec *model.Record, o Options, change func(next *model
 	if reflect.DeepEqual(rec.Projections, next.Projections) {
 		return nil, ErrNoChange
 	}
-	if err := checkNoNewDangling(rec, next); err != nil {
+	if err := checkNoNewDangling(rec, next, res.Rename); err != nil {
 		return nil, err
 	}
 	return commit(st, next, res, o)

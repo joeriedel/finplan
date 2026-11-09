@@ -162,11 +162,18 @@ func danglingMods(rec *model.Record) map[[3]string]int {
 	return out
 }
 
-// checkNoNewDangling refuses an edit after which a modification, in the edited projection or one building on it, points at a budget item that no longer exists where it is, though it did before. Modifications that already pointed at nothing do not block an edit.
-func checkNoNewDangling(before, after *model.Record) error {
+// checkNoNewDangling refuses an edit after which a modification, in the edited projection or one building on it, points at a budget item that no longer exists where it is, though it did before. Modifications that already pointed at nothing do not block an edit. A renamed projection is compared under its old name; a projection the edit added copies another and has nothing to compare with.
+func checkNoNewDangling(before, after *model.Record, rename *Rename) error {
 	was := danglingMods(before)
 	for k, n := range danglingMods(after) {
-		if n > was[k] {
+		name := k[0]
+		if rename != nil && name == rename.To {
+			name = rename.From
+		}
+		if before.Projection(name) == nil {
+			continue
+		}
+		if n > was[[3]string{name, k[1], k[2]}] {
 			return refuse(ErrUnknownTarget, "projection %q would have a modification of budget item %q that does not resolve", k[0], k[1])
 		}
 	}
