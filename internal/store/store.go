@@ -33,6 +33,8 @@ var (
 	ErrOldSchema = errors.New("store: database schema is older than this build")
 	// ErrUnknownFormat is returned for a stored document whose format version this build cannot read.
 	ErrUnknownFormat = errors.New("store: unknown document format version")
+	// ErrInvalidEntry is returned by Correct for values that the entry cannot have.
+	ErrInvalidEntry = errors.New("store: invalid entry values")
 	// ErrNotFound is returned for an entry or preset that does not exist.
 	ErrNotFound = errors.New("store: not found")
 )

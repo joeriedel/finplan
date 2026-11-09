@@ -36,6 +36,8 @@ type Entry struct {
 	Account model.AccountID
 	Kind    EntryKind
 	Values
+	// Void is set for a voided entry, which only Entry returns.
+	Void bool
 }
 
 // Revision is one version of an entry: the original, then each correction. Note is empty for the original.
@@ -53,7 +55,7 @@ type querier interface {
 
 const currentEntries = `SELECT e.id, e.account, e.kind,
 		COALESCE(c.date, e.date), COALESCE(c.amount, e.amount), COALESCE(c.tx_kind, e.tx_kind),
-		COALESCE(c.counter, e.counter), COALESCE(c.memo, e.memo)
+		COALESCE(c.counter, e.counter), COALESCE(c.memo, e.memo), COALESCE(c.void, 0)
 	FROM entries e LEFT JOIN corrections c ON c.id = (SELECT MAX(id) FROM corrections WHERE entry = e.id)`
 
 // queryEntries returns the entries matching the condition (an SQL expression, which may be empty), in id
@@ -80,7 +82,7 @@ func queryEntries(q querier, withVoided bool, cond string, args ...any) ([]Entry
 	var out []Entry
 	for rows.Next() {
 		var e Entry
-		if err := rows.Scan(&e.ID, &e.Account, &e.Kind, &e.Date, &e.Amount, &e.TxKind, &e.Counter, &e.Memo); err != nil {
+		if err := rows.Scan(&e.ID, &e.Account, &e.Kind, &e.Date, &e.Amount, &e.TxKind, &e.Counter, &e.Memo, &e.Void); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -94,15 +96,48 @@ func (s *Store) Entries(account model.AccountID) ([]Entry, error) {
 	return queryEntries(s.db, false, `e.account = ?`, string(account))
 }
 
-// Correct stores a correction of the entry: from now on the entry has the new values. The original
-// and earlier corrections stay stored. A snapshot correction that would give the account two current
-// snapshots on one date is rejected. Correcting a voided entry restores it.
-func (s *Store) Correct(id int64, v Values, note string) error {
+// withTx runs f in a transaction, which is committed if f succeeds and commit is set, and rolled back otherwise.
+func (s *Store) withTx(commit bool, f func(tx *sql.Tx) error) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := f(tx); err != nil {
+		return err
+	}
+	if !commit {
+		return nil
+	}
+	return tx.Commit()
+}
+
+// Entry returns the entry with its current values, a voided entry included (Void is set). It returns ErrNotFound for an unknown id.
+func (s *Store) Entry(id int64) (Entry, error) {
+	es, err := queryEntries(s.db, true, `e.id = ?`, id)
+	if err != nil {
+		return Entry{}, err
+	}
+	if len(es) == 0 {
+		return Entry{}, fmt.Errorf("%w: entry %d", ErrNotFound, id)
+	}
+	return es[0], nil
+}
+
+// Correct stores a correction of the entry: from now on the entry has the new values. The original
+// and earlier corrections stay stored. A snapshot correction that would give the account two current
+// snapshots on one date, a snapshot correction that sets a kind, counter or memo, and a transfer correction without a counter account are rejected with an error matching ErrInvalidEntry.
+// Correcting a voided entry restores it.
+func (s *Store) Correct(id int64, v Values, note string) error {
+	return s.withTx(true, func(tx *sql.Tx) error { return s.correct(tx, id, v, note) })
+}
+
+// TryCorrect runs Correct, with the same checks, in a transaction that is rolled back: it reports what Correct would, and stores nothing.
+func (s *Store) TryCorrect(id int64, v Values, note string) error {
+	return s.withTx(false, func(tx *sql.Tx) error { return s.correct(tx, id, v, note) })
+}
+
+func (s *Store) correct(tx *sql.Tx, id int64, v Values, note string) error {
 	es, err := queryEntries(tx, true, `e.id = ?`, id)
 	if err != nil {
 		return err
@@ -114,7 +149,7 @@ func (s *Store) Correct(id int64, v Values, note string) error {
 	switch e.Kind {
 	case KindSnapshot:
 		if v.TxKind != "" || v.Counter != "" || v.Memo != "" {
-			return fmt.Errorf("store: entry %d is a snapshot: kind, counter and memo must be empty", id)
+			return fmt.Errorf("%w: entry %d is a snapshot: kind, counter and memo must be empty", ErrInvalidEntry, id)
 		}
 		others, err := queryEntries(tx, false, `e.account = ?`, string(e.Account))
 		if err != nil {
@@ -122,31 +157,32 @@ func (s *Store) Correct(id int64, v Values, note string) error {
 		}
 		for _, o := range others {
 			if o.ID != id && o.Kind == KindSnapshot && o.Date == v.Date {
-				return fmt.Errorf("store: account %q already has a snapshot on %v", e.Account, v.Date)
+				return fmt.Errorf("%w: account %q already has a snapshot on %v", ErrInvalidEntry, e.Account, v.Date)
 			}
 		}
 	case KindTransaction:
 		if v.TxKind == model.TxTransfer && v.Counter == "" {
-			return fmt.Errorf("store: entry %d: a transfer names no counter account", id)
+			return fmt.Errorf("%w: entry %d: a transfer names no counter account", ErrInvalidEntry, id)
 		}
 	}
 	_, err = tx.Exec(`INSERT INTO corrections (entry, date, amount, tx_kind, counter, memo, note, made_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, int32(v.Date), v.Amount, string(v.TxKind), string(v.Counter), v.Memo, note, s.now().UnixNano())
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
+	return err
 }
 
 // Void stores a correction that takes the entry out of the record: Load and Entries leave it out, while
 // the entry and its history stay stored. A later Correct restores it.
 func (s *Store) Void(id int64, note string) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	return s.withTx(true, func(tx *sql.Tx) error { return s.void(tx, id, note) })
+}
+
+// TryVoid runs Void, with the same checks, in a transaction that is rolled back.
+func (s *Store) TryVoid(id int64, note string) error {
+	return s.withTx(false, func(tx *sql.Tx) error { return s.void(tx, id, note) })
+}
+
+func (s *Store) void(tx *sql.Tx, id int64, note string) error {
 	es, err := queryEntries(tx, true, `e.id = ?`, id)
 	if err != nil {
 		return err
@@ -158,10 +194,7 @@ func (s *Store) Void(id int64, note string) error {
 	_, err = tx.Exec(`INSERT INTO corrections (entry, date, amount, tx_kind, counter, memo, note, void, made_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
 		id, int32(v.Date), v.Amount, string(v.TxKind), string(v.Counter), v.Memo, note, s.now().UnixNano())
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
+	return err
 }
 
 // History returns the entry's original values followed by each correction, including voids, in the order made.

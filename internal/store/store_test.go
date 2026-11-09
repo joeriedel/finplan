@@ -859,3 +859,55 @@ func TestOpenReadOnlyRefusals(t *testing.T) {
 		}
 	}
 }
+
+func TestTryCorrectAndTryVoidStoreNothing(t *testing.T) {
+	s, _ := openTemp(t)
+	mustSave(t, s, demodata.Family())
+	snaps, err := s.Entries(demodata.Home)
+	if err != nil || len(snaps) != 3 {
+		t.Fatalf("home entries: %v, %v", snaps, err)
+	}
+	sn := snaps[1]
+	if err := s.TryCorrect(sn.ID, Values{Date: sn.Date, Amount: 1}, "n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TryVoid(sn.ID, "n"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Entry(sn.ID)
+	if err != nil || got != sn {
+		t.Errorf("after the tries the entry is %+v, %v; was %+v", got, err, sn)
+	}
+	revs, err := s.History(sn.ID)
+	if err != nil || len(revs) != 1 {
+		t.Errorf("history after the tries: %v, %v", revs, err)
+	}
+
+	// The tries judge as the real calls do.
+	other := snaps[0]
+	bad := Values{Date: other.Date, Amount: 1}
+	for name, err := range map[string]error{
+		"try":  s.TryCorrect(sn.ID, bad, ""),
+		"real": s.Correct(sn.ID, bad, ""),
+	} {
+		if !errors.Is(err, ErrInvalidEntry) {
+			t.Errorf("%s correction onto a used date: %v", name, err)
+		}
+	}
+	if err := s.TryCorrect(9999, Values{}, ""); !errors.Is(err, ErrNotFound) {
+		t.Errorf("try on an unknown entry: %v", err)
+	}
+	if err := s.TryVoid(9999, ""); !errors.Is(err, ErrNotFound) {
+		t.Errorf("try void on an unknown entry: %v", err)
+	}
+
+	if err := s.Void(sn.ID, "gone"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Entry(sn.ID); err != nil || !got.Void {
+		t.Errorf("voided entry: %+v, %v", got, err)
+	}
+	if _, err := s.Entry(9999); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown entry: %v", err)
+	}
+}

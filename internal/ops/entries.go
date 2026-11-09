@@ -1,0 +1,178 @@
+// Copyright (c) 2026 Joseph Riedel
+// SPDX-License-Identifier: MIT
+
+package ops
+
+import (
+	"errors"
+	"fmt"
+	"slices"
+
+	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/store"
+)
+
+// withID finds the id the store gave the entry that an add saved, which is the newest entry of the account with these values. A dry run saved nothing and leaves the id 0.
+func withID(st *store.Store, res *Result, err error, o Options) (*Result, error) {
+	if err != nil || o.DryRun {
+		return res, err
+	}
+	e := res.Entry
+	stored, err := st.Entries(e.Account)
+	if err != nil {
+		return nil, fmt.Errorf("the entry was saved but could not be read back: %w", err)
+	}
+	for i := len(stored) - 1; i >= 0; i-- {
+		if stored[i].Kind == e.Kind && stored[i].Values == e.Values {
+			e.ID = stored[i].ID
+			break
+		}
+	}
+	return res, nil
+}
+
+// AddSnapshot records the balance of the account at the end of the day. An account that already has a snapshot on the date is ErrInvalidValue: a recorded balance is changed by CorrectEntry, never replaced.
+func AddSnapshot(st *store.Store, rec *model.Record, account model.AccountID, date model.Date, balance float64, o Options) (*Result, error) {
+	res, err := editRecord(st, rec, o, func(next *model.Record) (Result, error) {
+		a := next.Account(account)
+		if a == nil {
+			return Result{}, unknownAccount(account)
+		}
+		if !finite(balance) {
+			return Result{}, refuse(ErrInvalidValue, "%v is not a number within range", balance)
+		}
+		if slices.ContainsFunc(a.Snapshots, func(s model.Snapshot) bool { return s.Date == date }) {
+			return Result{}, refuse(ErrInvalidValue, "account %q already has a snapshot on %v: correct that entry instead", account, date)
+		}
+		a.AddSnapshot(date, balance)
+		return Result{Account: a, Entry: &store.Entry{Account: account, Kind: store.KindSnapshot, Values: store.Values{Date: date, Amount: balance}}}, nil
+	})
+	return withID(st, res, err, o)
+}
+
+// checkTx refuses a transaction kind that does not exist, an amount out of range, and a transfer without a counter account the record has or with the account itself.
+func checkTx(rec *model.Record, account model.AccountID, v store.Values) error {
+	if !slices.Contains([]model.TxKind{model.TxIncome, model.TxExpense, model.TxTransfer}, v.TxKind) {
+		return refuse(ErrInvalidValue, "unknown transaction kind %q: use income, expense or transfer", v.TxKind)
+	}
+	if !finite(v.Amount) {
+		return refuse(ErrInvalidValue, "%v is not a number within range", v.Amount)
+	}
+	if v.TxKind == model.TxTransfer {
+		if v.Counter == "" {
+			return refuse(ErrInvalidValue, "a transfer needs a counter account")
+		}
+		if v.Counter == account {
+			return refuse(ErrInvalidValue, "a transfer needs a counter account other than %q", account)
+		}
+	}
+	if v.Counter != "" && rec.Account(v.Counter) == nil {
+		return unknownAccount(v.Counter)
+	}
+	return nil
+}
+
+// AddTransaction records a transaction of the account; the amount is signed from the account's view. A transfer needs a counter account the record has. An identical transaction already recorded does not stop it: two equal payments can happen.
+func AddTransaction(st *store.Store, rec *model.Record, account model.AccountID, t model.Transaction, o Options) (*Result, error) {
+	res, err := editRecord(st, rec, o, func(next *model.Record) (Result, error) {
+		a := next.Account(account)
+		if a == nil {
+			return Result{}, unknownAccount(account)
+		}
+		v := store.Values{Date: t.Date, Amount: t.Amount, TxKind: t.Kind, Counter: t.Counter, Memo: t.Memo}
+		if err := checkTx(next, account, v); err != nil {
+			return Result{}, err
+		}
+		if err := a.AddTransaction(t); err != nil {
+			return Result{}, refuse(ErrInvalidValue, "%v", err)
+		}
+		return Result{Account: a, Entry: &store.Entry{Account: account, Kind: store.KindTransaction, Values: v}}, nil
+	})
+	return withID(st, res, err, o)
+}
+
+// EntryChange is the values of an entry to change; nil leaves one as it is.
+type EntryChange struct {
+	Date    *model.Date
+	Amount  *float64
+	TxKind  *model.TxKind
+	Counter *model.AccountID
+	Memo    *string
+}
+
+// entryError turns the failure of a store call on an entry into the operation's error.
+func entryError(err error, id int64) error {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return refuse(ErrUnknownObject, "there is no entry %d", id)
+	case errors.Is(err, store.ErrInvalidEntry):
+		return refuse(ErrInvalidValue, "%v", err)
+	}
+	return &SaveError{err}
+}
+
+// CorrectEntry stores a correction of the entry with the changed values, and a note. Only the values given change; the original stays in the entry's history. A snapshot has a date and an amount only. Correcting a voided entry restores it. A correction that leaves the entry as it is is ErrNoChange. The store's checks decide whether a correction is allowed, in a dry run too: the correction is made in a transaction that is rolled back. The result has no Record; reload it.
+func CorrectEntry(st *store.Store, rec *model.Record, id int64, ch EntryChange, note string, o Options) (*Result, error) {
+	e, err := st.Entry(id)
+	if err != nil {
+		return nil, entryError(err, id)
+	}
+	v := e.Values
+	if ch.Date != nil {
+		v.Date = *ch.Date
+	}
+	if ch.Amount != nil {
+		v.Amount = *ch.Amount
+	}
+	if ch.TxKind != nil {
+		v.TxKind = *ch.TxKind
+	}
+	if ch.Counter != nil {
+		v.Counter = *ch.Counter
+	}
+	if ch.Memo != nil {
+		v.Memo = *ch.Memo
+	}
+	if !finite(v.Amount) {
+		return nil, refuse(ErrInvalidValue, "%v is not a number within range", v.Amount)
+	}
+	if e.Kind == store.KindTransaction {
+		if err := checkTx(rec, e.Account, v); err != nil {
+			return nil, err
+		}
+	}
+	if v == e.Values && !e.Void {
+		return nil, ErrNoChange
+	}
+	if o.DryRun {
+		err = st.TryCorrect(id, v, note)
+	} else {
+		err = st.Correct(id, v, note)
+	}
+	if err != nil {
+		return nil, entryError(err, id)
+	}
+	e.Values, e.Void = v, false
+	return &Result{Entry: &e}, nil
+}
+
+// VoidEntry stores a correction that takes the entry out of the record, with a note. The entry stays in its history, and CorrectEntry restores it. An entry already voided is ErrNoChange. A dry run makes the void in a transaction that is rolled back. The result has no Record; reload it.
+func VoidEntry(st *store.Store, rec *model.Record, id int64, note string, o Options) (*Result, error) {
+	e, err := st.Entry(id)
+	if err != nil {
+		return nil, entryError(err, id)
+	}
+	if e.Void {
+		return nil, ErrNoChange
+	}
+	if o.DryRun {
+		err = st.TryVoid(id, note)
+	} else {
+		err = st.Void(id, note)
+	}
+	if err != nil {
+		return nil, entryError(err, id)
+	}
+	e.Void = true
+	return &Result{Entry: &e}, nil
+}

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Joseph Riedel
 // SPDX-License-Identifier: MIT
 
-// Package ops holds the edits of a record's projections. Every editor, whether the GUI or the command line, makes its edit through these functions, so an edit is validated, applied and saved the same way whoever makes it.
+// Package ops holds the edits of a record: its projections, accounts, assets, budget and recorded entries. Every editor, whether the GUI or the command line, makes its edit through these functions, so an edit is validated, applied and saved the same way whoever makes it.
 //
 // An operation takes the loaded record and the store it came from. It validates its input, applies the change to a copy of the record's editable documents and saves the copy in one transaction. The record passed in is never changed; the result carries the new one. If the operation fails, nothing was saved. With Options.DryRun the operation does all of that except the saving.
 package ops
@@ -34,6 +34,10 @@ var (
 	ErrInvalidValue = errors.New("ops: value out of range")
 	// ErrUnknownTarget is returned for a modification whose object the record does not have or, for a budget item, that no earlier add_item mod in the chain adds; and for an edit that would leave a modification that resolved before pointing at nothing.
 	ErrUnknownTarget = errors.New("ops: unknown modification target")
+	// ErrUnknownObject is returned for an account, asset, asset member, base budget item or entry that the record does not have.
+	ErrUnknownObject = errors.New("ops: unknown object")
+	// ErrInUse is returned by a delete of an asset that other assets or projections still refer to.
+	ErrInUse = errors.New("ops: object is still in use")
 )
 
 // maxValue is the largest magnitude a modification value may have.
@@ -93,9 +97,17 @@ func (w PresetWarning) Error() string {
 type Result struct {
 	// Record is the record with the edit applied. It is saved unless the operation was a dry run.
 	Record *model.Record
-	// Projection is the projection the edit changed or added, in Record; nil for a delete and a restore.
+	// Projection is the projection the edit changed or added, in Record; nil for a delete, a restore and an edit of anything but projections.
 	Projection *model.Projection
-	// Removed is the name of the projection a delete removed.
+	// Account is the account an account, entry or default balance edit changed or added, in Record.
+	Account *model.Account
+	// Asset is the asset an asset edit changed or added, in Record; for an asset delete, the asset as it was.
+	Asset *model.Asset
+	// Item is the base budget item a budget edit changed or added.
+	Item *model.BudgetItem
+	// Entry is the entry an entry operation added, corrected or voided, with its values after the operation. Its ID is 0 for an entry added in a dry run. Record is nil for a correction and a void: they are stored without the record, so reload it.
+	Entry *store.Entry
+	// Removed is the name of the projection or id of the asset a delete removed.
 	Removed string
 	// Rename is set when the edit renamed a projection.
 	Rename *Rename
@@ -117,6 +129,19 @@ func edit(st *store.Store, rec *model.Record, o Options, change func(next *model
 	}
 	if err := checkNoNewDangling(rec, next, res.Rename); err != nil {
 		return nil, err
+	}
+	return commit(st, next, res, o)
+}
+
+// editRecord is edit for a change to the accounts, assets or budget. It runs the change on a deep copy of the record and refuses a change that leaves them as they were.
+func editRecord(st *store.Store, rec *model.Record, o Options, change func(next *model.Record) (Result, error)) (*Result, error) {
+	next := rec.Clone()
+	res, err := change(next)
+	if err != nil {
+		return nil, err
+	}
+	if reflect.DeepEqual(rec.Accounts, next.Accounts) && reflect.DeepEqual(rec.Assets, next.Assets) && reflect.DeepEqual(rec.Budget, next.Budget) {
+		return nil, ErrNoChange
 	}
 	return commit(st, next, res, o)
 }

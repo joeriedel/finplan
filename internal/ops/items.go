@@ -16,6 +16,11 @@ import (
 
 // checkItem refuses a budget item that is incomplete or inconsistent, and returns it with the fields its kind does not use cleared.
 func checkItem(rec *model.Record, it model.BudgetItem) (model.BudgetItem, error) {
+	return checkItemAs(rec, it, nil)
+}
+
+// checkItemAs is checkItem for an item that replaces existing, if not nil. The recurrence existing has is kept as it is, even a semimonthly one, which no item can be given.
+func checkItemAs(rec *model.Record, it model.BudgetItem, existing *model.BudgetItem) (model.BudgetItem, error) {
 	it.Name = strings.TrimSpace(it.Name)
 	if it.Name == "" {
 		return it, refuse(ErrInvalidValue, "a budget item needs a name")
@@ -43,19 +48,20 @@ func checkItem(rec *model.Record, it model.BudgetItem) (model.BudgetItem, error)
 	}
 	r := it.Recurrence
 	start := it.Start
-	switch r.Kind {
-	case model.OneTime, model.Biweekly:
+	switch {
+	case existing != nil && r == existing.Recurrence && r.Kind == model.Semimonthly:
+	case r.Kind == model.OneTime || r.Kind == model.Biweekly:
 		if r.Anchor == 0 {
 			return it, refuse(ErrInvalidValue, "a %s item needs a date", r.Kind)
 		}
 		if start == nil {
 			start = &r.Anchor
 		}
-	case model.Monthly:
+	case r.Kind == model.Monthly:
 		if r.Day < 1 || r.Day > 31 {
 			return it, refuse(ErrInvalidValue, "the day of the month %d must be from 1 to 31", r.Day)
 		}
-	case model.Annual:
+	case r.Kind == model.Annual:
 		if r.Month < 1 || r.Month > 12 || r.Day < 1 || r.Day > time.Date(2024, time.Month(r.Month)+1, 0, 0, 0, 0, 0, time.UTC).Day() {
 			return it, refuse(ErrInvalidValue, "an annual item needs a month from 1 to 12 and a day in that month")
 		}
@@ -102,6 +108,22 @@ func slug(name string) string {
 	return b.String()
 }
 
+// assignItemID gives the item an id made from its name if it has none, and refuses an id that ids already has.
+func assignItemID(it *model.BudgetItem, ids map[string]bool) error {
+	it.ID = strings.TrimSpace(it.ID)
+	switch {
+	case it.ID == "":
+		base := slug(it.Name)
+		it.ID = base
+		for n := 2; ids[it.ID]; n++ {
+			it.ID = base + "-" + strconv.Itoa(n)
+		}
+	case ids[it.ID]:
+		return refuse(ErrNameTaken, "there is already a budget item %q", it.ID)
+	}
+	return nil
+}
+
 // AddItem adds a new budget item to the projection, as an add_item modification at the end of its list. An empty ID is generated from the name; an ID that another budget item or added item has is ErrNameTaken. The item must be complete: a name, an amount above zero, an account for income and expense, from and to for a transfer, and a one-time, monthly, biweekly or annual recurrence.
 func AddItem(st *store.Store, rec *model.Record, name string, item model.BudgetItem, o Options) (*Result, error) {
 	return editProjection(st, rec, o, name, func(p *model.Projection) error {
@@ -109,17 +131,8 @@ func AddItem(st *store.Store, rec *model.Record, name string, item model.BudgetI
 		if err != nil {
 			return err
 		}
-		ids := itemIDs(rec)
-		it.ID = strings.TrimSpace(it.ID)
-		switch {
-		case it.ID == "":
-			base := slug(it.Name)
-			it.ID = base
-			for n := 2; ids[it.ID]; n++ {
-				it.ID = base + "-" + strconv.Itoa(n)
-			}
-		case ids[it.ID]:
-			return refuse(ErrNameTaken, "there is already a budget item %q", it.ID)
+		if err := assignItemID(&it, itemIDs(rec)); err != nil {
+			return err
 		}
 		p.Mods = append(p.Mods, model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: it.ID}, Property: model.PropAddItem, Item: &it})
 		return nil

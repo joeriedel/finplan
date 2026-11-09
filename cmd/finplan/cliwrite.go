@@ -16,9 +16,10 @@ import (
 
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/ops"
+	"github.com/joeriedel/finplan/internal/store"
 )
 
-// The write commands. Each makes its edit through internal/ops, so the CLI and the app agree on what an edit may do, and prints {dry_run, changed, projection, ...}: the projection as projection show prints it, after the edit. With --dry-run the edit is validated and applied to a copy and nothing is saved. An edit that would change nothing is not an error: it prints changed false.
+// The write commands for projections and their items; cliwritedata.go has those for assets, accounts, entries and the base budget. Each makes its edit through internal/ops, so the CLI and the app agree on what an edit may do, and prints {dry_run, changed, projection, ...}: the projection as projection show prints it, after the edit. With --dry-run the edit is validated and applied to a copy and nothing is saved. An edit that would change nothing is not an error: it prints changed false.
 
 const (
 	writeOut     = "{dry_run, changed, projection: as projection show prints it, after the edit}"
@@ -193,6 +194,7 @@ var writeCommands = []*command{
 }
 
 func init() {
+	writeCommands = append(writeCommands, dataCommands...)
 	for _, cmd := range writeCommands {
 		cmd.Write = true
 		cmd.Flags = append(cmd.Flags, flagDef{Name: "dry-run", Type: typeBool, Default: "false", Description: dryRunDesc})
@@ -215,6 +217,12 @@ func opsError(err error) error {
 		return failErr("unknown_target", "%v", err)
 	case errors.Is(err, ops.ErrNameTaken):
 		return failErr("name_taken", "%v", err)
+	case errors.Is(err, ops.ErrUnknownObject), errors.Is(err, store.ErrNotFound):
+		return failErr("not_found", "%v", err)
+	case errors.Is(err, ops.ErrInUse):
+		return failErr("in_use", "%v", err)
+	case errors.Is(err, store.ErrRecordChanged):
+		return failErr("record_changed", "%v", err)
 	case errors.Is(err, ops.ErrHasChildren):
 		return failErr("has_children", "%v", err)
 	case errors.Is(err, model.ErrCycle):
@@ -663,6 +671,7 @@ type itemInput struct {
 		Anchor *string `json:"anchor"`
 		Month  int     `json:"month"`
 		Day    int     `json:"day"`
+		Day2   int     `json:"day2"`
 	} `json:"recurrence"`
 	Start   *string `json:"start"`
 	End     *string `json:"end"`
@@ -680,7 +689,7 @@ func (c *call) itemJSON() (model.BudgetItem, error) {
 	it := model.BudgetItem{
 		ID: in.ID, Name: in.Name, Kind: model.ItemKind(in.Kind), Amount: in.Amount, Indexed: in.Indexed,
 		Account: model.AccountID(in.Account), From: model.AccountID(in.From), To: model.AccountID(in.To),
-		Recurrence: model.Recurrence{Kind: model.RecurrenceKind(in.Recurrence.Kind), Month: time.Month(in.Recurrence.Month), Day: in.Recurrence.Day},
+		Recurrence: model.Recurrence{Kind: model.RecurrenceKind(in.Recurrence.Kind), Month: time.Month(in.Recurrence.Month), Day: in.Recurrence.Day, Day2: in.Recurrence.Day2},
 	}
 	for _, f := range []struct {
 		name string

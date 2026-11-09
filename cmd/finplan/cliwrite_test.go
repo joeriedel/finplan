@@ -87,8 +87,13 @@ func refusedWrite(t *testing.T, path, stdin string, wantExit int, wantCode strin
 	}
 }
 
+// snapshot is everything a write command may change: the record's documents, its entries and the presets.
 type snapshot struct {
 	Projections []*model.Projection
+	Accounts    []*model.Account
+	Assets      []*model.Asset
+	Budget      model.Budget
+	Entries     map[model.AccountID][]store.Entry
 	Presets     []store.Preset
 }
 
@@ -107,7 +112,13 @@ func dbSnapshot(t *testing.T, path string) snapshot {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return snapshot{rec.Projections, rows}
+	entries := map[model.AccountID][]store.Entry{}
+	for _, a := range rec.Accounts {
+		if entries[a.ID], err = st.Entries(a.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return snapshot{rec.Projections, rec.Accounts, rec.Assets, rec.Budget, entries, rows}
 }
 
 func lastValue(t *testing.T, path, target, projection, from, to string) float64 {
@@ -501,6 +512,10 @@ func TestCLIWriteHelp(t *testing.T) {
 		"projection new", "projection clone", "projection rename", "projection set-parent", "projection delete",
 		"projection set-start", "projection set-override-history", "projection set-inflation",
 		"mod add", "mod edit", "mod move", "mod remove", "item add", "item edit", "item end",
+		"asset new", "asset rename", "asset delete", "asset add-member", "asset remove-member",
+		"asset add-default", "asset remove-default", "asset set-param", "account new", "account edit",
+		"entry add-snapshot", "entry add-transaction", "entry correct", "entry void",
+		"budget add", "budget edit", "budget end",
 	} {
 		if !writes[name] {
 			t.Errorf("help does not list the write command %q", name)

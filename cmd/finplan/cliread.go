@@ -34,7 +34,7 @@ var commands = []*command{
 	},
 	{
 		Name: "account list", Summary: "list the accounts",
-		Output: "[{id, name, type, tax, owner}]",
+		Output: "[{id, name, type, tax, owner, stated_rate (a fraction per year), default: [{from, to, value}]}]; default is the default balance intervals in the order added, the last added winning where they overlap",
 		run:    cmdAccountList,
 	},
 	{
@@ -51,7 +51,7 @@ var commands = []*command{
 	},
 	{
 		Name: "asset list", Summary: "list the assets with their members and any members left out as invalid",
-		Output: "[{id, name, members: [{seq, member, account, asset, rule: {types, tax} or null}], invalid: [{seq, member, duplicates, against}], error}]; error is null unless the asset cannot be resolved, for example because of a cycle",
+		Output: "[{id, name, members: [{seq, member, account, asset, rule: {types, tax} or null}], invalid: [{seq, member, duplicates, against}], error, default: [{from, to, value}], params: {growth: [{from, end, value}]}}]; error is null unless the asset cannot be resolved, for example because of a cycle; default is the default balance intervals, an account's default asset (id acct:<account>) showing the account's, and params the asset's parameter settings",
 		run:    cmdAssetList,
 	},
 	{
@@ -218,21 +218,43 @@ func (c *call) projection(rec *model.Record) (string, error) {
 	return name, nil
 }
 
+type jinterval struct {
+	From  jdate   `json:"from"`
+	To    *jdate  `json:"to"`
+	Value float64 `json:"value"`
+}
+
+func defaultJSON(b model.DefaultBalance) []jinterval {
+	out := []jinterval{}
+	for _, iv := range b.Intervals {
+		out = append(out, jinterval{jd(iv.From), jdp(iv.To), iv.Value})
+	}
+	return out
+}
+
+type jaccount struct {
+	ID         string      `json:"id"`
+	Name       string      `json:"name"`
+	Type       string      `json:"type"`
+	Tax        string      `json:"tax"`
+	Owner      string      `json:"owner"`
+	StatedRate float64     `json:"stated_rate"`
+	Default    []jinterval `json:"default"`
+}
+
+// accountJSON is the JSON shape of an account, as account list prints it and the write commands print the account they changed.
+func accountJSON(a *model.Account) jaccount {
+	return jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.Owner, a.StatedRate, defaultJSON(a.Default)}
+}
+
 func cmdAccountList(c *call) (any, error) {
 	_, rec, err := c.open()
 	if err != nil {
 		return nil, err
 	}
-	type jaccount struct {
-		ID    string `json:"id"`
-		Name  string `json:"name"`
-		Type  string `json:"type"`
-		Tax   string `json:"tax"`
-		Owner string `json:"owner"`
-	}
 	out := []jaccount{}
 	for _, a := range rec.Accounts {
-		out = append(out, jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.Owner})
+		out = append(out, accountJSON(a))
 	}
 	return out, nil
 }
@@ -249,6 +271,21 @@ func valuesJSON(v store.Values) jvalues {
 	return jvalues{jd(v.Date), v.Amount, nullable(string(v.TxKind)), nullable(string(v.Counter)), nullable(v.Memo)}
 }
 
+type jentry struct {
+	ID   *int64 `json:"id"`
+	Kind string `json:"kind"`
+	jvalues
+}
+
+// entryJSON is the JSON shape of an entry, as account entries prints it and the write commands print the entry they changed.
+func entryJSON(e store.Entry) jentry {
+	je := jentry{Kind: string(e.Kind), jvalues: valuesJSON(e.Values)}
+	if e.ID != 0 {
+		je.ID = &e.ID
+	}
+	return je
+}
+
 func cmdAccountEntries(c *call) (any, error) {
 	st, rec, err := c.open()
 	if err != nil {
@@ -262,14 +299,9 @@ func cmdAccountEntries(c *call) (any, error) {
 	if err != nil {
 		return nil, failErr("database", "%v", err)
 	}
-	type jentry struct {
-		ID   int64  `json:"id"`
-		Kind string `json:"kind"`
-		jvalues
-	}
 	out := []jentry{}
 	for _, e := range entries {
-		out = append(out, jentry{e.ID, string(e.Kind), valuesJSON(e.Values)})
+		out = append(out, entryJSON(e))
 	}
 	return out, nil
 }
@@ -321,56 +353,86 @@ func overlapJSON(o model.Overlap) joverlap {
 	return joverlap{o.Seq, o.Member, dups, o.Against}
 }
 
+type jrule struct {
+	Types []string `json:"types"`
+	Tax   []string `json:"tax"`
+}
+
+type jmember struct {
+	Seq     int     `json:"seq"`
+	Member  string  `json:"member"`
+	Account *string `json:"account"`
+	Asset   *string `json:"asset"`
+	Rule    *jrule  `json:"rule"`
+}
+
+type jasset struct {
+	ID      string                `json:"id"`
+	Name    string                `json:"name"`
+	Members []jmember             `json:"members"`
+	Invalid []joverlap            `json:"invalid"`
+	Error   *string               `json:"error"`
+	Default []jinterval           `json:"default"`
+	Params  map[string][]jsegment `json:"params"`
+}
+
+type jsegment struct {
+	From  jdate   `json:"from"`
+	End   *jdate  `json:"end"`
+	Value float64 `json:"value"`
+}
+
+func scheduleJSONOut(s model.Schedule) []jsegment {
+	out := []jsegment{}
+	for _, seg := range s.Segments() {
+		out = append(out, jsegment{jd(seg.From), jdp(seg.End), seg.Value})
+	}
+	return out
+}
+
+// assetJSON is the JSON shape of an asset with the members that are left out as invalid, as asset list prints it and the write commands print the asset they changed. The default balance of an account's default asset is the account's.
+func assetJSON(rec *model.Record, a *model.Asset) jasset {
+	ja := jasset{ID: string(a.ID), Name: a.Name, Members: []jmember{}, Invalid: []joverlap{}, Default: defaultJSON(a.Default), Params: map[string][]jsegment{}}
+	if acct, ok := strings.CutPrefix(string(a.ID), string(model.DefaultAssetID(""))); ok && rec.Account(model.AccountID(acct)) != nil {
+		ja.Default = defaultJSON(rec.Account(model.AccountID(acct)).Default)
+	}
+	for name, s := range a.Params {
+		ja.Params[name] = scheduleJSONOut(s)
+	}
+	for _, m := range a.Members {
+		jm := jmember{Seq: m.Seq, Member: m.String(), Account: nullable(string(m.Account)), Asset: nullable(string(m.Asset))}
+		if m.Rule != nil {
+			jm.Rule = &jrule{Types: []string{}, Tax: []string{}}
+			for _, t := range m.Rule.Types {
+				jm.Rule.Types = append(jm.Rule.Types, string(t))
+			}
+			for _, t := range m.Rule.Tax {
+				jm.Rule.Tax = append(jm.Rule.Tax, string(t))
+			}
+		}
+		ja.Members = append(ja.Members, jm)
+	}
+	res, err := rec.Resolve(a.ID)
+	if err != nil {
+		ja.Error = model.Ptr(err.Error())
+	} else {
+		for _, o := range res.Overlaps {
+			if o.Asset == a.ID {
+				ja.Invalid = append(ja.Invalid, overlapJSON(o))
+			}
+		}
+	}
+	return ja
+}
+
 func cmdAssetList(c *call) (any, error) {
 	_, rec, err := c.open()
 	if err != nil {
 		return nil, err
 	}
-	type jrule struct {
-		Types []string `json:"types"`
-		Tax   []string `json:"tax"`
-	}
-	type jmember struct {
-		Seq     int     `json:"seq"`
-		Member  string  `json:"member"`
-		Account *string `json:"account"`
-		Asset   *string `json:"asset"`
-		Rule    *jrule  `json:"rule"`
-	}
-	type jasset struct {
-		ID      string     `json:"id"`
-		Name    string     `json:"name"`
-		Members []jmember  `json:"members"`
-		Invalid []joverlap `json:"invalid"`
-		Error   *string    `json:"error"`
-	}
 	out := []jasset{}
 	for _, a := range rec.Assets {
-		ja := jasset{ID: string(a.ID), Name: a.Name, Members: []jmember{}, Invalid: []joverlap{}}
-		for _, m := range a.Members {
-			jm := jmember{Seq: m.Seq, Member: m.String(), Account: nullable(string(m.Account)), Asset: nullable(string(m.Asset))}
-			if m.Rule != nil {
-				jm.Rule = &jrule{Types: []string{}, Tax: []string{}}
-				for _, t := range m.Rule.Types {
-					jm.Rule.Types = append(jm.Rule.Types, string(t))
-				}
-				for _, t := range m.Rule.Tax {
-					jm.Rule.Tax = append(jm.Rule.Tax, string(t))
-				}
-			}
-			ja.Members = append(ja.Members, jm)
-		}
-		res, err := rec.Resolve(a.ID)
-		if err != nil {
-			ja.Error = model.Ptr(err.Error())
-		} else {
-			for _, o := range res.Overlaps {
-				if o.Asset == a.ID {
-					ja.Invalid = append(ja.Invalid, overlapJSON(o))
-				}
-			}
-		}
-		out = append(out, ja)
+		out = append(out, assetJSON(rec, a))
 	}
 	return out, nil
 }
@@ -425,11 +487,6 @@ func projectionJSON(p *model.Projection) any {
 		Start           *jdate `json:"start"`
 		OverrideHistory *bool  `json:"override_history"`
 	}
-	type jsegment struct {
-		From  jdate   `json:"from"`
-		End   *jdate  `json:"end"`
-		Value float64 `json:"value"`
-	}
 	type jtarget struct {
 		Kind string `json:"kind"`
 		ID   string `json:"id"`
@@ -453,10 +510,7 @@ func projectionJSON(p *model.Projection) any {
 		out.AssetSettings = append(out.AssetSettings, jsetting{string(s.Asset), jdp(s.Start), s.OverrideHistory})
 	}
 	for i, m := range p.Mods {
-		jm := jmod{Index: i, Target: jtarget{string(m.Target.Kind), m.Target.ID}, Property: m.Property, Schedule: []jsegment{}}
-		for _, s := range m.Values.Segments() {
-			jm.Schedule = append(jm.Schedule, jsegment{jd(s.From), jdp(s.End), s.Value})
-		}
+		jm := jmod{Index: i, Target: jtarget{string(m.Target.Kind), m.Target.ID}, Property: m.Property, Schedule: scheduleJSONOut(m.Values)}
 		if m.Item != nil {
 			jm.Item = model.Ptr(budgetItemJSON(*m.Item))
 		}
