@@ -285,9 +285,7 @@ func samples(statuses ...engine.Status) []engine.Sample {
 }
 
 func TestStatusSpans(t *testing.T) {
-	const (
-		d, a, p, pp = engine.StatusDefault, engine.StatusActual, engine.StatusProjected, engine.StatusPartlyProjected
-	)
+	const d, a, p, pp = engine.StatusDefault, engine.StatusActual, engine.StatusProjected, engine.StatusPartlyProjected
 	got := StatusSpans(samples(d, a, a, pp, pp, p, p, p))
 	want := []Span{{100, 110, d}, {110, 130, a}, {130, 150, pp}, {150, 170, p}}
 	if len(got) != len(want) {
