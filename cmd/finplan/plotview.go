@@ -201,7 +201,42 @@ func (g *graphTab) drawPlot(views []lineView) {
 	}
 }
 
-// crosshairTags adds the axis tags and the tooltip for the date under the pointer.
+// pendingTag is a crosshair tag queued while the plot is being built, to be drawn once ImPlot has finished.
+type pendingTag struct {
+	at   graph.Pt
+	bg   imgui.Vec4
+	text string
+}
+
+// drawPendingTags draws the queued tags on the window, after implot.EndPlot, so that ImPlot's tick marks and
+// border do not paint over them.
+func (g *graphTab) drawPendingTags() {
+	dl := imgui.WindowDrawList()
+	for _, t := range g.tags {
+		g.drawTag(dl, t.at, t.bg, t.text)
+	}
+	g.tags = g.tags[:0]
+}
+
+// drawTag draws a filled tag with its top-left corner at the clamped position inside the plot rectangle, with
+// text black or white by the background's brightness, as ImPlot does for its own axis tags.
+func (g *graphTab) drawTag(dl *imgui.DrawList, at graph.Pt, bg imgui.Vec4, text string) {
+	pad := implot.GetStyle().AnnotationPadding()
+	ts := imgui.CalcTextSize(text)
+	size := graph.Pt{X: ts.X + 2*pad.X, Y: ts.Y + 2*pad.Y}
+	lo := graph.Pt{X: g.plotPos.X, Y: g.plotPos.Y}
+	hi := graph.Pt{X: g.plotPos.X + g.plotSize.X, Y: g.plotPos.Y + g.plotSize.Y}
+	p := graph.ClampTag(at, size, lo, hi)
+	fg := uint32(0xffffffff)
+	if graph.TagTextBlack(bg.X, bg.Y, bg.Z) {
+		fg = 0xff000000
+	}
+	dl.AddRectFilled(vec(p), vec(graph.Pt{X: p.X + size.X, Y: p.Y + size.Y}), u32(bg))
+	dl.AddTextVec2(imgui.NewVec2(p.X+pad.X, p.Y+pad.Y), fg, text)
+}
+
+// crosshairTags draws the value and date tags inside the plot, and the tooltip, for the date under the pointer.
+// The tags are our own rather than ImPlot's, which would resize the axis gutters as the pointer moves.
 func (g *graphTab) crosshairTags(views []lineView, day model.Date) {
 	type row struct {
 		v      lineView
@@ -212,13 +247,24 @@ func (g *graphTab) crosshairTags(views []lineView, day model.Date) {
 	for _, v := range views {
 		if amount, st, ok := graph.At(v.samples, day); ok {
 			rows = append(rows, row{v, amount, st})
-			implot.TagYStr(amount, lineColor(v.line.Color, 1), graph.FormatMoney(amount))
+			if !graph.InRange(amount, g.yMin, g.yMax) {
+				continue
+			}
+			y := g.toPx(0, amount).Y
+			th := imgui.CalcTextSize(graph.FormatMoney(amount)).Y + 2*implot.GetStyle().AnnotationPadding().Y
+			g.tags = append(g.tags, pendingTag{graph.Pt{X: g.plotPos.X, Y: y - th/2}, lineColor(v.line.Color, 1), graph.FormatMoney(amount)})
 		}
 	}
 	if len(rows) == 0 {
 		return
 	}
-	implot.TagXStr(float64(day)*secondsPerDay, rgba(colSelect, 1), graph.FormatDate(day))
+	dateText := graph.FormatDate(day)
+	dsz := imgui.CalcTextSize(dateText)
+	dpad := implot.GetStyle().AnnotationPadding()
+	dx := g.toPx(float64(day)*secondsPerDay, 0).X - (dsz.X+2*dpad.X)/2
+	if dayStart := float64(day) * secondsPerDay; dayStart+secondsPerDay > g.xMin && dayStart <= g.xMax {
+		g.tags = append(g.tags, pendingTag{graph.Pt{X: dx, Y: g.plotPos.Y + g.plotSize.Y}, rgba(colSelect, 1), dateText})
+	}
 	if imgui.BeginTooltip() {
 		imgui.PushStyleColorVec4(imgui.ColText, rgba(colMuted, 1))
 		imgui.TextUnformatted(graph.FormatDate(day))

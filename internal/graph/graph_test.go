@@ -475,3 +475,51 @@ func TestDistance(t *testing.T) {
 		t.Errorf("degenerate segment: %v", got)
 	}
 }
+
+func TestAxisLabelWorstCase(t *testing.T) {
+	measure := func(s string) float32 { return float32(len(s)) }
+	if got := AxisLabelWorstCase(measure); got != "-$888.88M" {
+		t.Errorf("worst case %q, want -$888.88M", got)
+	}
+	for _, v := range []float64{-99999999, 99999999, -1234, 0, 123456, -250000} {
+		if l := FormatMoneyCompact(v); measure(l) > measure(AxisLabelWorstCase(measure)) {
+			t.Errorf("%q is wider than the worst case", l)
+		}
+	}
+}
+
+func TestClampTag(t *testing.T) {
+	lo, hi, size := Pt{100, 50}, Pt{300, 250}, Pt{40, 16}
+	cases := []struct{ at, want Pt }{
+		{Pt{120, 80}, Pt{120, 80}},
+		{Pt{80, 80}, Pt{100, 80}},
+		{Pt{290, 80}, Pt{260, 80}},
+		{Pt{120, 20}, Pt{120, 50}},
+		{Pt{120, 400}, Pt{120, 234}},
+	}
+	for _, c := range cases {
+		if got := ClampTag(c.at, size, lo, hi); got != c.want {
+			t.Errorf("ClampTag(%v) = %v, want %v", c.at, got, c.want)
+		}
+	}
+	if got := ClampTag(Pt{150, 60}, Pt{500, 16}, lo, hi); got.X != lo.X {
+		t.Errorf("oversized tag at x %v, want %v", got.X, lo.X)
+	}
+}
+
+func TestTagTextBlack(t *testing.T) {
+	if !TagTextBlack(1, 1, 0.9) || TagTextBlack(0.1, 0.2, 0.6) {
+		t.Error("text colour should be black on light backgrounds and white on dark ones")
+	}
+}
+
+func TestInRange(t *testing.T) {
+	for _, c := range []struct {
+		v    float64
+		want bool
+	}{{-1, false}, {0, true}, {5, true}, {10, true}, {10.5, false}} {
+		if got := InRange(c.v, 0, 10); got != c.want {
+			t.Errorf("InRange(%v, 0, 10) = %v, want %v", c.v, got, c.want)
+		}
+	}
+}

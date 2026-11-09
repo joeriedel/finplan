@@ -40,6 +40,9 @@ type graphTab struct {
 	// The plot area in screen pixels as of last frame, shared with the data lanes.
 	plotPos, plotSize imgui.Vec2
 
+	// The crosshair tags queued by crosshairTags, drawn after the plot by drawPendingTags.
+	tags []pendingTag
+
 	// The Add popup.
 	search     string
 	addAsset   model.AssetID
@@ -176,18 +179,22 @@ func (g *graphTab) plotArea() {
 		plotH = 50
 	}
 	if implot.BeginPlotV("##balances", imgui.NewVec2(-1, plotH), implot.FlagsNoTitle|implot.FlagsNoLegend|implot.FlagsNoMouseText) {
+		// The time axis always reserves two label rows (PadAndDatumAxesX in implot.cpp), so its height is constant.
 		implot.SetupAxisV(implot.AxisX1, "", implot.AxisFlagsNoLabel)
 		implot.SetupAxisScalePlotScale(implot.AxisX1, implot.ScaleTime)
 		implot.SetupAxisV(implot.AxisY1, "", implot.AxisFlagsNoLabel)
 		implot.SetupAxisLimitsConstraints(implot.AxisX1, float64(model.D(1971, 1, 1))*secondsPerDay, float64(model.D(2200, 1, 1))*secondsPerDay)
 		implot.SetupAxisZoomConstraints(implot.AxisX1, 7*secondsPerDay, 200*365*secondsPerDay)
-		if ticks := graph.NiceTicks(g.yMin, g.yMax, max(3, int(g.plotSize.Y/(48*uiScale)))); len(ticks) > 0 {
-			labels := make([]string, len(ticks))
-			for i, t := range ticks {
-				labels[i] = graph.FormatMoneyCompact(t)
-			}
-			implot.SetupAxisTicksdoublePtrV(implot.AxisY1, &ticks[0], int32(len(ticks)), labels, false)
+		// ImPlot sizes the y gutter to the widest tick label. A last tick far outside the visible range, labelled with
+		// the widest label a tick can have, is never drawn but keeps the gutter the same width however the view moves.
+		ticks := graph.NiceTicks(g.yMin, g.yMax, max(3, int(g.plotSize.Y/(48*uiScale))))
+		labels := make([]string, len(ticks), len(ticks)+1)
+		for i, t := range ticks {
+			labels[i] = graph.FormatMoneyCompact(t)
 		}
+		ticks = append(ticks, g.yMin-1000*max(g.yMax-g.yMin, math.Abs(g.yMin), 1))
+		labels = append(labels, graph.AxisLabelWorstCase(func(s string) float32 { return imgui.CalcTextSize(s).X }))
+		implot.SetupAxisTicksdoublePtrV(implot.AxisY1, &ticks[0], int32(len(ticks)), labels, false)
 		condX, condY := implot.CondOnce, implot.CondOnce
 		if g.applyX {
 			condX = implot.CondAlways
@@ -201,6 +208,7 @@ func (g *graphTab) plotArea() {
 		g.applyX, g.applyY = false, false
 		g.drawPlot(views)
 		implot.EndPlot()
+		g.drawPendingTags()
 	}
 	g.drawLanes(views, laneH, pitch)
 }
