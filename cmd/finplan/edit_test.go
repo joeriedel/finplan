@@ -264,12 +264,12 @@ func TestProjectionTabActions(t *testing.T) {
 	}
 
 	pt.setParent(demodata.ProjBase, demodata.ProjNewJob)
-	if a.rec.Projection(demodata.ProjBase).Parent != "" || pt.err == "" {
+	if a.rec.Projection(demodata.ProjBase).Parent != "" || len(pt.errs) == 0 {
 		t.Error("a cycle was accepted")
 	}
 	pt.selectProjection(demodata.ProjNewJob)
 	pt.rename(demodata.ProjWithdraw)
-	if pt.err == "" || pt.sel != demodata.ProjNewJob {
+	if len(pt.errs) == 0 || pt.sel != demodata.ProjNewJob {
 		t.Error("a duplicate name was accepted")
 	}
 	pt.rename("")
@@ -308,7 +308,7 @@ func TestModificationEditing(t *testing.T) {
 	before := a.rec
 	pt.setModValue(demodata.ProjNewJob, n, "lots")
 	pt.setModStart(demodata.ProjNewJob, n, "tomorrow")
-	if a.rec != before || pt.err == "" {
+	if a.rec != before || len(pt.errs) == 0 {
 		t.Error("bad input was accepted")
 	}
 
@@ -351,7 +351,7 @@ func TestSetInflation(t *testing.T) {
 	}
 	before := a.rec
 	pt.setInflation(demodata.ProjBase, "lots")
-	if a.rec != before || pt.err == "" {
+	if a.rec != before || len(pt.errs) == 0 {
 		t.Error("bad input was accepted")
 	}
 }

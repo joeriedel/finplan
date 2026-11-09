@@ -37,10 +37,8 @@ type projTab struct {
 	rec *model.Record
 	// bufs holds the text of fields the user is typing in or that were refused, by field id (the modification fields include the row); a field without one shows the record's value.
 	bufs map[string]string
-	// err is the reason the latest input was refused.
-	err string
-	// errField is the id of the field whose refused input err describes, or empty if err belongs to no field.
-	errField string
+	// errs holds the reason each field's input was refused, by the same ids as bufs; the empty id holds a refusal that belongs to no field.
+	errs map[string]string
 
 	focusName  bool
 	openDelete bool
@@ -58,7 +56,7 @@ type projTab struct {
 }
 
 func (t *projTab) reset() {
-	t.bufs, t.err, t.errField, t.overwrites = map[string]string{}, "", "", nil
+	t.bufs, t.errs, t.overwrites = map[string]string{}, map[string]string{}, nil
 }
 
 func (t *projTab) draw() {
@@ -242,8 +240,8 @@ func (t *projTab) detail() {
 		imgui.TextWrapped("Reality is the record as it stands, with no projection. It cannot be edited. Select a projection, or add one with New.")
 		return
 	}
-	if t.err != "" {
-		imgui.TextColored(rgba(colError, 1), "Not changed: "+t.err)
+	if e := t.errs[""]; e != "" {
+		imgui.TextColored(rgba(colError, 1), "Not changed: "+e)
 	}
 	t.header(p)
 	imgui.Separator()
@@ -270,12 +268,15 @@ func (t *projTab) field(id, hint, value string, width float32) (string, bool) {
 	}
 	done := imgui.IsItemDeactivatedAfterEdit()
 	if done && text == value {
-		delete(t.bufs, id)
-		t.clearErr(id)
+		t.dropBuf(id)
 		done = false
 	}
 	if imgui.IsItemDeactivated() && !done {
-		delete(t.bufs, id)
+		t.dropBuf(id)
+	}
+	if e := t.errs[id]; e != "" {
+		imgui.SameLine()
+		imgui.TextColored(rgba(colError, 1), "Not changed: "+e)
 	}
 	return text, done
 }
@@ -286,16 +287,14 @@ func (t *projTab) commit(id string, set func()) {
 	t.a.unchanged = false
 	set()
 	if t.a.unchanged {
-		delete(t.bufs, id)
-		t.clearErr(id)
+		t.dropBuf(id)
 	}
 }
 
-// clearErr drops the error if it describes the field id.
-func (t *projTab) clearErr(id string) {
-	if t.errField == id {
-		t.err, t.errField = "", ""
-	}
+// dropBuf drops the field's typed text and the error that refused it.
+func (t *projTab) dropBuf(id string) {
+	delete(t.bufs, id)
+	delete(t.errs, id)
 }
 
 func (t *projTab) header(p *model.Projection) {
@@ -359,7 +358,7 @@ func (t *projTab) setStart(proj, text string) {
 	if text != "" {
 		v, err := parseDate(text)
 		if err != nil {
-			t.err, t.errField = err.Error(), "start"
+			t.errs["start"] = err.Error()
 			return
 		}
 		d = &v
@@ -402,12 +401,11 @@ func (t *projTab) rename(to string) {
 	from := t.sel
 	switch {
 	case to == from:
-		delete(t.bufs, "name")
-		t.clearErr("name")
+		t.dropBuf("name")
 	case to == "":
-		t.err, t.errField = "A projection needs a name.", "name"
+		t.errs["name"] = "A projection needs a name."
 	case t.a.rec.Projection(to) != nil:
-		t.err, t.errField = fmt.Sprintf("There is already a projection named %q.", to), "name"
+		t.errs["name"] = fmt.Sprintf("There is already a projection named %q.", to)
 	default:
 		if t.a.edit("rename projection", &renameOp{from, to}, func(rec *model.Record) error { return rec.RenameProjection(from, to) }) {
 			t.sel = to
@@ -418,7 +416,7 @@ func (t *projTab) rename(to string) {
 func (t *projTab) setParent(name, parent string) {
 	err := t.a.rec.EditableCopy().SetParent(name, parent)
 	if errors.Is(err, model.ErrCycle) {
-		t.err, t.errField = fmt.Sprintf("%q cannot build on %q: that would make a cycle.", name, parent), ""
+		t.errs[""] = fmt.Sprintf("%q cannot build on %q: that would make a cycle.", name, parent)
 		return
 	}
 	t.a.edit("change parent", nil, func(rec *model.Record) error { return rec.SetParent(name, parent) })
@@ -450,7 +448,7 @@ func (t *projTab) setInflation(proj, text string) {
 	if text != "" {
 		var err error
 		if v, err = parseValue(model.PropInflation, text); err != nil {
-			t.err, t.errField = err.Error(), "inflation"
+			t.errs["inflation"] = err.Error()
 			return
 		}
 	}
@@ -621,7 +619,7 @@ func (t *projTab) setModStart(proj string, i int, text string) {
 	if text != "" {
 		d, err := parseDate(text)
 		if err != nil {
-			t.err, t.errField = err.Error(), "from"+strconv.Itoa(i)
+			t.errs["from"+strconv.Itoa(i)] = err.Error()
 			return
 		}
 		from = &d
@@ -637,7 +635,7 @@ func (t *projTab) setModValue(proj string, i int, text string) {
 	prop := t.a.rec.Projection(proj).Mods[i].Property
 	v, err := parseValue(prop, text)
 	if err != nil {
-		t.err, t.errField = err.Error(), "value"+strconv.Itoa(i)
+		t.errs["value"+strconv.Itoa(i)] = err.Error()
 		return
 	}
 	t.a.editProjection(proj, "change modification", func(p *model.Projection) error {

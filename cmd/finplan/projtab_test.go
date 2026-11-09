@@ -125,3 +125,26 @@ func TestObjectsFor(t *testing.T) {
 		t.Error("wrong object lists")
 	}
 }
+
+func TestFieldErrorsArePerField(t *testing.T) {
+	pt := &projTab{}
+	pt.reset()
+	pt.bufs["start"], pt.bufs["inflation"] = "soon", "lots"
+	pt.errs["start"], pt.errs["inflation"] = "bad date", "bad value"
+
+	pt.dropBuf("inflation")
+	if pt.errs["start"] != "bad date" || pt.bufs["start"] != "soon" {
+		t.Errorf("restoring one field disturbed another: %q %q", pt.errs["start"], pt.bufs["start"])
+	}
+	if _, ok := pt.errs["inflation"]; ok {
+		t.Error("restored field kept its error")
+	}
+	if _, ok := pt.bufs["inflation"]; ok {
+		t.Error("restored field kept its text")
+	}
+
+	pt.dropBuf("start")
+	if len(pt.errs) != 0 || len(pt.bufs) != 0 {
+		t.Errorf("dropping the buffer left %v %v", pt.errs, pt.bufs)
+	}
+}
