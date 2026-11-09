@@ -397,6 +397,64 @@ func TestSaveNewEntryEqualToEarlierVoid(t *testing.T) {
 	}
 }
 
+func TestSaveStaleAfterCorrectWithEqualNewEntry(t *testing.T) {
+	s, _ := openTemp(t)
+	fare := model.Transaction{Date: model.D(2026, 1, 3), Amount: -2.75, Kind: model.TxExpense, Memo: "fare"}
+	rec := demodata.Family()
+	rec.Account(demodata.Checking).AddTransaction(fare)
+	mustSave(t, s, rec)
+	loaded := mustLoad(t, s)
+	es, _ := s.Entries(demodata.Checking)
+	var a Entry
+	for _, e := range es {
+		if e.Values.Memo == "fare" {
+			a = e
+		}
+	}
+	v := a.Values
+	v.Amount = -3
+	if err := s.Correct(a.ID, v, "fare rose"); err != nil {
+		t.Fatal(err)
+	}
+	fare.Amount = -3
+	loaded.Account(demodata.Checking).AddTransaction(fare)
+	var before, after int
+	s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&before)
+	if err := s.Save(loaded); !errors.Is(err, ErrRecordChanged) {
+		t.Fatalf("Save after a correction since Load: %v", err)
+	}
+	s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&after)
+	if after != before {
+		t.Errorf("entry rows %d -> %d", before, after)
+	}
+}
+
+func TestSaveStaleAfterVoidAndRestore(t *testing.T) {
+	s, _ := openTemp(t)
+	fare := model.Transaction{Date: model.D(2026, 1, 3), Amount: -2.75, Kind: model.TxExpense, Memo: "fare"}
+	rec := demodata.Family()
+	rec.Account(demodata.Checking).AddTransaction(fare)
+	mustSave(t, s, rec)
+	loaded := mustLoad(t, s)
+	es, _ := s.Entries(demodata.Checking)
+	var a Entry
+	for _, e := range es {
+		if e.Values.Memo == "fare" {
+			a = e
+		}
+	}
+	if err := s.Void(a.ID, "dup"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Correct(a.ID, a.Values, "restore"); err != nil {
+		t.Fatal(err)
+	}
+	loaded.Account(demodata.Checking).AddTransaction(fare)
+	if err := s.Save(loaded); !errors.Is(err, ErrRecordChanged) {
+		t.Fatalf("Save after void and restore since Load: %v", err)
+	}
+}
+
 func TestVoid(t *testing.T) {
 	s, _ := openTemp(t)
 	clock := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
@@ -506,6 +564,17 @@ func TestMigrateFromVersion2(t *testing.T) {
 	}
 	if err := s.Void(es[0].ID, ""); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestBackupRefusesOwnDatabase(t *testing.T) {
+	s, path := openTemp(t)
+	mustSave(t, s, demodata.Family())
+	if err := s.Backup(path); err == nil {
+		t.Fatal("Backup over the open database succeeded")
+	}
+	if got := mustLoad(t, s); got == nil {
+		t.Error("store unusable after refused backup")
 	}
 }
 

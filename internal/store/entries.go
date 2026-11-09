@@ -207,24 +207,24 @@ type entryKey struct {
 // appendNew stores the account's entries from the model that are not yet stored and reports
 // ErrRecordChanged if a stored entry is absent from the model. Matching is by value as a multiset:
 // each stored entry (with its current values) consumes one equal model entry, and the leftover model
-// entries are appended in model order. A leftover that equals a revision of an entry voided since the
-// record was loaded (voided) is not appended: the model predates the void, so it is reported as ErrRecordChanged.
-func (s *Store) appendNew(tx *sql.Tx, a *model.Account, stored, voided []Entry) error {
+// entries are appended in model order. A leftover that equals a revision of an entry voided or corrected since
+// the record was loaded (changed) is not appended: the model predates the change, so it is reported as ErrRecordChanged.
+func (s *Store) appendNew(tx *sql.Tx, a *model.Account, stored, changed []Entry) error {
 	unmatched := map[entryKey]int{}
 	for _, e := range stored {
 		unmatched[entryKey{e.Kind, e.Values}]++
 	}
-	voidedKeys := map[entryKey]bool{}
-	for _, e := range voided {
-		voidedKeys[entryKey{e.Kind, e.Values}] = true
+	changedKeys := map[entryKey]bool{}
+	for _, e := range changed {
+		changedKeys[entryKey{e.Kind, e.Values}] = true
 	}
 	insert := func(k entryKey) error {
 		if unmatched[k] > 0 {
 			unmatched[k]--
 			return nil
 		}
-		if voidedKeys[k] {
-			return fmt.Errorf("%w: account %q has an entry voided since the record was loaded", ErrRecordChanged, a.ID)
+		if changedKeys[k] {
+			return fmt.Errorf("%w: account %q has an entry voided or corrected since the record was loaded", ErrRecordChanged, a.ID)
 		}
 		_, err := tx.Exec(`INSERT INTO entries (account, kind, date, amount, tx_kind, counter, memo, made_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

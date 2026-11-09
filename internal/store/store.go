@@ -35,8 +35,9 @@ var (
 
 // Store is an open database. It is safe for concurrent use.
 type Store struct {
-	db  *sql.DB
-	now func() time.Time
+	db   *sql.DB
+	path string
+	now  func() time.Time
 
 	mu       sync.Mutex // guards loaded and loadMark
 	loaded   bool       // whether Load has run
@@ -52,7 +53,7 @@ func Open(path string) (*Store, error) {
 	}
 	// One connection keeps the pragmas in force and avoids lock contention within the process.
 	db.SetMaxOpenConns(1)
-	s := &Store{db: db, now: time.Now}
+	s := &Store{db: db, path: path, now: time.Now}
 	if err := s.init(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: open %s: %w", path, err)

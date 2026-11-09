@@ -308,21 +308,21 @@ func (s *Store) Load() (*model.Record, error) {
 	return r, nil
 }
 
-// voidedSinceLoad returns, for entries voided after the most recent Load (all voided entries if there has
-// been none), one Entry per revision: the original values and each correction's.
-func (s *Store) voidedSinceLoad(tx *sql.Tx) ([]Entry, error) {
+// changedSinceLoad returns, for entries voided or corrected after the most recent Load (all corrected entries
+// if there has been none), one Entry per revision: the original values and each correction's.
+func (s *Store) changedSinceLoad(tx *sql.Tx) ([]Entry, error) {
 	s.mu.Lock()
 	mark := s.loadMark
 	if !s.loaded {
 		mark = 0
 	}
 	s.mu.Unlock()
-	voided, err := queryEntries(tx, true, `COALESCE(c.void, 0) = 1 AND c.id > ?`, mark)
+	changed, err := queryEntries(tx, true, `e.id IN (SELECT entry FROM corrections WHERE id > ?)`, mark)
 	if err != nil {
 		return nil, err
 	}
 	var out []Entry
-	for _, e := range voided {
+	for _, e := range changed {
 		rows, err := tx.Query(`SELECT date, amount, tx_kind, counter, memo FROM entries WHERE id = ?
 			UNION ALL SELECT date, amount, tx_kind, counter, memo FROM corrections WHERE entry = ?`, e.ID, e.ID)
 		if err != nil {
@@ -345,7 +345,7 @@ func (s *Store) voidedSinceLoad(tx *sql.Tx) ([]Entry, error) {
 }
 
 // Save writes the record in one transaction. Documents are replaced; entries in the model that are
-// not stored yet are appended. Voided entries count as absent, but a model entry equal to any revision of an entry voided since the most recent Load on this Store is a stale copy and fails the same way. If a stored entry (with its corrections applied) is missing from or
+// not stored yet are appended. Voided entries count as absent, but a model entry equal to any revision of an entry voided or corrected since the most recent Load on this Store is a stale copy and fails the same way. If a stored entry (with its corrections applied) is missing from or
 // changed in the model, or an account with stored entries is gone, Save writes nothing and returns
 // an error matching ErrRecordChanged.
 func (s *Store) Save(r *model.Record) error {
@@ -379,16 +379,16 @@ func (s *Store) Save(r *model.Record) error {
 	for _, e := range all {
 		byAccount[e.Account] = append(byAccount[e.Account], e)
 	}
-	voidedEntries, err := s.voidedSinceLoad(tx)
+	changedEntries, err := s.changedSinceLoad(tx)
 	if err != nil {
 		return err
 	}
-	voided := map[model.AccountID][]Entry{}
-	for _, e := range voidedEntries {
-		voided[e.Account] = append(voided[e.Account], e)
+	changed := map[model.AccountID][]Entry{}
+	for _, e := range changedEntries {
+		changed[e.Account] = append(changed[e.Account], e)
 	}
 	for _, a := range r.Accounts {
-		if err := s.appendNew(tx, a, byAccount[a.ID], voided[a.ID]); err != nil {
+		if err := s.appendNew(tx, a, byAccount[a.ID], changed[a.ID]); err != nil {
 			return err
 		}
 		delete(byAccount, a.ID)

@@ -4,6 +4,7 @@
 package store
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -19,7 +20,13 @@ func (s *Store) DataVersion() (int64, error) {
 
 // Backup writes a consistent copy of the database to path, replacing any file already there. The copy
 // is built beside path and renamed over it, so a failure leaves an existing file untouched.
+// It refuses the store's own database file.
 func (s *Store) Backup(path string) error {
+	if target, err := os.Stat(path); err == nil {
+		if own, err := os.Stat(s.path); err == nil && os.SameFile(target, own) {
+			return fmt.Errorf("store: backup target %s is the open database", path)
+		}
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".finplan-backup-*")
 	if err != nil {
 		return err
