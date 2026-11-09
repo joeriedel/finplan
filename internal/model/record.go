@@ -92,8 +92,10 @@ func (r *Record) addAsset(a *Asset) error {
 	a.Members = nil
 	r.assetIdx[a.ID] = len(r.Assets)
 	r.Assets = append(r.Assets, a)
+	seq := r.seq
 	for _, m := range members {
 		if err := r.AddMember(a.ID, m); err != nil {
+			r.seq = seq
 			r.Assets = r.Assets[:len(r.Assets)-1]
 			delete(r.assetIdx, a.ID)
 			a.Members = members

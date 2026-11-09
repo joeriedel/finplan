@@ -6,6 +6,7 @@ package model
 import (
 	"errors"
 	"math"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -495,5 +496,33 @@ func TestRuleMatchingNothingContributesZero(t *testing.T) {
 	}
 	if got := balance(t, r, "alone", d).Amount; got != 0 {
 		t.Errorf("alone: got %v, want 0", got)
+	}
+}
+
+func TestFailedAddAssetConsumesNoSeq(t *testing.T) {
+	rule := RuleMember(Rule{Types: []AccountType{TypeIRA}})
+	build := func(failFirst bool) *Record {
+		r := newRecord(t, &Account{ID: "a"})
+		if failFirst {
+			err := r.AddAsset(&Asset{ID: "y", Members: []Member{rule, AssetMember("missing")}})
+			if err == nil {
+				t.Fatal("AddAsset with a missing member asset succeeded")
+			}
+		}
+		if err := r.AddAccount(&Account{ID: "b"}); err != nil {
+			t.Fatal(err)
+		}
+		addAsset(t, r, "x", rule)
+		if err := r.AddMember("x", AccountMember("b")); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	got, want := build(true), build(false)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatal("record after a failed AddAsset differs from one built without it")
+	}
+	if m := got.Asset("x").Members; m[1].Seq != 4 {
+		t.Errorf("seq after failed AddAsset = %d, want 4", m[1].Seq)
 	}
 }

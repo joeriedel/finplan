@@ -261,11 +261,36 @@ Highly dynamic graphs: pan, zoom and scroll horizontally with no fixed end date.
 
 **Difference bands:** a shaded area between two lines, for example a 401k under a base projection and under one with an early withdrawal, showing the growing gap of tax, penalty and lost growth. The sidebar has a "Bands" section below the line list, where "+ Add" opens a popup choosing an upper and a lower line from the existing lines (any assets and projections). The colour defaults to the upper line's and follows it until the user edits the colour; Add is disabled when the two lines are the same or either is unset. Each band row has a visibility checkbox, a colour swatch, a name such as "401k: Base − Withdraw $100k" (or "Asset (Upper) − Asset (Lower)" when the assets differ), a Hatch toggle, a "Today's $" toggle and Remove. A band fills the area between its two lines, translucent (alpha about 0.25) and beneath the lines. Hatching is optional: 45° stripes in the band colour (alpha about 0.6), drawn with the plot draw list and clipped to the band and to the visible plot area, since ImPlot has no hatch patterns. A band draws only while it is visible and both its lines are drawn, so line visibility and solo apply, and it follows its lines' effective projections, so the switcher applies to unpinned lines. With the crosshair over the plot, the tooltip lists each drawn band's gap (upper − lower) at the cursor date, omitting the band if either line is out of range. When the band's Today's $ toggle is on, the tooltip adds the gap converted to today's dollars using the record's inflation schedule (`Globals[model.PropInflation]`) compounded from `Record.Today`; dates before today are inflated forward. Removing a line removes the bands that use it.
 
-The GUI picks up changes made outside it (by the CLI) without a restart: SQLite runs in WAL mode, and the GUI polls `PRAGMA data_version` and reloads only when it changes.
+Planned, not built: the GUI picks up changes made outside it (by the CLI) without a restart. The store already runs SQLite in WAL mode; the GUI would poll `PRAGMA data_version` and reload only when it changes.
 
 ## Storage and privacy
 
-All app data lives in SQLite outside the repository (under `~/.local/share/finplan/`). File → Backup... writes a consistent copy (`VACUUM INTO` or the SQLite backup API). Credentials live in the OS keyring, never in files. The repository is public: real financial data never enters it, and tests and fixtures use invented numbers, such as an invented budget for a family of six.
+All app data lives in SQLite outside the repository (the app will use `~/.local/share/finplan/finplan.db`; the app is not wired to the store yet). File → Backup... (planned) writes a consistent copy (`VACUUM INTO` or the SQLite backup API). Credentials live in the OS keyring, never in files. The repository is public: real financial data never enters it, and tests and fixtures use invented numbers, such as an invented budget for a family of six.
+
+### The storage layer
+
+`internal/store` is a headless package, built on the pure-Go driver `modernc.org/sqlite`, that saves and loads a whole `model.Record`. `store.Open(path)` takes a path, creates or migrates the database, sets WAL mode, foreign keys and a busy timeout, and fails if WAL did not take. The store has one connection and is safe for concurrent use. `Save(record)` and `Load()` are the main calls; each runs in one transaction.
+
+**Record versus documents.** The record proper, balance snapshots and transactions (with their kind, counter and memo), is append-only. Everything else is a freely editable document: account attributes, assets, the budget, projections, market classes, globals. Real tables hold the record so that it can be queried by account and date and so that the database itself enforces append-only. Versioned JSON holds the documents because they are nested, freely edited and versioned per document.
+
+**Schema.** The schema version is `PRAGMA user_version`. Migrations are a numbered, forward-only list applied in one transaction on `Open`; a released migration is never edited. A database newer than the code fails with `ErrFutureSchema` and is left untouched. Migration 1 creates:
+
+- `entries`: one row per snapshot or transaction, indexed by (account, date).
+- `corrections`: the full replacement values, a note and the time made, referencing an entry.
+- triggers that reject UPDATE and DELETE on both tables.
+- `documents`: kind, key, ordinal, format version and JSON body.
+
+Migration 2 adds `presets`, kept apart because `Save` replaces the documents wholesale.
+
+**Saving the record.** `Save` replaces every document and appends the model's entries that are not yet stored. It matches the stored entries of each account (with corrections applied) against the model's as a multiset of values. If a stored entry was changed or removed in the model, or an account that has stored entries is gone, `Save` fails with `ErrRecordChanged` and writes nothing. Changes to stored entries go through corrections.
+
+**Corrections.** `Entries(account)` lists an account's entries with their ids and current values. `Correct(id, values, note)` appends a correction, stamped with the time made, that holds the full replacement values; the original and earlier corrections stay. `Correct` rejects an unknown id (`ErrNotFound`), a snapshot correction that carries a transaction kind, counter or memo or would give the account two snapshots on one date, and a transfer with no counter account. `History(id)` returns the original and then each correction in order. `Load` applies the latest correction to each entry.
+
+**Versioning and loading.** Each document row carries its own format version, and decoding dispatches on it; a later format adds a case that reads the old shape and converts it. A row with an unknown format fails with `ErrUnknownFormat` rather than being dropped. The stored shape is a set of DTOs separate from the model types, so renaming a model field does not change what is on disk. `Load` rebuilds the record through the model constructors, replaying members in their original `Seq` order, so the loaded record equals the saved one; an empty database loads as an empty record.
+
+**View presets.** `PutPreset`, `Preset`, `Presets` and `DeletePreset` store opaque bytes under a name with a format version owned by the writer. The store does not interpret them and does not import `internal/graph`.
+
+**Not done yet.** The app is not wired to the store; there is no default path or demo database; there is no void or delete correction; and holdings, life events and a manual-versus-synced distinction have no storage because the model has no types for them yet.
 
 ## CLI and agent access
 

@@ -1,0 +1,343 @@
+// Copyright (c) 2026 Joseph Riedel
+// SPDX-License-Identifier: MIT
+
+package store
+
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/joeriedel/finplan/internal/model"
+)
+
+// encodeRecord turns everything in the record except the entries into document rows.
+func encodeRecord(r *model.Record) ([]docRow, error) {
+	var rows []docRow
+	add := func(kind, key string, ordinal int, v any) error {
+		body, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Errorf("store: encode %s %q: %w", kind, key, err)
+		}
+		rows = append(rows, docRow{kind, key, ordinal, formatCurrent, body})
+		return nil
+	}
+	if err := add(kindRecord, "", 0, recordDoc{Today: r.Today}); err != nil {
+		return nil, err
+	}
+	if err := add(kindBudget, "", 0, budgetDoc{Items: mapSlice(r.Budget.Items, itemDoc)}); err != nil {
+		return nil, err
+	}
+	for i, a := range r.Accounts {
+		d := accountDoc{a.ID, a.Name, a.Type, a.Tax, a.Owner, a.StatedRate, defaultDoc(a.Default)}
+		if err := add(kindAccount, string(a.ID), i, d); err != nil {
+			return nil, err
+		}
+	}
+	for i, a := range r.Assets {
+		d := assetDoc{a.ID, a.Name, mapSlice(a.Members, memberToDoc), defaultDoc(a.Default), paramsDoc(a.Params)}
+		if err := add(kindAsset, string(a.ID), i, d); err != nil {
+			return nil, err
+		}
+	}
+	for i, c := range r.Classes {
+		if err := add(kindClass, c.ID, i, classDoc{c.ID, c.Name, c.Return}); err != nil {
+			return nil, err
+		}
+	}
+	for name, s := range r.Globals {
+		if err := add(kindGlobal, name, 0, scheduleDoc(s)); err != nil {
+			return nil, err
+		}
+	}
+	for i, p := range r.Projections {
+		if err := add(kindProjection, p.Name, i, projectionToDoc(p)); err != nil {
+			return nil, err
+		}
+	}
+	return rows, nil
+}
+
+// decodeRecord rebuilds a record from document rows (in ordinal order) and the accounts' current
+// entries. The record is built only through the model's Add methods, so its indexes and member
+// sequence are the model's own; an error means the stored shape cannot be reproduced exactly.
+func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Record, error) {
+	var (
+		today   model.Date
+		accts   []accountDoc
+		assets  []assetDoc
+		budget  budgetDoc
+		classes []classDoc
+		globals = map[string][]segDoc{}
+		projs   []projectionDoc
+	)
+	for _, row := range rows {
+		var err error
+		switch row.kind {
+		case kindRecord:
+			var d recordDoc
+			err = decodeDoc(row, &d)
+			today = d.Today
+		case kindBudget:
+			err = decodeDoc(row, &budget)
+		case kindAccount:
+			var d accountDoc
+			err = decodeDoc(row, &d)
+			accts = append(accts, d)
+		case kindAsset:
+			var d assetDoc
+			err = decodeDoc(row, &d)
+			assets = append(assets, d)
+		case kindClass:
+			var d classDoc
+			err = decodeDoc(row, &d)
+			classes = append(classes, d)
+		case kindGlobal:
+			var d []segDoc
+			err = decodeDoc(row, &d)
+			globals[row.key] = d
+		case kindProjection:
+			var d projectionDoc
+			err = decodeDoc(row, &d)
+			projs = append(projs, d)
+		default:
+			return nil, fmt.Errorf("store: unknown document kind %q", row.kind)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	rec := model.NewRecord(today)
+	rec.Budget.Items = mapSlice(budget.Items, docItem)
+	for _, c := range classes {
+		rec.Classes = append(rec.Classes, model.MarketClass{ID: c.ID, Name: c.Name, Return: c.Return})
+	}
+	for name, segs := range globals {
+		s, err := docSchedule(segs)
+		if err != nil {
+			return nil, fmt.Errorf("store: global %q: %w", name, err)
+		}
+		rec.Globals[name] = s
+	}
+	if err := restoreAccountsAndAssets(rec, accts, assets, entries); err != nil {
+		return nil, err
+	}
+	for _, d := range projs {
+		p, err := docProjection(d)
+		if err != nil {
+			return nil, fmt.Errorf("store: %w", err)
+		}
+		if err := rec.AddProjection(p); err != nil {
+			return nil, fmt.Errorf("store: %w", err)
+		}
+	}
+	return rec, nil
+}
+
+// restoreAccountsAndAssets replays accounts, assets and members into rec so that the account and
+// asset order and every Member.Seq come out as stored. All members, including each default asset's
+// account member, are replayed in Seq order. AddAccount creates the default asset and numbers its
+// account member, so ensure calls it when that member's turn comes; assets are created in stored
+// order, so the assets before it are created first. Anything that does not fit is an error.
+func restoreAccountsAndAssets(rec *model.Record, accts []accountDoc, assets []assetDoc, entries map[model.AccountID][]Entry) error {
+	pos := map[model.AssetID]int{}
+	for i, a := range assets {
+		if _, dup := pos[a.ID]; dup {
+			return fmt.Errorf("store: asset %q stored twice", a.ID)
+		}
+		pos[a.ID] = i
+	}
+	isDefault := map[model.AssetID]bool{}
+	for _, a := range accts {
+		id := model.DefaultAssetID(a.ID)
+		if _, ok := pos[id]; !ok {
+			return fmt.Errorf("store: account %q has no default asset", a.ID)
+		}
+		isDefault[id] = true
+	}
+	prefix := string(model.DefaultAssetID(""))
+	for _, a := range assets {
+		if strings.HasPrefix(string(a.ID), prefix) && !isDefault[a.ID] {
+			return fmt.Errorf("store: default asset %q has no account", a.ID)
+		}
+	}
+
+	type pending struct {
+		asset int
+		m     memberDoc
+		acct  bool // the default asset's account member, added by AddAccount
+	}
+	var todo []pending
+	for i, a := range assets {
+		for j, m := range a.Members {
+			todo = append(todo, pending{i, m, j == 0 && isDefault[a.ID]})
+		}
+	}
+	sort.SliceStable(todo, func(i, j int) bool { return todo[i].m.Seq < todo[j].m.Seq })
+
+	created, nextAcct, next := 0, 0, 1
+	ensure := func(upTo int) error {
+		for ; created <= upTo; created++ {
+			ad := assets[created]
+			if isDefault[ad.ID] {
+				if nextAcct >= len(accts) || model.DefaultAssetID(accts[nextAcct].ID) != ad.ID {
+					return fmt.Errorf("store: default asset %q is out of order with the accounts", ad.ID)
+				}
+				ac := accts[nextAcct]
+				if len(ad.Members) == 0 || ad.Members[0].Account != ac.ID || ad.Members[0].Asset != "" ||
+					ad.Members[0].Rule != nil || ad.Members[0].Seq != next {
+					return fmt.Errorf("store: default asset %q: its account member is not reproducible (seq %d expected)", ad.ID, next)
+				}
+				acct, err := buildAccount(ac, entries[ac.ID])
+				if err != nil {
+					return err
+				}
+				if err := rec.AddAccount(acct); err != nil {
+					return fmt.Errorf("store: %w", err)
+				}
+				nextAcct++
+				next++
+			} else if err := rec.AddAsset(&model.Asset{ID: ad.ID}); err != nil {
+				return fmt.Errorf("store: %w", err)
+			}
+			a := rec.Asset(ad.ID)
+			a.Name = ad.Name
+			a.Default = docDefault(ad.Default)
+			var err error
+			if a.Params, err = docParams(ad.Params); err != nil {
+				return fmt.Errorf("store: asset %q: %w", ad.ID, err)
+			}
+		}
+		return nil
+	}
+	for _, p := range todo {
+		if err := ensure(p.asset); err != nil {
+			return err
+		}
+		if p.acct {
+			continue // ensure called AddAccount, which numbered the member
+		}
+		for _, ref := range []model.AssetID{p.m.Asset, model.DefaultAssetID(p.m.Account)} {
+			if p.m.Account == "" && ref != p.m.Asset {
+				continue
+			}
+			if j, ok := pos[ref]; ok {
+				if err := ensure(j); err != nil {
+					return err
+				}
+			}
+		}
+		if p.m.Seq != next {
+			return fmt.Errorf("store: asset %q: member seq %d cannot be reproduced (expected %d)", assets[p.asset].ID, p.m.Seq, next)
+		}
+		if err := rec.AddMember(assets[p.asset].ID, docMember(p.m)); err != nil {
+			return fmt.Errorf("store: %w", err)
+		}
+		next++
+	}
+	return ensure(len(assets) - 1)
+}
+
+func buildAccount(d accountDoc, entries []Entry) (*model.Account, error) {
+	a := &model.Account{ID: d.ID, Name: d.Name, Type: d.Type, Tax: d.Tax, Owner: d.Owner,
+		StatedRate: d.StatedRate, Default: docDefault(d.Default)}
+	for _, e := range entries {
+		switch e.Kind {
+		case KindSnapshot:
+			a.AddSnapshot(e.Date, e.Amount)
+		case KindTransaction:
+			t := model.Transaction{Date: e.Date, Amount: e.Amount, Kind: e.TxKind, Counter: e.Counter, Memo: e.Memo}
+			if err := a.AddTransaction(t); err != nil {
+				return nil, fmt.Errorf("store: %w", err)
+			}
+		default:
+			return nil, fmt.Errorf("store: entry %d has unknown kind %q", e.ID, e.Kind)
+		}
+	}
+	return a, nil
+}
+
+// Load returns the stored record with every correction applied. An empty database loads as an empty
+// record.
+func (s *Store) Load() (*model.Record, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT kind, key, ordinal, format, body FROM documents ORDER BY ordinal, kind, key`)
+	if err != nil {
+		return nil, err
+	}
+	var docs []docRow
+	for rows.Next() {
+		var d docRow
+		if err := rows.Scan(&d.kind, &d.key, &d.ordinal, &d.format, &d.body); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		docs = append(docs, d)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	all, err := queryEntries(tx, ``)
+	if err != nil {
+		return nil, err
+	}
+	byAccount := map[model.AccountID][]Entry{}
+	for _, e := range all {
+		byAccount[e.Account] = append(byAccount[e.Account], e)
+	}
+	return decodeRecord(docs, byAccount)
+}
+
+// Save writes the record in one transaction. Documents are replaced; entries in the model that are
+// not stored yet are appended. If a stored entry (with its corrections applied) is missing from or
+// changed in the model, or an account with stored entries is gone, Save writes nothing and returns
+// an error matching ErrRecordChanged.
+func (s *Store) Save(r *model.Record) error {
+	docs, err := encodeRecord(r)
+	if err != nil {
+		return err
+	}
+	// Refuse to write a record that Load could not rebuild.
+	if _, err := decodeRecord(docs, nil); err != nil {
+		return fmt.Errorf("store: record cannot be restored: %w", err)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM documents`); err != nil {
+		return err
+	}
+	for _, d := range docs {
+		if _, err := tx.Exec(`INSERT INTO documents (kind, key, ordinal, format, body) VALUES (?, ?, ?, ?, ?)`,
+			d.kind, d.key, d.ordinal, d.format, d.body); err != nil {
+			return fmt.Errorf("store: save %s %q: %w", d.kind, d.key, err)
+		}
+	}
+	all, err := queryEntries(tx, ``)
+	if err != nil {
+		return err
+	}
+	byAccount := map[model.AccountID][]Entry{}
+	for _, e := range all {
+		byAccount[e.Account] = append(byAccount[e.Account], e)
+	}
+	for _, a := range r.Accounts {
+		if err := s.appendNew(tx, a, byAccount[a.ID]); err != nil {
+			return err
+		}
+		delete(byAccount, a.ID)
+	}
+	for id := range byAccount {
+		return fmt.Errorf("%w: account %q is absent from the record", ErrRecordChanged, id)
+	}
+	return tx.Commit()
+}
