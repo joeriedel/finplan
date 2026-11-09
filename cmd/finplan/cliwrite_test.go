@@ -182,7 +182,7 @@ func TestCLIWriteProjectionCommands(t *testing.T) {
 		t.Errorf("set-inflation: %+v", w.Projection.Modifications)
 	}
 	if w := write(t, path, "", "projection", "set-inflation", "Early", "0.035"); w.Changed {
-		t.Errorf("same inflation changed")
+		t.Error("same inflation changed")
 	}
 	w = write(t, path, "", "projection", "set-inflation", "Early", "none")
 	if len(w.Projection.Modifications) != 0 {
@@ -363,7 +363,7 @@ func TestCLIWriteDryRunSavesNothing(t *testing.T) {
 	}
 	for _, args := range cmds {
 		w := write(t, path, "", append(slices.Clone(args), "--dry-run")...)
-		if !w.DryRun || !w.Changed || (w.Projection == nil) {
+		if !w.DryRun || !w.Changed || w.Projection == nil {
 			t.Errorf("finplan %v: %+v", args, w)
 		}
 		if !reflect.DeepEqual(before, dbSnapshot(t, path)) {
@@ -408,7 +408,7 @@ func TestCLIEarlyWithdrawalScenario(t *testing.T) {
 		t.Errorf("401k at year end: %v with the withdrawal, %v without", early, base)
 	}
 	if before := lastValue(t, path, "401k", "Early", "2027-05", "2027-05"); before != lastValue(t, path, "401k", "Base", "2027-05", "2027-05") {
-		t.Errorf("the withdrawal changed the balance before its date")
+		t.Error("the withdrawal changed the balance before its date")
 	}
 }
 
