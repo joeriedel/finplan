@@ -1,0 +1,240 @@
+// Copyright (c) 2026 Joseph Riedel
+// SPDX-License-Identifier: MIT
+
+package demodata
+
+import (
+	"fmt"
+	"math"
+	"time"
+
+	"github.com/joeriedel/finplan/internal/model"
+)
+
+// FamilyToday is the fixed reference date of the Family record, so the data is deterministic.
+var FamilyToday = model.D(2026, time.November, 8)
+
+// Account ids of the Family record.
+const (
+	Checking  model.AccountID = "checking"
+	Savings   model.AccountID = "savings"
+	Card      model.AccountID = "card"
+	Brokerage model.AccountID = "brokerage"
+	K401      model.AccountID = "401k"
+	Roth      model.AccountID = "roth"
+	TSP       model.AccountID = "tsp"
+	Home      model.AccountID = "home"
+	Mortgage  model.AccountID = "mortgage"
+	College1  model.AccountID = "529-oldest"
+	College2  model.AccountID = "529-middle"
+	College3  model.AccountID = "529-youngest"
+)
+
+// Asset ids of the Family record.
+const (
+	AllCash    model.AssetID = "all-cash"
+	Retirement model.AssetID = "retirement"
+	Colleges   model.AssetID = "529s"
+	NetWorth   model.AssetID = "net-worth"
+	// Liquid contains All cash and also names checking itself, which overlaps, so that member is invalid.
+	Liquid model.AssetID = "liquid"
+)
+
+// Projection names of the Family record.
+const (
+	ProjBase     = "Base"
+	ProjNewJob   = "New job"
+	ProjWithdraw = "Withdraw $100k"
+)
+
+// netPay is the share of gross pay that lands in an account, matching the engine's placeholder tax.
+const netPay = 0.75
+
+var (
+	historyOpen = model.D(2024, time.October, 31)
+	tspEnd      = model.D(2026, time.June, 30)
+)
+
+type accountSpec struct {
+	id      model.AccountID
+	name    string
+	typ     model.AccountType
+	tax     model.TaxTreatment
+	owner   string
+	rate    float64
+	opening float64
+	// end is the last date of real data; zero means FamilyToday.
+	end model.Date
+}
+
+var accountSpecs = []accountSpec{
+	{Checking, "Checking", model.TypeChecking, model.Taxable, "Joint", 0, 18000, 0},
+	{Savings, "Savings", model.TypeSavings, model.Taxable, "Joint", 0.04, 40000, 0},
+	{Card, "Credit card", model.TypeCreditCard, model.Taxable, "Joint", 0, -2700, 0},
+	{Brokerage, "Brokerage", model.TypeBrokerage, model.Taxable, "Joint", 0.06, 120000, 0},
+	{K401, "401k", model.Type401k, model.TaxDeferred, "Parent A", 0.06, 310000, 0},
+	{Roth, "Roth IRA", model.TypeRothIRA, model.TaxFree, "Parent A", 0.06, 85000, 0},
+	{TSP, "TSP", model.TypeTSP, model.TaxDeferred, "Parent B", 0.055, 140000, tspEnd},
+	{Mortgage, "Mortgage", model.TypeMortgage, model.Taxable, "Joint", 0.06, -412000, 0},
+	{College1, "529 oldest", model.Type529, model.Tax529, "Child 1", 0.05, 38000, 0},
+	{College2, "529 middle", model.Type529, model.Tax529, "Child 2", 0.05, 26000, 0},
+	{College3, "529 youngest", model.Type529, model.Tax529, "Child 3", 0.05, 14000, 0},
+}
+
+func monthly(day int) model.Recurrence {
+	return model.Recurrence{Kind: model.Monthly, Day: day}
+}
+
+func familyBudget() model.Budget {
+	income := func(id, name string, amount float64, rec model.Recurrence) model.BudgetItem {
+		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemIncome, Amount: amount, Recurrence: rec, Indexed: true, Account: Checking}
+	}
+	expense := func(id, name string, from model.AccountID, amount float64, rec model.Recurrence) model.BudgetItem {
+		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemExpense, Amount: amount, Recurrence: rec, Indexed: true, Account: from}
+	}
+	transfer := func(id, name string, from, to model.AccountID, amount float64, day int) model.BudgetItem {
+		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemTransfer, Amount: amount, Recurrence: monthly(day), From: from, To: to}
+	}
+	return model.Budget{Items: []model.BudgetItem{
+		income("salary-a", "Salary (Parent A)", 5000, model.Recurrence{Kind: model.Semimonthly, Day: 15, Day2: 31}),
+		income("salary-b", "Salary (Parent B)", 3700, model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2024, time.November, 8)}),
+		transfer("mortgage-payment", "Mortgage payment", Checking, Mortgage, 2600, 1),
+		transfer("card-payment", "Credit card payment", Checking, Card, 2700, 5),
+		expense("groceries", "Groceries", Card, 1800, monthly(3)),
+		expense("dining", "Dining out", Card, 900, monthly(6)),
+		expense("utilities", "Utilities", Checking, 450, monthly(12)),
+		expense("childcare", "Childcare and activities", Checking, 1200, monthly(3)),
+		expense("transport", "Transportation", Checking, 600, monthly(8)),
+		expense("insurance", "Insurance", Checking, 700, monthly(20)),
+		expense("vacation", "Family vacation", Checking, 6000, model.Recurrence{Kind: model.Annual, Month: time.June, Day: 15}),
+		transfer("save-401k", "401k contribution", Checking, K401, 1000, 16),
+		transfer("save-tsp", "TSP contribution", Checking, TSP, 800, 16),
+		transfer("save-savings", "Savings deposit", Checking, Savings, 500, 25),
+		transfer("save-brokerage", "Brokerage deposit", Checking, Brokerage, 800, 25),
+		transfer("save-roth", "Roth IRA contribution", Checking, Roth, 500, 25),
+		transfer("save-529-1", "529 contribution (oldest)", Checking, College1, 170, 25),
+		transfer("save-529-2", "529 contribution (middle)", Checking, College2, 170, 25),
+		transfer("save-529-3", "529 contribution (youngest)", Checking, College3, 170, 25),
+	}}
+}
+
+// Family returns an invented record for a family of six: twelve accounts with two years of history,
+// a basic budget, aggregate assets and three projections. Every number is invented. The TSP is
+// entered by hand, so its data ends months before the synced accounts', and the home has only
+// occasional valuations. The Liquid asset contains an overlapping member.
+func Family() *model.Record {
+	rec := model.NewRecord(FamilyToday)
+	rec.Globals[model.PropInflation] = model.Constant(0.025)
+	rec.Budget = familyBudget()
+
+	for _, s := range accountSpecs {
+		a := &model.Account{ID: s.id, Name: s.name, Type: s.typ, Tax: s.tax, Owner: s.owner, StatedRate: s.rate}
+		if s.id == Roth {
+			a.Default.Intervals = []model.Interval{{From: model.MinDate, To: historyOpen.Add(-1), Value: 70000}}
+		}
+		must(rec.AddAccount(a))
+		generateHistory(rec, a, s)
+	}
+	home := &model.Account{ID: Home, Name: "Home", Type: model.TypeProperty, Tax: model.Taxable, Owner: "Joint", StatedRate: 0.03}
+	home.AddSnapshot(model.D(2024, time.December, 15), 520000)
+	home.AddSnapshot(model.D(2025, time.September, 20), 535000)
+	home.AddSnapshot(model.D(2026, time.May, 10), 548000)
+	must(rec.AddAccount(home))
+
+	cash := []model.AccountType{model.TypeChecking, model.TypeSavings}
+	must(rec.AddAsset(&model.Asset{ID: AllCash, Name: "All cash", Members: []model.Member{model.RuleMember(model.Rule{Types: cash})}}))
+	must(rec.AddAsset(&model.Asset{ID: Retirement, Name: "Retirement", Members: []model.Member{
+		model.AccountMember(K401), model.AccountMember(TSP), model.AccountMember(Roth),
+	}}))
+	must(rec.AddAsset(&model.Asset{ID: Colleges, Name: "529 accounts", Members: []model.Member{
+		model.RuleMember(model.Rule{Tax: []model.TaxTreatment{model.Tax529}}),
+	}}))
+	must(rec.AddAsset(&model.Asset{ID: NetWorth, Name: "Net worth", Members: []model.Member{
+		model.AssetMember(AllCash), model.AccountMember(Card), model.AccountMember(Brokerage),
+		model.AssetMember(Retirement), model.AssetMember(Colleges), model.AccountMember(Home), model.AccountMember(Mortgage),
+	}}))
+	must(rec.AddAsset(&model.Asset{ID: Liquid, Name: "Liquid assets", Members: []model.Member{
+		model.AssetMember(AllCash), model.AccountMember(Brokerage), model.AccountMember(Checking),
+	}}))
+
+	growth := model.NewSchedule(
+		model.Segment{From: model.MinDate, Value: 0.04},
+		model.Segment{From: model.D(2029, time.January, 1), Value: 0.06},
+		model.Segment{From: model.D(2035, time.January, 1), Value: 0.02},
+	)
+	must(rec.AddProjection(&model.Projection{Name: ProjBase, Start: model.Ptr(FamilyToday)}))
+	must(rec.AddProjection(&model.Projection{Name: ProjNewJob, Parent: ProjBase, Mods: []model.Modification{
+		{
+			Target:   model.ObjectRef{Kind: model.KindBudgetItem, ID: "salary-a"},
+			Property: model.PropAmount,
+			Values:   model.NewSchedule(model.Segment{From: model.D(2027, time.March, 1), Value: 6500}),
+		},
+		{
+			Target:   model.ObjectRef{Kind: model.KindAccount, ID: string(Brokerage)},
+			Property: model.PropGrowth,
+			Values:   growth,
+		},
+	}}))
+	withdrawal := model.BudgetItem{
+		ID: "early-401k-withdrawal", Name: "Early 401k withdrawal", Kind: model.ItemTransfer, Amount: 100000,
+		Recurrence: model.Recurrence{Kind: model.OneTime, Anchor: model.D(2027, time.June, 1)}, From: K401, To: Checking,
+	}
+	must(rec.AddProjection(&model.Projection{Name: ProjWithdraw, Parent: ProjBase, Mods: []model.Modification{
+		{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: withdrawal.ID}, Property: model.PropAddItem, Item: &withdrawal},
+	}}))
+	return rec
+}
+
+// generateHistory fills an account with the transactions its budget items imply, from just after the
+// opening snapshot to the account's end, and with month-end snapshots that also include growth the
+// transactions do not explain.
+func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
+	end := s.end
+	if end == 0 {
+		end = FamilyToday
+	}
+	for _, it := range rec.Budget.Items {
+		if !it.Touches(a.ID) {
+			continue
+		}
+		for _, d := range it.Recurrence.Between(historyOpen, end) {
+			t := model.Transaction{Date: d, Memo: it.Name}
+			switch {
+			case it.Kind == model.ItemIncome:
+				t.Kind, t.Amount = model.TxIncome, it.Amount*netPay
+			case it.Kind == model.ItemExpense:
+				t.Kind, t.Amount = model.TxExpense, -it.Amount
+			case it.From == a.ID:
+				t.Kind, t.Amount, t.Counter = model.TxTransfer, -it.Amount, it.To
+			default:
+				t.Kind, t.Amount, t.Counter = model.TxTransfer, it.Amount, it.From
+			}
+			must(a.AddTransaction(t))
+		}
+	}
+	bal := s.opening
+	a.AddSnapshot(historyOpen, bal)
+	rate := model.Constant(s.rate)
+	for prev := historyOpen; prev < end; {
+		y, m, _ := prev.Add(1).YMD()
+		next := min(model.D(y, m+1, 0), end)
+		bal = bal*rate.Compound(prev, next) + sumAmounts(a.TransactionsIn(prev, next))
+		bal = math.Round(bal*100) / 100
+		a.AddSnapshot(next, bal)
+		prev = next
+	}
+}
+
+func sumAmounts(ts []model.Transaction) float64 {
+	sum := 0.0
+	for _, t := range ts {
+		sum += t.Amount
+	}
+	return sum
+}
+
+func must(err error) {
+	if err != nil {
+		panic(fmt.Sprintf("demodata: invalid built-in record: %v", err))
+	}
+}

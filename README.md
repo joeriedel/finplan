@@ -2,7 +2,7 @@
 
 finplan is a personal financial planner for one user. It is a Linux desktop app written in Go, drawing its UI with Dear ImGui and ImPlot (via cimgui-go) on SDL3, as a native Wayland client. For now it shows an interactive plot of invented balance data.
 
-The data model, projection engine and planned features are described in [docs/design.md](docs/design.md).
+The data model, projection engine and planned features are described in [docs/design.md](docs/design.md). The model and a placeholder engine exist as standalone Go packages, `internal/model` and `internal/engine`; the UI does not use them yet.
 
 ## Prerequisites
 

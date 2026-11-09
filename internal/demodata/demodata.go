@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Joseph Riedel
 // SPDX-License-Identifier: MIT
 
-// Package demodata generates invented, deterministic account balances for exercising the UI.
+// Package demodata provides invented, deterministic data for exercising the UI and the engine:
+// Generate makes monthly balance series, and Family builds a complete model record.
 // None of the numbers describe a real person.
 package demodata
 

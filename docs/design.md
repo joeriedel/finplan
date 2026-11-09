@@ -2,7 +2,7 @@
 
 This document describes finplan's data model, projection engine, analysis tools and agent access. It records decisions, not code: where the code and this document disagree, one of them is wrong and should be fixed. It describes capabilities only; a user's own accounts, household and numbers are data entered into the app, never written here or anywhere in the repository.
 
-Status: agreed design, not yet implemented beyond the UI scaffold.
+Status: agreed design. The data model, asset rules and a placeholder projection engine with breakdowns exist as standalone libraries (`internal/model`, `internal/engine`) that import only the standard library; the GUI does not use them yet. Financial rules are placeholders (see Implementation notes); market classes, shocks and rebalances have types only.
 
 ## Principles
 
@@ -17,7 +17,7 @@ Status: agreed design, not yet implemented beyond the UI scaffold.
 
 An account is naked data: a balance history, a transaction history (and, for investment accounts, holdings), plus descriptive attributes. Attributes are facts, not behavior. Examples:
 
-- type: checking, savings, credit card, brokerage, 401k, TSP, IRA, Roth IRA, HSA, 529, mortgage, loan, equity (RSUs)
+- type: checking, savings, credit card, brokerage, 401k, TSP, IRA, Roth IRA, HSA, 529, mortgage, loan, equity (RSUs), property (such as a home)
 - tax treatment: taxable, tax-deferred, tax-free, 529
 - owner
 - a stated interest rate, which serves only as a default when the account is projected
@@ -190,6 +190,34 @@ The engine is event-driven, with no fixed time step. It advances from one dated 
 Capabilities the engine must model: 401k and TSP limits, employer match, RSU vesting and sale, mortgage amortization, 529 rules, inflation, FERS pensions (annuity, the supplement before 62, survivor options), and retirement drawdown (withdrawal order, Social Security, required minimum distributions, Roth conversions).
 
 The engine must be fast: goal solving and Monte Carlo rerun it thousands of times. Sixty years of biweekly pay and monthly bills is a few thousand events per run.
+
+## Implementation notes
+
+Details the build settled, and the placeholders it uses until the real rules arrive.
+
+**Layout.** Model types and asset rules are in `internal/model`; the engine is in `internal/engine` and imports the model. The invented family-of-six dataset (`demodata.Family()`, reference date 2026-11-08) is in `internal/demodata`; the GUI still uses the older `demodata.Generate`.
+
+**Dates and growth.** Dates have day resolution. Growth compounds annually over exactly days/365.25.
+
+**Query.** `engine.Balances(record, projection name, target asset, sample times)` takes its modifications from the named projection and its parent chain; an empty name means reality. `Record.Today` stands in for the clock and is the default projection start.
+
+**Sample status.** Each sample is actual, projected, partly projected (an aggregate with some members projected) or default (no underlying account has data).
+
+**Projection start.** For both the per-asset start and `override_history`, the outermost asset that sets one wins; the projection-wide value applies only where no asset sets one.
+
+**Precedence.** The projection layer is consulted first, then the assets' own parameters; within a layer the outermost asset wins. Overlapping siblings that differ are reported as a conflict, and the earlier-added sibling's value is used.
+
+**Overlap.** The later-added member (by a record-wide sequence) is invalid as a whole, rule members included, is named with its duplicate and is left out of sums. It is checked on every resolve. A rule matching no accounts contributes 0; an empty rule matches every account. Default asset ids are `acct:<id>`.
+
+**Actual data span.** From the earliest to the latest snapshot or transaction; an account needs at least one snapshot. Between snapshots the balance is the earlier snapshot plus transactions; before the first snapshot it is counted back from it.
+
+**Breakdown.** `engine.Breakdown(record, projection, target, from, to)` covers (from, to]. Lines are split by cause and by actual (read back) versus projected. Causes: income, expense, transfer, contribution, withdrawal, tax, growth, unexplained (snapshot jumps not covered by transactions) and default. A `default` cause absorbs changes from default balances so the lines always total the balance change; residues under 1e-6 are dropped. Transfers with both sides inside the target cancel.
+
+**Transfer classification.** Unsheltered to sheltered (tax-deferred, tax-free, 529) is a contribution, sheltered to unsheltered a withdrawal, anything else a transfer. A transfer to an account outside the target's scope counts as money leaving.
+
+**Placeholder rules.** Tax is 25% of gross on income flows; a withdrawal from a tax-deferred account also charges 32% tax on top, to the source, with no penalty. On one date the engine applies income, expenses, then transfers (the full order under The engine is not yet modelled). Indexed budget items scale by the global inflation schedule compounded from `Record.Today` to the flow date; history is never indexed.
+
+**Modifications supported.** A budget item's `amount` schedule, an account or asset `growth` schedule, global `inflation`, and `add_item` (adds a whole budget item). Unsupported properties and dangling targets are skipped and reported in the result's diagnostics.
 
 ## Analysis tools
 
