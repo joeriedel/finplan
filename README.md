@@ -37,11 +37,11 @@ The Projections tab lists the projections as a tree with Reality first, with sea
 
     bin/finplan [--demo | --db <path>] <command> [arguments] [flags]
 
-With no command (`finplan` or `finplan --demo`) the app opens its window as above. With a command, the same binary reads the database and prints one JSON document on stdout, without a window. Run `bin/finplan help` for the commands and `bin/finplan help --json` for the same description as JSON, generated from the command definitions the parser uses.
+With no command (`finplan` or `finplan --demo`) the app opens its window as above. With a command, the same binary reads or writes the database and prints one JSON document on stdout, without a window. Run `bin/finplan help` for the commands and `bin/finplan help --json` for the same description as JSON, generated from the command definitions the parser uses.
 
 - `--demo` (a throwaway seeded database, removed on exit) and `--db <path>` work on every command, before or after it; using both is a usage error. With neither, the real database is used (same location as the app).
 - Read commands never write: they open the database read-only. A missing file is an error (`no_database`) and is not created. A database older than the program gives `old_schema` (open it with the app first so it is upgraded), and a newer one `future_schema`.
-- Errors are `{"error":{"code","message"}}` on stdout, with exit code 2 for usage errors and 1 for all others. Codes: `usage`, `not_found`, `ambiguous`, `no_database`, `old_schema`, `future_schema`, `database`, `engine`.
+- Errors are `{"error":{"code","message"}}` on stdout, with exit code 2 for usage errors and 1 for all others. Codes: `usage`, `not_found`, `ambiguous`, `no_database`, `old_schema`, `future_schema`, `database`, `engine`, and for the write commands `unknown_target`, `name_taken`, `has_children`, `cycle`, `invalid`.
 - Dates are `YYYY-MM-DD`, and `null` when absent or unbounded. Statuses are lowercase: `default`, `actual`, `projected`, `partly_projected`. Reality appears as `"projection": null`.
 
 Read commands:
@@ -64,7 +64,38 @@ Commands about data that belongs to one kind of object are noun-verb (`account l
 
 A `<target>` is an asset or account given by id or display name; ids win over names, an account and its default asset count as one object, and a name matching several objects is an `ambiguous` error. `--from` and `--to` take `YYYY-MM-DD` or `YYYY-MM`: for `--from` a month means its first day, for `--to` its last day. Month and year steps keep the day of month of `--from`, clamped to the end of shorter months.
 
-Commands that change data come later.
+Write commands (all on projections; see below):
+
+| Command | Effect |
+| --- | --- |
+| `projection new <name> [--parent P]` | add an empty projection |
+| `projection clone <name> --as <new-name>` | add a copy |
+| `projection rename <name> <new-name>` | rename, pointing child projections and saved view presets at the new name |
+| `projection set-parent <name> [<parent>]` | build on another projection, or on nothing when omitted |
+| `projection delete <name>` | delete a projection no other builds on |
+| `projection set-start <name> <date\|none>` | set the start date; `none` inherits |
+| `projection set-override-history <name> <true\|false\|none>` | set whether the start overrides recorded data; `none` inherits |
+| `projection set-inflation <name> <rate\|none>` | set a constant inflation rate, replacing the first global inflation modification; `none` removes it |
+| `mod add <projection> --target T --property amount\|growth\|inflation [--value N [--from D]] [--at I]` | add a modification; `T` is `item:<id or name>`, `account:<id or name>`, `asset:<id or name>` or `global` |
+| `mod edit <projection> <index> [--value N [--from D]]` | replace a modification's values |
+| `mod move <projection> <from> <to>` | move a modification so that it ends up at index `to` |
+| `mod remove <projection> <index>` | remove a modification |
+| `item add <projection> [flags]` | add a new budget item that exists only under that projection and the ones building on it |
+| `item edit <projection> <item> [flags]` | change an item the projection adds, keeping its id |
+| `item end <projection> <item> <date>` | make a budget item (the record's or one added in the chain) pay nothing from a date on |
+
+Write commands go through the same edit operations (`internal/ops`) as the app, so both agree on what an edit may do. Details:
+
+- Database: `--demo`, `--db` and the default work as for reads, but a write command opens the database with `store.Open`, so it migrates an older database, and still never creates a missing one (`no_database`). Read commands still never write.
+- `--dry-run` (every write command) applies the edit to a copy, prints what would change and saves nothing.
+- Output is `{"dry_run","changed","projection"}`, the projection in the same shape as `projection show`, after the edit. An edit that changes nothing prints `"changed": false` and exits 0. `projection rename` adds `renamed` (`{from,to}`, or null), `rewritten_presets` and `warnings` (presets that could not be rewritten; the rename is saved regardless). `projection delete` prints `removed` and the projection as it was.
+- Rates (growth, inflation) are fractions: `0.03` is 3%. A negative rate given as an argument needs `--` before it.
+- Modification values are a constant (`--value`, from `--from`, always when omitted) or a schedule read as JSON on stdin or from `--json-file`: `[{"from":"YYYY-MM-DD","end":"YYYY-MM-DD" or null,"value":number}]`, sorted and not overlapping. Input is decoded strictly: unknown fields and trailing data are usage errors.
+- Budget items: `--kind income|expense|transfer`, `--name`, `--amount` (above zero), `--every one-time|monthly|biweekly|annual`, `--on <date>`, `--day` (monthly), `--end <date|none>`, `--account` (income, expense), `--from` and `--to` (transfer), `--indexed`, and for `item add` `--id`. Or give the item as JSON (the shape `budget list` prints) on stdin or `--json-file` instead of the flags. One-time and biweekly items need a date; an annual item's day is checked against its month; semimonthly is not accepted for added items. The id is made from the name (a unique slug) when not given. An item is stored as an add_item modification. `item end` appends an amount modification with value 0 from the date.
+- Targets are checked by the shared operations: the property must suit the target (amount for an item, growth for an account or asset, inflation for global), and the target must exist at the modification's position, else `unknown_target`: a record budget item, an item added by an ancestor projection, or an item added by an earlier row of the same projection. `mod add` cannot add an item (use `item add`). A move, removal, parent change or removal of an added item is refused if a modification that resolved before would no longer resolve; modifications already dangling do not block an edit.
+- Exit codes and error codes are as above: `usage` exits 2; `not_found`, `unknown_target`, `name_taken`, `has_children`, `cycle`, `invalid`, `database`, `no_database`, `old_schema`, `future_schema` and `ambiguous` exit 1.
+
+Run `bin/finplan help --json` for every command's arguments, flags (with types), whether it writes and what JSON input it reads.
 
 An agent skill for using the CLI is in `.claude/skills/finplan/SKILL.md`.
 

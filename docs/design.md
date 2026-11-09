@@ -131,7 +131,7 @@ A projection can modify **any property of any object on a timetable**: a modific
 - the projection start date, globally or per asset, and `override_history` (see below)
 - global assumptions such as inflation
 
-A projection may build on one parent projection (a chain, never a merge of two). A modification whose target no longer exists, for example a change to a budget item later deleted from the base, is marked red and skipped, as with overlap (the red state is not built yet).
+A projection may build on one parent projection (a chain, never a merge of two). A modification whose target no longer exists, for example a change to a budget item later deleted from the base, is marked red and skipped, as with overlap (the red state is not built yet). The shared edit operations (`internal/ops`, used by the GUI and the CLI) keep this from arising through an edit: they refuse a move, removal, parent change or removal of an added item that would leave a modification that resolved before unresolved, and a new modification whose target does not resolve at its position; modifications already dangling do not block an edit.
 
 ### Querying the engine
 
@@ -306,9 +306,9 @@ Migration 2 adds `presets`, kept apart because `Save` replaces the documents who
 
 ## CLI and agent access
 
-The `finplan` binary doubles as a CLI: with no subcommand (`finplan`, `finplan --demo`) it opens the GUI, and a non-flag argument routes to the CLI (`main`, `isCLI`), which does one job through the shared library and exits. Every command prints one JSON document on stdout; errors are `{"error":{"code","message"}}` on stdout, with exit 2 for usage errors and 1 for all others. The codes are `usage`, `not_found`, `ambiguous`, `no_database`, `old_schema`, `future_schema`, `database` and `engine`.
+The `finplan` binary doubles as a CLI: with no subcommand (`finplan`, `finplan --demo`) it opens the GUI, and a non-flag argument routes to the CLI (`main`, `isCLI`), which does one job through the shared library and exits. Every command prints one JSON document on stdout; errors are `{"error":{"code","message"}}` on stdout, with exit 2 for usage errors and 1 for all others. The codes are `usage`, `not_found`, `ambiguous`, `no_database`, `old_schema`, `future_schema`, `database` and `engine`; the write commands add `unknown_target`, `name_taken`, `has_children`, `cycle` and `invalid`.
 
-Commands are data: `cmd/finplan/cliread.go` holds the command table (name, summary, arguments, flags, output shape), and both the parser and `finplan help` / `finplan help --json` are generated from it, so the reference cannot drift from the code.
+Commands are data: `cmd/finplan/cliread.go` holds the read command table and `cmd/finplan/cliwrite.go` the write commands (name, summary, arguments, flags, output shape, whether it writes, its JSON input), and both the parser and `finplan help` / `finplan help --json` are generated from it, so the reference cannot drift from the code.
 
 **Global flags.** `--demo` (a throwaway seeded database, removed on exit) and `--db <path>` work on every command, before or after it; using both is a usage error. With neither, the real database is used (`$XDG_DATA_HOME/finplan/finplan.db`, else `~/.local/share/finplan/finplan.db`).
 
@@ -339,12 +339,38 @@ Commands are data: `cmd/finplan/cliread.go` holds the command table (name, summa
 
 **Dates.** Dates are `YYYY-MM-DD` or `YYYY-MM`. For `--from`, `YYYY-MM` is the first of the month; for `--to`, the last day. Month and year steps keep the start's day of month, clamped to the month's end, and are computed from `--from` each time so a clamped day does not carry forward (`parseCLIDate`, `sampleDates`).
 
-Write commands are planned, not built. Illustrative shape, not a final command set:
+**Write commands.** `cmd/finplan/cliwrite.go` defines them; each makes its edit through `internal/ops`, the same operations the GUI uses, so both agree on what an edit may do.
 
-    finplan projection set "New job" brokerage.growth "2027-01:0.04,2030-01:0.06"
-    finplan budget add --projection "New job" --item groceries --amount 1800 --monthly
-    finplan record correct <entry-id> --amount 1234.56
+    finplan projection new <name> [--parent P]
+    finplan projection clone <name> --as <new-name>
+    finplan projection rename <name> <new-name>
+    finplan projection set-parent <name> [<parent>]
+    finplan projection delete <name>
+    finplan projection set-start <name> <date|none>
+    finplan projection set-override-history <name> <true|false|none>
+    finplan projection set-inflation <name> <rate|none>
+    finplan mod add <projection> --target item:<x>|account:<x>|asset:<x>|global --property amount|growth|inflation [--value N [--from D]] [--at I]
+    finplan mod edit <projection> <index> [--value N [--from D]]
+    finplan mod move <projection> <from> <to>
+    finplan mod remove <projection> <index>
+    finplan item add <projection> [--kind --name --amount --every --on --day --end --account --from --to --indexed --id]
+    finplan item edit <projection> <item> [item flags]
+    finplan item end <projection> <item> <date>
 
-The agent (Claude) has full access: it reads the record, assets, budgets, projections and engine output, and (once the write commands exist) writes projections, budgets and record entries. Record writes go through corrections, like the GUI's. Whatever the agent reads is sent to its model provider.
+**Database.** A write command opens the database with `store.Open` (`openWrite`): it migrates an older database but never creates a missing one (`no_database`); `--demo` and `--db` work as for reads. Read commands still never write.
+
+**Dry run and output.** Every write command takes `--dry-run`: the edit is validated and applied to a copy, and nothing is saved (`ops.Options`, `commit`). The output is `{dry_run, changed, projection}`, the projection in the shape of `projection show` after the edit. An edit that changes nothing (`ops.ErrNoChange`) prints `changed: false` and exits 0. `projection rename` adds `renamed {from, to}`, `rewritten_presets` and `warnings` (presets that could not be rewritten; the rename is saved regardless); `projection delete` prints `removed` and the projection as it was.
+
+**Errors.** `opsError` maps the operations' errors to codes: `not_found` (unknown projection), `unknown_target`, `name_taken`, `has_children`, `cycle`, `invalid` (out-of-range values, a missing object, an empty name) and `database` (the save failed). Usage errors exit 2, all others 1.
+
+**Input.** Rates are fractions (`0.03` for 3%); a negative rate argument needs `--` before it. A modification's values are a constant (`--value`, optionally `--from`) or a schedule as JSON on stdin or `--json-file`, `[{"from","end","value"}]`; a budget item is given by flags or as JSON in the shape `budget list` prints. JSON is decoded strictly (unknown fields and trailing data are usage errors).
+
+**Budget items.** `item add` stores a new item as an `add_item` modification (`ops.AddItem`, `checkItem`). Kinds are income and expense (which need an account) and transfer (from and to; at least one an account of the record). Recurrence is one-time, monthly (day), biweekly or annual (month and day, checked against the month), with an optional end; one-time and biweekly need a date; semimonthly is not accepted for added items. An id not given is a unique slug of the name. `item edit` (`ops.EditItem`) replaces an item the projection itself adds and keeps its id. `item end` (`ops.EndItem`) appends an amount modification of 0 from the date, for a record item or one added in the chain.
+
+**Modification targets.** The operations check that the property suits the target (amount for a budget item, growth for an account or asset, inflation for global) and that the target resolves at the modification's position (`checkTarget`): a record budget item, an item added by an ancestor's `add_item` modification, or one added by an earlier row of the same projection; otherwise `unknown_target`. `mod add` cannot add an item. Every edit then checks (`checkNoNewDangling`) that no modification which resolved before stops resolving, which refuses moves, removals, parent changes and removals of added items that would orphan a modification; modifications already dangling do not block an edit, including rename and clone.
+
+Record writes are not built yet; they would go through corrections, like the GUI's.
+
+The agent (Claude) has full access: it reads the record, assets, budgets, projections and engine output, and writes projections (settings, modifications and added budget items) through the write commands. Record writes, when they exist, go through corrections, like the GUI's. Whatever the agent reads is sent to its model provider.
 
 A thin agent skill lives in this repository at `.claude/skills/finplan/SKILL.md`: what finplan is, the rules (use the CLI, never touch the database; record changes are corrections), and an instruction to run `finplan help --json`, which the binary generates so the command reference cannot drift from the code. Symlinking the skill into `~/.claude/skills/finplan` makes it available in any terminal.
