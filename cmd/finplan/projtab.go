@@ -59,6 +59,14 @@ func (t *projTab) reset() {
 	t.bufs, t.errs, t.overwrites = map[string]string{}, map[string]string{}, nil
 }
 
+// setErr records the error that refused an edit of field id; the edit path runs on a projTab that was never reset.
+func (t *projTab) setErr(id, msg string) {
+	if t.errs == nil {
+		t.errs = map[string]string{}
+	}
+	t.errs[id] = msg
+}
+
 func (t *projTab) draw() {
 	a := t.a
 	if t.rec != a.rec {
@@ -367,7 +375,7 @@ func (t *projTab) setStart(proj, text string) {
 	if text != "" {
 		v, err := parseDate(text)
 		if err != nil {
-			t.errs["start"] = err.Error()
+			t.setErr("start", err.Error())
 			return
 		}
 		d = &v
@@ -412,9 +420,9 @@ func (t *projTab) rename(to string) {
 	case to == from:
 		t.dropBuf("name")
 	case to == "":
-		t.errs["name"] = "A projection needs a name."
+		t.setErr("name", "A projection needs a name.")
 	case t.a.rec.Projection(to) != nil:
-		t.errs["name"] = fmt.Sprintf("There is already a projection named %q.", to)
+		t.setErr("name", fmt.Sprintf("There is already a projection named %q.", to))
 	default:
 		if t.a.edit("rename projection", &renameOp{from, to}, func(rec *model.Record) error { return rec.RenameProjection(from, to) }) {
 			t.sel = to
@@ -425,7 +433,7 @@ func (t *projTab) rename(to string) {
 func (t *projTab) setParent(name, parent string) {
 	err := t.a.rec.EditableCopy().SetParent(name, parent)
 	if errors.Is(err, model.ErrCycle) {
-		t.errs[""] = fmt.Sprintf("%q cannot build on %q: that would make a cycle.", name, parent)
+		t.setErr("", fmt.Sprintf("%q cannot build on %q: that would make a cycle.", name, parent))
 		return
 	}
 	t.a.edit("change parent", nil, func(rec *model.Record) error { return rec.SetParent(name, parent) })
@@ -457,7 +465,7 @@ func (t *projTab) setInflation(proj, text string) {
 	if text != "" {
 		var err error
 		if v, err = parseValue(model.PropInflation, text); err != nil {
-			t.errs["inflation"] = err.Error()
+			t.setErr("inflation", err.Error())
 			return
 		}
 	}
@@ -628,7 +636,7 @@ func (t *projTab) setModStart(proj string, i int, text string) {
 	if text != "" {
 		d, err := parseDate(text)
 		if err != nil {
-			t.errs["from"+strconv.Itoa(i)] = err.Error()
+			t.setErr("from"+strconv.Itoa(i), err.Error())
 			return
 		}
 		from = &d
@@ -644,7 +652,7 @@ func (t *projTab) setModValue(proj string, i int, text string) {
 	prop := t.a.rec.Projection(proj).Mods[i].Property
 	v, err := parseValue(prop, text)
 	if err != nil {
-		t.errs["value"+strconv.Itoa(i)] = err.Error()
+		t.setErr("value"+strconv.Itoa(i), err.Error())
 		return
 	}
 	t.a.editProjection(proj, "change modification", func(p *model.Projection) error {
