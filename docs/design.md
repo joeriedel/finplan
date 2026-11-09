@@ -58,7 +58,7 @@ An account has actual data on every date within its real data span; gaps between
 Actual data comes only from accounts; defaults never count as actual data, however deeply nested. For an asset on a given date:
 
 - If any underlying account has actual data on that date, the asset's value is the sum of its members, each resolved the same way (its actual data, its own default, or 0).
-- Otherwise, if the asset has a default interval covering that date, that value wins over its members' defaults (the outer setting wins, as with parameters).
+- Otherwise, if the asset has a default interval covering that date, that value wins over its members' defaults.
 - Otherwise, the asset's value is the sum of its members, each resolved the same way. The 0 base never beats a member's explicit interval.
 
 Hand-offs between defaults and actual data can make a line jump; that is accepted and marked on the graph.
@@ -75,16 +75,23 @@ The check runs whenever an asset is used, not only when it is edited, because ed
 
 Every behavioral property is a parameter: growth rate, allocation, contribution rules, withdrawal order, and so on. Every parameter is a **schedule over time**: piecewise values by date range ("4% until 2029, then 6% until 2035, then 2%"). A constant is a schedule with one segment.
 
-There are two layers of settings, and the projection layer as a whole beats the asset layer.
+Settings apply **in order, the last applied winning**. For each account on a line (a line is an asset queried under a projection), the value starts as the account's own (for growth, its stated rate). Settings are then applied in sequence, each overwriting the value for the accounts it covers, on the dates its schedule is active; what remains is the value. There are no modes and no specificity rules: the order alone decides.
 
-- **Asset definitions** (the layer below): an asset can override the parameters of anything it wraps, and the setting closest to the outside wins, down to the account's own default. A variant such as "all cash at 5%" is a new asset wrapping "all cash" and setting 5%, which leaves "all cash" untouched everywhere else.
-- **A projection** can give settings to assets (per-asset start date, `override_history`, parameter modifications). Each carries a **mode**, `default` unless set; a projection stored without a mode behaves as default.
-  - **default**: the most specific setting wins, the one closest to the account. "All cash 7%" plus "Checking 1%", both default, gives Checking 1% and every other cash account 7%.
-  - **override**: the outermost override wins, beating every default and every override nested inside it, for the accounts under it. Defaults matter only where no override covers an account. "All cash 7%" as an override gives Checking 7%, whatever is set on Checking.
+The order is:
 
-Per-asset start and `override_history` are projection settings, never properties of an asset definition.
+1. **Asset definitions.** An asset can set the parameters of anything it wraps. Along the path from the account to the line's asset, the account's own (default) asset comes first, then inner assets before outer ones, and unrelated assets in scope order; within one asset, list order. A variant such as "all cash at 5%" is a new asset wrapping "all cash" and setting 5%, which leaves "all cash" untouched everywhere else.
+2. **The projection's parent chain**, oldest ancestor first, each projection's settings in list order.
+3. **The projection's own settings**, in list order.
 
-When two sibling members of the same asset set different values in the same mode for the same shared account, and neither wraps the other, nothing decides between them; that is reported as a conflict (the earlier-added sibling's value is used meanwhile) and settled by setting the value at an outer level.
+"All cash 7%" followed by "Checking 1%" gives Checking 1% and every other cash account 7%; in the reverse order Checking gets 7%. Overlapping siblings need no conflict rule: the later one wins.
+
+A schedule overwrites only from its first segment's date onward; before that, the earlier value stands. A constant overwrites entirely.
+
+Per-asset start and `override_history` follow the same order and are projection settings, never properties of an asset definition: "Retirement 2024" followed by "TSP 2020" gives the TSP its 2020 start.
+
+A projection's setting reaches every account under its target asset on every line queried under that projection, even when the line's asset does not contain the target; a setting aimed at an account reaches just that account. An asset-definition setting applies only on lines whose asset is, or contains, that asset. An account may therefore show different values on different lines; that is intended. A setting that names an unknown asset is an error.
+
+The UI will keep settings lists ordered and reorderable, and will mark a setting as overwritten for an account.
 
 The engine still computes each account individually, because flows land on accounts and tax treatment differs per account; the assets supply the resolved parameters.
 
@@ -134,7 +141,7 @@ A plotted line is an asset under a projection, or under reality. A report is an 
 
 ### Projection start
 
-A projection has a global **projection start date**. Each asset in it may be given its own start date, and its own `override_history` setting. The engine applies the rule to each account, using the start date and `override_history` resolved from the projection's settings on the assets that wrap it (by mode, see Parameters and precedence); the projection-wide values apply only where no per-asset setting covers the account:
+A projection has a global **projection start date**. Each asset in it may be given its own start date, and its own `override_history` setting. The engine applies the rule to each account, using the start date and `override_history` resolved from the projection-wide values, over which the per-asset settings covering the account are applied in order (see Parameters and precedence):
 
     if override_history:
         start = min(last_actual_data_date, projection_start_date)
@@ -210,9 +217,9 @@ Details the build settled, and the placeholders it uses until the real rules arr
 
 **Sample status.** Each sample is actual, projected, partly projected (an aggregate with some members projected) or default (no underlying account has data).
 
-**Projection start.** For both the per-asset start and `override_history`, the projection's per-asset settings are resolved by mode (most specific default, or outermost override); the projection-wide value applies only where no per-asset setting covers the account.
+**Projection start.** The projection-wide start (default `Record.Today`) and `override_history` (default false) are taken from the last projection in the chain that sets them; they are the base value, and the per-asset settings that cover the account are applied over it in order.
 
-**Precedence.** The projection layer is consulted first, then the assets' own parameters. Within a layer, the outermost override wins if any covers the account, otherwise the most specific default; the asset layer marks its settings as overrides, so there the outermost asset wins. A `Mode` (default is the zero value) is carried by `AssetSetting` and by `Modification`. Overlapping siblings that differ are reported as a conflict, and the earlier-added sibling's value is used.
+**Precedence.** Settings are applied in order, the last winning (`model.Apply`): asset-definition parameters first (`Resolution.AssetsAround`: the account's default asset, then inner before outer assets), then the projection chain root first, each projection's settings in list order. A schedule is written over the prior one from its first segment's date (`Schedule.Overlay`); start and `override_history` simply replace. A projection setting covers an account when it lies under the setting's target (resolved separately, so the target need not lie within the line's asset); an asset's own parameters cover only accounts it wraps within the line's scope. An `AssetSetting` naming an unknown asset is an error.
 
 **Overlap.** The later-added member (by a record-wide sequence) is invalid as a whole, rule members included, is named with its duplicate and is left out of sums. It is checked on every resolve. A rule matching no accounts contributes 0; an empty rule matches every account. Default asset ids are `acct:<id>`.
 

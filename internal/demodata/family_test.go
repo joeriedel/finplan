@@ -116,7 +116,7 @@ func TestFamilyProjections(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(res.Skipped) != 0 || len(res.Conflicts) != 0 {
+		if len(res.Skipped) != 0 {
 			t.Fatalf("%s: diagnostics %+v", proj, res.Diagnostics)
 		}
 		return res.Samples[0]

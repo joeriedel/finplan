@@ -98,7 +98,7 @@ type Asset struct {
 	Name    string
 	Members []Member
 	Default DefaultBalance
-	// Params override parameters of everything the asset wraps, by name (see PropGrowth).
+	// Params set parameters of everything the asset wraps, by name (see PropGrowth); they apply in order from the innermost asset out, so an outer asset's Params win.
 	Params map[string]Schedule
 }
 

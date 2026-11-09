@@ -231,7 +231,7 @@ func TestCycleRejected(t *testing.T) {
 	}
 }
 
-func TestPrecedence(t *testing.T) {
+func TestApplyOrder(t *testing.T) {
 	r := newRecord(t, acct("a", TypeChecking, 0, 0), acct("b", TypeSavings, 0, 0))
 	addAsset(t, r, "inner", AccountMember("a"))
 	addAsset(t, r, "outer", AssetMember("inner"), AccountMember("b"))
@@ -239,92 +239,57 @@ func TestPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got, want := res.AssetsAround("a"), []AssetID{DefaultAssetID("a"), "inner", "outer"}; !slices.Equal(got, want) {
+		t.Errorf("assets around a: got %v, want %v", got, want)
+	}
+	if got, want := res.AssetsAround("b"), []AssetID{DefaultAssetID("b"), "outer"}; !slices.Equal(got, want) {
+		t.Errorf("assets around b: got %v, want %v", got, want)
+	}
 	set := func(asset AssetID, v float64) Setting[float64] { return Setting[float64]{Asset: asset, Value: v} }
-	over := func(asset AssetID, v float64) Setting[float64] {
-		return Setting[float64]{Asset: asset, Value: v, Mode: ModeOverride}
+	covers := func(id AssetID) bool { return res.Covers(id, "a") }
+	// The last covering setting wins, whatever the assets' nesting.
+	got, from, found := Apply(0, []Setting[float64]{set("inner", 1), set("elsewhere", 5), set("outer", 2)}, covers, Replace)
+	if !found || got != 2 || from != "outer" {
+		t.Errorf("got %v from %v found %v, want 2 from outer", got, from, found)
 	}
-
-	// Among defaults the most specific wins, whatever order the settings are listed in.
-	got := Precedence(res, "a", "growth", []Setting[float64]{set("inner", 1), set("outer", 2), set(DefaultAssetID("a"), 3)})
-	if !got.Found || got.Value != 3 || got.From != DefaultAssetID("a") || got.Conflict != nil {
-		t.Errorf("most specific default wins: got %+v", got)
+	got, from, _ = Apply(0, []Setting[float64]{set("outer", 2), set("inner", 1)}, covers, Replace)
+	if got != 1 || from != "inner" {
+		t.Errorf("reversed: got %v from %v, want 1 from inner", got, from)
 	}
-	got = Precedence(res, "a", "growth", []Setting[float64]{set("outer", 2), set("inner", 1)})
-	if got.Value != 1 || got.From != "inner" {
-		t.Errorf("inner default beats outer default: got %+v", got)
-	}
-	// An override beats defaults nested inside it; the outermost override beats inner overrides too.
-	got = Precedence(res, "a", "growth", []Setting[float64]{over("outer", 2), set("inner", 1), set(DefaultAssetID("a"), 3)})
-	if got.Value != 2 || got.From != "outer" {
-		t.Errorf("override beats nested defaults: got %+v", got)
-	}
-	got = Precedence(res, "a", "growth", []Setting[float64]{over("inner", 1), over("outer", 2), over(DefaultAssetID("a"), 3)})
-	if got.Value != 2 || got.From != "outer" || got.Conflict != nil {
-		t.Errorf("outermost override wins: got %+v", got)
-	}
-	// An inner override beats an outer default.
-	got = Precedence(res, "a", "growth", []Setting[float64]{set("outer", 2), over("inner", 1)})
-	if got.Value != 1 || got.From != "inner" {
-		t.Errorf("inner override beats outer default: got %+v", got)
-	}
-	// An earlier layer (the projection) beats every later layer, even one marked override.
-	got = Precedence(res, "a", "growth", []Setting[float64]{set("inner", 9)}, []Setting[float64]{over("outer", 2)})
-	if got.Value != 9 || got.From != "inner" {
-		t.Errorf("layer order: got %+v", got)
-	}
-	// The account's default asset is innermost; it applies only when nothing wraps it with a setting.
-	got = Precedence(res, "a", "growth", []Setting[float64]{set(DefaultAssetID("a"), 3)})
-	if got.Value != 3 {
-		t.Errorf("default asset: got %+v", got)
-	}
-	// Assets that do not wrap the account, or lie outside the resolved scope, do not count.
-	got = Precedence(res, "b", "growth", []Setting[float64]{set("inner", 1), set("elsewhere", 5)})
-	if got.Found {
-		t.Errorf("not wrapping: got %+v", got)
+	// Nothing covering leaves the base.
+	got, _, found = Apply(7, []Setting[float64]{set("elsewhere", 5)}, covers, Replace)
+	if found || got != 7 {
+		t.Errorf("not covering: got %v found %v", got, found)
 	}
 }
 
-func TestSiblingConflictIsReported(t *testing.T) {
-	r := newRecord(t, acct("shared", TypeChecking, 0, 0), acct("solo", TypeSavings, 0, 0))
-	addAsset(t, r, "left", AccountMember("shared"), AccountMember("solo"))
-	// "right" overlaps "left" on the shared account: it is marked invalid, yet its setting is seen.
+func TestAssetsAroundTiesFollowScopeOrder(t *testing.T) {
+	r := newRecord(t, acct("shared", TypeChecking, 0, 0))
+	addAsset(t, r, "sub", AccountMember("shared"))
+	addAsset(t, r, "left", AssetMember("sub"))
+	// "right" overlaps "left" on the shared account and is marked invalid, yet its settings still apply.
 	addAsset(t, r, "right", AccountMember("shared"))
 	addAsset(t, r, "top", AssetMember("left"), AssetMember("right"))
 	res, err := r.Resolve("top")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Overlaps) != 1 {
-		t.Fatalf("overlaps: got %v", res.Overlaps)
+	if got, want := res.AssetsAround("shared"), []AssetID{DefaultAssetID("shared"), "sub", "left", "right", "top"}; !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
-	layer := []Setting[Schedule]{{Asset: "left", Value: Constant(0.04)}, {Asset: "right", Value: Constant(0.05)}}
-	got := Precedence(res, "shared", "growth", layer)
-	if got.Conflict == nil {
-		t.Fatal("no conflict reported")
+}
+
+func TestAssetsAroundListsDefaultAssetOnce(t *testing.T) {
+	r := newRecord(t, acct("a", TypeChecking, 0, 0))
+	addAsset(t, r, "x", AccountMember("a"))
+	// The default asset overlaps x on the account and is marked invalid, yet it stays in scope.
+	addAsset(t, r, "top", AssetMember("x"), AssetMember(DefaultAssetID("a")))
+	res, err := r.Resolve("top")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got.Conflict.Account != "shared" || got.Conflict.Name != "growth" || got.Conflict.Chosen != "left" ||
-		!slices.Equal(got.Conflict.Assets, []AssetID{"left", "right"}) {
-		t.Errorf("conflict: got %+v", got.Conflict)
-	}
-	if got.Value.Segments[0].Value != 0.04 {
-		t.Errorf("value while in conflict: got %+v, want the earlier-added sibling's", got.Value)
-	}
-	// The account only one sibling covers is not in conflict, and equal values are not either.
-	if got := Precedence(res, "solo", "growth", layer); got.Conflict != nil || got.From != "left" {
-		t.Errorf("solo: got %+v", got)
-	}
-	same := []Setting[Schedule]{{Asset: "left", Value: Constant(0.04)}, {Asset: "right", Value: Constant(0.04)}}
-	if got := Precedence(res, "shared", "growth", same); got.Conflict != nil {
-		t.Errorf("equal values: got conflict %+v", got.Conflict)
-	}
-	// An override at an outer level settles it; a default there does not, as the siblings are more specific.
-	settled := append(layer, Setting[Schedule]{Asset: "top", Value: Constant(0.07), Mode: ModeOverride})
-	if got := Precedence(res, "shared", "growth", settled); got.Conflict != nil || got.From != "top" {
-		t.Errorf("settled: got %+v", got)
-	}
-	unsettled := append(layer[:2:2], Setting[Schedule]{Asset: "top", Value: Constant(0.07)})
-	if got := Precedence(res, "shared", "growth", unsettled); got.Conflict == nil || got.From != "left" {
-		t.Errorf("outer default: got %+v", got)
+	if got, want := res.AssetsAround("a"), []AssetID{DefaultAssetID("a"), "x", "top"}; !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }
 

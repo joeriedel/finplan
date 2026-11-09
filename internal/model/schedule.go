@@ -50,6 +50,20 @@ func (s Schedule) At(d Date) (float64, bool) {
 	return s.Segments[i-1].Value, true
 }
 
+// Overlay returns the schedule with o written over it: the result keeps s before o's first segment and follows o from there on. A schedule with no segments changes nothing.
+func (s Schedule) Overlay(o Schedule) Schedule {
+	if len(o.Segments) == 0 {
+		return s
+	}
+	var segs []Segment
+	for _, g := range s.Segments {
+		if g.From < o.Segments[0].From {
+			segs = append(segs, g)
+		}
+	}
+	return Schedule{Segments: append(segs, o.Segments...)}
+}
+
 // Compound returns the growth factor over the days from..to when the schedule is an annual rate,
 // compounded over exact elapsed time and split at each segment boundary. Dates with no value grow by 0.
 func (s Schedule) Compound(from, to Date) float64 {

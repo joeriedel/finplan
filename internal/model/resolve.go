@@ -6,7 +6,6 @@ package model
 import (
 	"cmp"
 	"fmt"
-	"reflect"
 	"slices"
 	"sort"
 )
@@ -176,9 +175,7 @@ func (res *Resolution) collect(id AssetID) {
 	}
 }
 
-// collectScope numbers the assets under the root through every member, valid or not, in the order
-// added. Parameter settings on any of them count, so sibling settings for an account that overlap
-// are still seen as a conflict.
+// collectScope numbers the assets under the root through every member, valid or not, in the order added. Parameter settings on any of them count, even where an overlap leaves the member out of sums.
 func (res *Resolution) collectScope(id AssetID) {
 	if _, seen := res.scope[id]; seen {
 		return
@@ -328,115 +325,61 @@ func (res *Resolution) LastActual() (Date, bool) {
 	return cov[len(cov)-1].To, true
 }
 
-// Setting is a parameter value set on an asset.
+// Setting is a value a setting gives to an asset: an asset's own parameter, or a projection's setting aimed at it.
 type Setting[T any] struct {
 	Asset AssetID
 	Value T
-	Mode  Mode
 }
 
-// Conflict reports sibling settings that disagree for one account: none wraps another, so nothing
-// decides between them. Set the value on an asset that wraps them, as an override, to settle
-// it. Chosen is the one used meanwhile.
-type Conflict struct {
-	Name    string
-	Account AccountID
-	Assets  []AssetID
-	Chosen  AssetID
-}
+// Replace is the overwrite for scalar settings: the setting's value replaces the prior one.
+func Replace[T any](_, v T) T { return v }
 
-// Resolved is the outcome of Precedence.
-type Resolved[T any] struct {
-	Value    T
-	Found    bool
-	From     AssetID
-	Conflict *Conflict
-}
-
-// Precedence picks the value of parameter name for an account from layers of settings, outermost layer
-// first (a projection's settings, then assets' own). Only settings on assets that wrap the account
-// under the resolved root count, through any member: an overlapping member is left out of sums but
-// its settings are still seen, so they are reported rather than silently ignored. Within a layer, if
-// any covering setting is an override, the outermost override wins, beating every default and every
-// nested override; otherwise the most specific default wins (the one on the innermost asset). When
-// several assets qualify and none wraps another, differing values are reported as a Conflict. Several
-// settings on one asset in a layer: the last wins. An asset's default asset (see DefaultAssetID) is
-// the innermost asset of its account. A layer where the outermost asset should win simply marks its
-// settings ModeOverride.
-func Precedence[T any](res *Resolution, acct AccountID, name string, layers ...[]Setting[T]) Resolved[T] {
-	for _, layer := range layers {
-		var cands []Setting[T]
-		for _, s := range layer {
-			if !res.covers(s.Asset, acct) {
-				continue
-			}
-			if i := slices.IndexFunc(cands, func(c Setting[T]) bool { return c.Asset == s.Asset }); i >= 0 {
-				cands[i] = s
-			} else {
-				cands = append(cands, s)
-			}
-		}
-		// Overrides, if any, are the pool and the outermost wins; otherwise the defaults are and the innermost wins.
-		pool := slices.DeleteFunc(slices.Clone(cands), func(c Setting[T]) bool { return c.Mode != ModeOverride })
-		outer := len(pool) > 0
-		if !outer {
-			pool = cands
-		}
-		var top []Setting[T]
-		for _, c := range pool {
-			if outer {
-				if !slices.ContainsFunc(pool, func(o Setting[T]) bool { return res.wraps(o.Asset, c.Asset) }) {
-					top = append(top, c)
-				}
-			} else if !slices.ContainsFunc(pool, func(o Setting[T]) bool { return res.wraps(c.Asset, o.Asset) }) {
-				top = append(top, c)
-			}
-		}
-		if len(top) == 0 {
+// Apply returns the value that results from applying settings to base, in slice order: each setting whose asset covers reports true overwrites the value through overwrite(prior, setting value), and the last one applied wins. Callers must therefore keep settings lists in insertion order. It also returns the asset of the last setting applied, and false if none was.
+func Apply[T any](base T, settings []Setting[T], covers func(AssetID) bool, overwrite func(prior, v T) T) (value T, from AssetID, found bool) {
+	value = base
+	for _, s := range settings {
+		if !covers(s.Asset) {
 			continue
 		}
-		slices.SortFunc(top, func(x, y Setting[T]) int { return cmp.Compare(res.orderOf(x.Asset), res.orderOf(y.Asset)) })
-		out := Resolved[T]{Value: top[0].Value, Found: true, From: top[0].Asset}
-		for _, o := range top[1:] {
-			if !reflect.DeepEqual(o.Value, top[0].Value) {
-				c := &Conflict{Name: name, Account: acct, Chosen: top[0].Asset}
-				for _, t := range top {
-					c.Assets = append(c.Assets, t.Asset)
-				}
-				out.Conflict = c
-				break
-			}
+		value, from, found = overwrite(value, s.Value), s.Asset, true
+	}
+	return value, from, found
+}
+
+// AssetsAround returns the assets whose own settings can apply to the account on this resolution's line, innermost first: the account's default asset, then every in-scope asset wrapping it. An asset comes after every asset nested inside it; otherwise assets keep scope order.
+func (res *Resolution) AssetsAround(acct AccountID) []AssetID {
+	var rest []AssetID
+	for _, id := range res.scopeList {
+		if _, isDefault := accountOfDefault(id); !isDefault && res.Covers(id, acct) {
+			rest = append(rest, id)
 		}
-		return out
 	}
-	return Resolved[T]{}
+	var out []AssetID
+	if d := DefaultAssetID(acct); res.Covers(d, acct) {
+		out = append(out, d)
+	}
+	for len(rest) > 0 {
+		// Taking the first asset with nothing nested left in rest is a stable topological order.
+		i := slices.IndexFunc(rest, func(x AssetID) bool {
+			in := res.within(x)
+			return !slices.ContainsFunc(rest, func(y AssetID) bool { return in[y] })
+		})
+		out = append(out, rest[i])
+		rest = slices.Delete(rest, i, i+1)
+	}
+	return out
 }
 
-func (res *Resolution) orderOf(id AssetID) int {
-	if i, ok := res.scope[id]; ok {
-		return i
-	}
-	return len(res.scope)
-}
+// Has reports whether the account lies under the root through valid members.
+func (res *Resolution) Has(acct AccountID) bool { return res.accountSet[acct] }
 
-// covers reports whether the asset, within the resolved scope, wraps the account.
-func (res *Resolution) covers(asset AssetID, acct AccountID) bool {
+// Covers reports whether the asset, within the resolved scope, wraps the account. An asset's own settings apply only where this holds.
+func (res *Resolution) Covers(asset AssetID, acct AccountID) bool {
 	if a, ok := accountOfDefault(asset); ok {
 		return a == acct && res.accountSet[acct]
 	}
 	_, inScope := res.scope[asset]
 	return inScope && res.nodes[asset].set[acct]
-}
-
-// wraps reports whether outer wraps inner, where both wrap the same account.
-func (res *Resolution) wraps(outer, inner AssetID) bool {
-	if _, ok := accountOfDefault(outer); ok {
-		return false
-	}
-	if _, ok := accountOfDefault(inner); ok {
-		return true
-	}
-	return outer != inner && res.within(outer)[inner]
 }
 
 func (res *Resolution) within(id AssetID) map[AssetID]bool {

@@ -62,8 +62,6 @@ type Skipped struct {
 type Diagnostics struct {
 	// Skipped modifications: target missing or property unsupported.
 	Skipped []Skipped
-	// Conflicts among sibling settings, per account.
-	Conflicts []model.Conflict
 	// Overlaps: members of assets under the target that were left out of the sums.
 	Overlaps []model.Overlap
 }
@@ -160,6 +158,19 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 	var starts []model.Setting[model.Date]
 	var overrides []model.Setting[bool]
 	var growth []model.Setting[model.Schedule]
+	// A projection setting reaches the accounts under its target, whether or not the line's asset contains the target.
+	targets := map[model.AssetID]*model.Resolution{}
+	resolveTarget := func(id model.AssetID) error {
+		if _, ok := targets[id]; ok {
+			return nil
+		}
+		t, err := rec.Resolve(id)
+		if err != nil {
+			return err
+		}
+		targets[id] = t
+		return nil
+	}
 	infl := rec.Globals[model.PropInflation]
 	items := slices.Clone(rec.Budget.Items)
 	amounts := map[string]model.Schedule{}
@@ -171,11 +182,14 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 			override = *p.OverrideHistory
 		}
 		for _, s := range p.AssetSettings {
+			if err := resolveTarget(s.Asset); err != nil {
+				return nil, err
+			}
 			if s.Start != nil {
-				starts = append(starts, model.Setting[model.Date]{Asset: s.Asset, Value: *s.Start, Mode: s.Mode})
+				starts = append(starts, model.Setting[model.Date]{Asset: s.Asset, Value: *s.Start})
 			}
 			if s.OverrideHistory != nil {
-				overrides = append(overrides, model.Setting[bool]{Asset: s.Asset, Value: *s.OverrideHistory, Mode: s.Mode})
+				overrides = append(overrides, model.Setting[bool]{Asset: s.Asset, Value: *s.OverrideHistory})
 			}
 		}
 		for i, m := range p.Mods {
@@ -212,7 +226,10 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 				case !found:
 					skip("target not found")
 				case m.Property == model.PropGrowth:
-					growth = append(growth, model.Setting[model.Schedule]{Asset: asset, Value: m.Values, Mode: m.Mode})
+					if err := resolveTarget(asset); err != nil {
+						return nil, err
+					}
+					growth = append(growth, model.Setting[model.Schedule]{Asset: asset, Value: m.Values})
 				default:
 					skip("unsupported property")
 				}
@@ -228,38 +245,13 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 		}
 	}
 
-	// Asset definitions keep outer-wins (a wrapper's Params beat what it wraps), which is what
-	// ModeOverride gives.
-	var assetGrowth []model.Setting[model.Schedule]
-	scope := slices.Clone(res.Scope())
-	for _, id := range res.Accounts {
-		scope = append(scope, model.DefaultAssetID(id))
-	}
-	for _, id := range scope {
-		if s, ok := rec.Asset(id).Params[model.PropGrowth]; ok {
-			assetGrowth = append(assetGrowth, model.Setting[model.Schedule]{Asset: id, Value: s, Mode: model.ModeOverride})
-		}
-	}
-
+	// Settings apply in order, the last applied winning: asset definitions (innermost asset first), then the projection chain root first, each projection's settings in list order.
 	for _, id := range res.Accounts {
 		acct := rec.Account(id)
+		underTarget := func(asset model.AssetID) bool { return targets[asset].Has(id) }
 		p := &path{acct: acct}
-		note := func(c *model.Conflict) {
-			if c != nil {
-				r.diag.Conflicts = append(r.diag.Conflicts, *c)
-			}
-		}
-		start, ov := projStart, override
-		x := model.Precedence(res, id, "start", starts)
-		note(x.Conflict)
-		if x.Found {
-			start = x.Value
-		}
-		y := model.Precedence(res, id, "override_history", overrides)
-		note(y.Conflict)
-		if y.Found {
-			ov = y.Value
-		}
+		start, _, _ := model.Apply(projStart, starts, underTarget, model.Replace)
+		ov, _, _ := model.Apply(override, overrides, underTarget, model.Replace)
 		p.info = AccountStart{Account: id, OverrideHistory: ov, ProjectionStart: start}
 		p.start = start
 		if sp, ok := acct.Span(); ok {
@@ -271,12 +263,14 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 		}
 		p.info.Start = p.start
 		p.startVal = p.readBack(p.start)
-		g := model.Precedence(res, id, model.PropGrowth, growth, assetGrowth)
-		note(g.Conflict)
-		p.rate = model.Constant(acct.StatedRate)
-		if g.Found {
-			p.rate = g.Value
+		var defs []model.Setting[model.Schedule]
+		for _, a := range res.AssetsAround(id) {
+			if v, ok := rec.Asset(a).Params[model.PropGrowth]; ok {
+				defs = append(defs, model.Setting[model.Schedule]{Asset: a, Value: v})
+			}
 		}
+		rate, _, _ := model.Apply(model.Constant(acct.StatedRate), defs, func(model.AssetID) bool { return true }, model.Schedule.Overlay)
+		p.rate, _, _ = model.Apply(rate, growth, underTarget, model.Schedule.Overlay)
 		p.build(rec, items, amounts, infl, horizon)
 		r.paths[id] = p
 	}

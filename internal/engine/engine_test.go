@@ -132,84 +132,169 @@ func TestProjectionStartRule(t *testing.T) {
 	}
 }
 
-func TestProjectionSettingModes(t *testing.T) {
-	rec := fixture(t)
-	must(t, rec.AddAsset(&model.Asset{ID: "grp", Members: []model.Member{model.AccountMember("chk")}}))
-	must(t, rec.AddAsset(&model.Asset{ID: "top", Members: []model.Member{model.AssetMember("grp"), model.AccountMember("inv")}}))
-	chk := model.DefaultAssetID("chk")
-	outer, inner := d(2025, time.December, 5), d(2025, time.December, 12)
-	fallback := d(2025, time.December, 20)
-	for name, settings := range map[string][]model.AssetSetting{
-		"default":        {{Asset: "top", Start: model.Ptr(outer), OverrideHistory: model.Ptr(false)}, {Asset: "grp", Start: model.Ptr(inner), OverrideHistory: model.Ptr(true)}},
-		"override":       {{Asset: "top", Start: model.Ptr(outer), OverrideHistory: model.Ptr(false), Mode: model.ModeOverride}, {Asset: "grp", Start: model.Ptr(inner), OverrideHistory: model.Ptr(true)}},
-		"nested":         {{Asset: "top", Start: model.Ptr(outer), OverrideHistory: model.Ptr(true), Mode: model.ModeOverride}, {Asset: "grp", Start: model.Ptr(inner), OverrideHistory: model.Ptr(false), Mode: model.ModeOverride}, {Asset: chk, Start: model.Ptr(inner), Mode: model.ModeOverride}},
-		"inner override": {{Asset: "top", Start: model.Ptr(outer), OverrideHistory: model.Ptr(false)}, {Asset: "grp", Start: model.Ptr(inner), OverrideHistory: model.Ptr(true), Mode: model.ModeOverride}},
-	} {
-		must(t, rec.AddProjection(&model.Projection{Name: name, Start: model.Ptr(fallback), AssetSettings: settings}))
-	}
-	cases := []struct {
-		proj     string
-		chkStart model.Date
-		chkOv    bool
-		invStart model.Date
-	}{
-		{"default", inner, true, outer},
-		{"override", outer, false, outer},
-		{"nested", outer, true, outer},
-		{"inner override", inner, true, outer},
-	}
-	for _, c := range cases {
-		starts, err := Starts(rec, c.proj, "top")
-		must(t, err)
-		got := map[model.AccountID]AccountStart{}
-		for _, s := range starts {
-			got[s.Account] = s
-		}
-		if got["chk"].ProjectionStart != c.chkStart || got["chk"].OverrideHistory != c.chkOv || got["inv"].ProjectionStart != c.invStart {
-			t.Errorf("%s: got chk %+v inv %+v", c.proj, got["chk"], got["inv"])
-		}
-	}
-	// A setting no asset covers an account for leaves the projection-wide value in force.
-	must(t, rec.AddProjection(&model.Projection{Name: "partial", Start: model.Ptr(fallback), AssetSettings: []model.AssetSetting{
-		{Asset: "grp", Start: model.Ptr(inner), Mode: model.ModeOverride},
-	}}))
-	starts, err := Starts(rec, "partial", "top")
+// rateOf returns the growth rate the engine settles on for one account on a line, on a date.
+func rateOf(t *testing.T, rec *model.Record, proj string, line model.AssetID, acct model.AccountID, date model.Date) float64 {
+	t.Helper()
+	r, err := prepare(rec, proj, line, model.MinDate)
 	must(t, err)
-	for _, s := range starts {
-		if s.Account == "inv" && s.ProjectionStart != fallback {
-			t.Errorf("projection-wide fallback: got %+v", s)
+	v, ok := r.paths[acct].rate.At(date)
+	if !ok {
+		t.Fatalf("%s on %s: no rate on %v", acct, line, date)
+	}
+	return v
+}
+
+func growthMod(kind model.ObjectKind, id string, rate float64) model.Modification {
+	return model.Modification{Target: model.ObjectRef{Kind: kind, ID: id}, Property: model.PropGrowth, Values: model.Constant(rate)}
+}
+
+func addProjection(t *testing.T, rec *model.Record, name, parent string, mods ...model.Modification) {
+	t.Helper()
+	must(t, rec.AddProjection(&model.Projection{Name: name, Parent: parent, Mods: mods}))
+}
+
+func TestGrowthSettingsApplyInOrder(t *testing.T) {
+	rec := fixture(t)
+	must(t, rec.AddAsset(&model.Asset{ID: "cash", Members: []model.Member{model.AccountMember("chk"), model.AccountMember("late")}}))
+	addProjection(t, rec, "exception last", "", growthMod(model.KindAsset, "cash", 0.07), growthMod(model.KindAccount, "chk", 0.01))
+	addProjection(t, rec, "exception first", "", growthMod(model.KindAccount, "chk", 0.01), growthMod(model.KindAsset, "cash", 0.07))
+	date := d(2026, time.February, 1)
+	for _, c := range []struct {
+		proj     string
+		chk, oth float64
+	}{{"exception last", 0.01, 0.07}, {"exception first", 0.07, 0.07}} {
+		if got := rateOf(t, rec, c.proj, "all", "chk", date); !near(got, c.chk) {
+			t.Errorf("%s: chk got %v, want %v", c.proj, got, c.chk)
 		}
-		if s.Account == "chk" && s.ProjectionStart != inner {
-			t.Errorf("per-asset start: got %+v", s)
+		if got := rateOf(t, rec, c.proj, "all", "late", date); !near(got, c.oth) {
+			t.Errorf("%s: late got %v, want %v", c.proj, got, c.oth)
+		}
+		if got := rateOf(t, rec, c.proj, "all", "inv", date); !near(got, 0.06) {
+			t.Errorf("%s: inv outside both got %v, want its stated 0.06", c.proj, got)
 		}
 	}
 }
 
-func TestProjectionGrowthModes(t *testing.T) {
+func TestAssetDefinitionOrder(t *testing.T) {
 	rec := fixture(t)
-	must(t, rec.AddAsset(&model.Asset{ID: "grp", Members: []model.Member{model.AccountMember("inv")}}))
-	must(t, rec.AddAsset(&model.Asset{ID: "top", Members: []model.Member{model.AssetMember("grp")}}))
-	mod := func(kind model.ObjectKind, id string, rate float64, mode model.Mode) model.Modification {
-		return model.Modification{Target: model.ObjectRef{Kind: kind, ID: id}, Property: model.PropGrowth, Values: model.Constant(rate), Mode: mode}
+	growth := func(r float64) map[string]model.Schedule {
+		return map[string]model.Schedule{model.PropGrowth: model.Constant(r)}
 	}
-	add := func(name string, mods ...model.Modification) {
-		must(t, rec.AddProjection(&model.Projection{Name: name, Mods: mods}))
-	}
-	add("top only", mod(model.KindAsset, "top", 0.20, model.ModeDefault))
-	add("inner only", mod(model.KindAccount, "inv", 0.01, model.ModeDefault))
-	add("default", mod(model.KindAsset, "top", 0.20, model.ModeDefault), mod(model.KindAccount, "inv", 0.01, model.ModeDefault))
-	add("override", mod(model.KindAsset, "top", 0.20, model.ModeOverride), mod(model.KindAccount, "inv", 0.01, model.ModeDefault))
-	add("nested overrides", mod(model.KindAsset, "top", 0.20, model.ModeOverride), mod(model.KindAsset, "grp", 0.01, model.ModeOverride))
-	add("inner override", mod(model.KindAsset, "top", 0.20, model.ModeDefault), mod(model.KindAsset, "grp", 0.01, model.ModeOverride))
+	must(t, rec.AddAsset(&model.Asset{ID: "inner", Members: []model.Member{model.AccountMember("inv")}, Params: growth(0.02)}))
+	must(t, rec.AddAsset(&model.Asset{ID: "outer", Members: []model.Member{model.AssetMember("inner"), model.AccountMember("late")}, Params: growth(0.03)}))
+	addProjection(t, rec, "proj", "", growthMod(model.KindAsset, "inner", 0.05))
 	date := d(2026, time.February, 1)
-	amt := func(proj string) float64 { return sample(t, rec, proj, "top", date).Amount }
-	hi, lo := amt("top only"), amt("inner only")
-	if !(hi > lo) {
-		t.Fatalf("fixture: %v should exceed %v", hi, lo)
+	for _, c := range []struct {
+		proj string
+		line model.AssetID
+		want float64
+	}{
+		{"", "outer", 0.03},     // the outer asset's Params apply after the inner's
+		{"", "inner", 0.02},     // outer is not on this line
+		{"proj", "outer", 0.05}, // projection settings overwrite asset definitions
+		{"", "all", 0.06},       // neither asset is on this line, so the stated rate stays
+	} {
+		if got := rateOf(t, rec, c.proj, c.line, "inv", date); !near(got, c.want) {
+			t.Errorf("proj %q line %s: got %v, want %v", c.proj, c.line, got, c.want)
+		}
 	}
-	for proj, want := range map[string]float64{"default": lo, "override": hi, "nested overrides": hi, "inner override": lo} {
-		if got := amt(proj); !near(got, want) {
-			t.Errorf("%s: got %v, want %v", proj, got, want)
+	// The account's own default asset is innermost, so an outer asset still overwrites it.
+	rec.Asset(model.DefaultAssetID("inv")).Params = growth(0.09)
+	if got := rateOf(t, rec, "", "outer", "inv", date); !near(got, 0.03) {
+		t.Errorf("default asset params: got %v, want 0.03", got)
+	}
+	if got := rateOf(t, rec, "", model.DefaultAssetID("inv"), "inv", date); !near(got, 0.09) {
+		t.Errorf("default asset params alone: got %v, want 0.09", got)
+	}
+}
+
+func TestParentChainAppliesBeforeChild(t *testing.T) {
+	rec := fixture(t)
+	addProjection(t, rec, "parent", "", growthMod(model.KindAccount, "inv", 0.02), growthMod(model.KindAsset, "all", 0.09))
+	addProjection(t, rec, "child", "parent", growthMod(model.KindAccount, "inv", 0.01))
+	date := d(2026, time.February, 1)
+	if got := rateOf(t, rec, "parent", "all", "inv", date); !near(got, 0.09) {
+		t.Errorf("parent alone: got %v, want 0.09", got)
+	}
+	if got := rateOf(t, rec, "child", "all", "inv", date); !near(got, 0.01) {
+		t.Errorf("child over a later, broader parent setting: got %v, want 0.01", got)
+	}
+	if got := rateOf(t, rec, "child", "all", "late", date); !near(got, 0.09) {
+		t.Errorf("child leaves the parent's setting elsewhere: got %v, want 0.09", got)
+	}
+}
+
+func TestLaterScheduleOverwritesOnlyFromItsStart(t *testing.T) {
+	rec := fixture(t)
+	from := d(2027, time.January, 1)
+	must(t, rec.AddProjection(&model.Projection{Name: "later", Mods: []model.Modification{{
+		Target: model.ObjectRef{Kind: model.KindAccount, ID: "inv"}, Property: model.PropGrowth,
+		Values: model.NewSchedule(model.Segment{From: from, Value: 0.04}, model.Segment{From: from.Add(365), Value: 0.05}),
+	}}}))
+	for _, c := range []struct {
+		date model.Date
+		want float64
+	}{{from.Add(-1), 0.06}, {from, 0.04}, {from.Add(365), 0.05}} {
+		if got := rateOf(t, rec, "later", "all", "inv", c.date); !near(got, c.want) {
+			t.Errorf("%v: got %v, want %v", c.date, got, c.want)
+		}
+	}
+}
+
+func TestProjectionSettingReachesAccountOnItsOwnLine(t *testing.T) {
+	rec := fixture(t)
+	addProjection(t, rec, "wide", "", growthMod(model.KindAsset, "all", 0.07))
+	// The line's asset does not contain the setting's target.
+	if got := rateOf(t, rec, "wide", model.DefaultAssetID("chk"), "chk", d(2026, time.February, 1)); !near(got, 0.07) {
+		t.Errorf("got %v, want 0.07", got)
+	}
+}
+
+func TestAssetDefinitionDoesNotApplyOutsideItsAsset(t *testing.T) {
+	rec := fixture(t)
+	must(t, rec.AddAsset(&model.Asset{ID: "wrap", Members: []model.Member{model.AccountMember("inv")},
+		Params: map[string]model.Schedule{model.PropGrowth: model.Constant(0.10)}}))
+	date := d(2026, time.February, 1)
+	if got := rateOf(t, rec, "", "pair", "inv", date); !near(got, 0.06) {
+		t.Errorf("line outside wrap: got %v, want 0.06", got)
+	}
+	if got := rateOf(t, rec, "", "wrap", "inv", date); !near(got, 0.10) {
+		t.Errorf("line wrap: got %v, want 0.10", got)
+	}
+}
+
+func TestPerAssetStartAndOverrideFollowOrder(t *testing.T) {
+	rec := fixture(t)
+	must(t, rec.AddAsset(&model.Asset{ID: "ret", Members: []model.Member{model.AccountMember("chk"), model.AccountMember("inv")}}))
+	must(t, rec.AddAsset(&model.Asset{ID: "tsp", Members: []model.Member{model.AccountMember("inv")}}))
+	y2024, y2020 := d(2024, time.January, 1), d(2020, time.January, 1)
+	setting := func(asset model.AssetID, start model.Date, ov bool) model.AssetSetting {
+		return model.AssetSetting{Asset: asset, Start: model.Ptr(start), OverrideHistory: model.Ptr(ov)}
+	}
+	for name, settings := range map[string][]model.AssetSetting{
+		"narrow last": {setting("ret", y2024, false), setting("tsp", y2020, true)},
+		"broad last":  {setting("tsp", y2020, true), setting("ret", y2024, false)},
+	} {
+		must(t, rec.AddProjection(&model.Projection{Name: name, AssetSettings: settings}))
+	}
+	for _, c := range []struct {
+		proj     string
+		invStart model.Date
+		invOv    bool
+	}{{"narrow last", y2020, true}, {"broad last", y2024, false}} {
+		starts, err := Starts(rec, c.proj, "ret")
+		must(t, err)
+		for _, s := range starts {
+			switch s.Account {
+			case "inv":
+				if s.ProjectionStart != c.invStart || s.OverrideHistory != c.invOv {
+					t.Errorf("%s: inv got %+v, want start %v override %v", c.proj, s, c.invStart, c.invOv)
+				}
+			case "chk":
+				if s.ProjectionStart != y2024 || s.OverrideHistory {
+					t.Errorf("%s: chk got %+v", c.proj, s)
+				}
+			}
 		}
 	}
 }
@@ -471,21 +556,6 @@ func TestGrowthPrecedence(t *testing.T) {
 	low := sample(t, rec, "low", "wrap", date).Amount
 	if !(low < stated) {
 		t.Errorf("projection growth 0: %v should be below %v", low, stated)
-	}
-}
-
-func TestGrowthConflictIsReported(t *testing.T) {
-	rec := fixture(t)
-	must(t, rec.AddAsset(&model.Asset{ID: "g1", Members: []model.Member{model.AccountMember("inv")}, Params: map[string]model.Schedule{model.PropGrowth: model.Constant(0.01)}}))
-	must(t, rec.AddAsset(&model.Asset{ID: "g2", Members: []model.Member{model.AccountMember("inv")}, Params: map[string]model.Schedule{model.PropGrowth: model.Constant(0.02)}}))
-	must(t, rec.AddAsset(&model.Asset{ID: "both", Members: []model.Member{model.AssetMember("g1"), model.AssetMember("g2")}}))
-	res, err := Balances(rec, "", "both", []model.Date{d(2026, time.February, 1)})
-	must(t, err)
-	if len(res.Conflicts) != 1 || res.Conflicts[0].Account != "inv" || res.Conflicts[0].Name != model.PropGrowth {
-		t.Fatalf("conflicts: got %+v", res.Conflicts)
-	}
-	if len(res.Overlaps) != 1 || res.Overlaps[0].Asset != "both" {
-		t.Errorf("overlaps: got %+v", res.Overlaps)
 	}
 }
 
