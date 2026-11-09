@@ -124,10 +124,7 @@ func (s *Store) Entry(id int64) (Entry, error) {
 	return es[0], nil
 }
 
-// Correct stores a correction of the entry: from now on the entry has the new values. The original
-// and earlier corrections stay stored. A snapshot correction that would give the account two current
-// snapshots on one date, a snapshot correction that sets a kind, counter or memo, and a transfer correction without a counter account are rejected with an error matching ErrInvalidEntry.
-// Correcting a voided entry restores it.
+// Correct stores a correction of the entry: from now on the entry has the new values. The original and earlier corrections stay stored. A snapshot correction that would give the account two current snapshots on one date, a snapshot correction that sets a kind, counter or memo, and a transfer correction without a counter account are rejected with an error matching ErrInvalidEntry. Correcting a voided entry restores it.
 func (s *Store) Correct(id int64, v Values, note string) error {
 	return s.withTx(true, func(tx *sql.Tx) error { return s.correct(tx, id, v, note) })
 }

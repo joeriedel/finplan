@@ -52,9 +52,7 @@ func (p *Projection) Clone() *Projection {
 	return &c
 }
 
-// EditableCopy returns a record that shares everything with r except the projections, which are deep copies. It is
-// what an edit of projections changes: the original stays as it was until the edit is accepted. An edit of accounts,
-// assets or the budget changes a Clone instead.
+// EditableCopy returns a record that shares everything with r except the projections, which are deep copies. It is what an edit of projections changes: the original stays as it was until the edit is accepted. An edit of accounts, assets or the budget changes a Clone instead.
 func (r *Record) EditableCopy() *Record { return r.WithProjections(r.Projections) }
 
 // WithProjections returns a record that shares everything with r except the projections, which are deep copies of ps.
