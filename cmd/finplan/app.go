@@ -29,6 +29,8 @@ type app struct {
 	proj    *projTab
 	// unchanged is whether the latest edit call ended as a no-change; field commits use it to drop their typed text.
 	unchanged bool
+	// generation counts the undos, redos and reloads done, so an editor opened before one closes and drops its drag.
+	generation int
 	// showGraph selects the Graph tab for one frame.
 	showGraph bool
 	// reported holds the preset problems already queued, so that a reload does not queue them again.
@@ -78,6 +80,7 @@ func (a *app) reload() {
 		return
 	}
 	a.rec = rec
+	a.generation++
 	a.history.Clear()
 	a.graph.reload(rec, presets)
 	a.notifyOnce(problems)

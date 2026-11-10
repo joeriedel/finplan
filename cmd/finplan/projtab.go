@@ -48,6 +48,8 @@ type projTab struct {
 	deleting   string
 	dragFrom   int
 	overwrites []*model.Overwrite
+	// tl is the timeline editor under the modifications table.
+	tl timelineState
 
 	// The Add modification form.
 	addKind  model.ObjectKind
@@ -458,16 +460,29 @@ func (t *projTab) setParent(name, parent string) {
 	})
 }
 
-// inflation draws the projection's inflation: a percentage when it has one constant inflation modification or none,
-// else read-only.
+// inflation draws the projection's inflation: a percentage when it has one constant inflation modification or none. A
+// single modification that varies over time opens the timeline editor; with several, or a scale one, each is edited in the modifications table.
 func (t *projTab) inflation(p *model.Projection, w float32) {
 	idx := slices.IndexFunc(p.Mods, isInflation)
 	text := ""
 	if idx >= 0 {
 		v, from, ok := constantOf(p.Mods[idx].Values)
-		if !ok || from != nil || slices.IndexFunc(p.Mods[idx+1:], isInflation) >= 0 || slices.ContainsFunc(p.Mods, func(m model.Modification) bool { return isInflation(m) && m.IsScale() }) {
+		single := slices.IndexFunc(p.Mods[idx+1:], isInflation) < 0 && !slices.ContainsFunc(p.Mods, func(m model.Modification) bool { return isInflation(m) && m.IsScale() })
+		if !single {
 			imgui.AlignTextToFramePadding()
-			imgui.TextDisabled("varies; the timeline editor comes next")
+			imgui.TextDisabled("varies; edit each in the modifications table")
+			return
+		}
+		if !ok || from != nil {
+			imgui.AlignTextToFramePadding()
+			imgui.TextDisabled("varies")
+			imgui.SameLine()
+			if imgui.SmallButton("Timeline##inflation") {
+				t.openTimeline(p.Name, idx, p.Mods[idx])
+			}
+			if imgui.IsItemHovered() {
+				tooltipText("Edit inflation on a timeline, under the modifications table.")
+			}
 			return
 		}
 		text = formatValue(model.PropInflation, model.ModeSet, v)
@@ -492,7 +507,26 @@ func (t *projTab) setInflation(proj, text string) {
 	if text != "" {
 		val = &v
 	}
-	t.a.edit("set inflation", func() (*ops.Result, error) { return ops.SetInflation(t.a.st, t.a.rec, proj, val, ops.Options{}) })
+	// SetInflation removes or inserts a modification, which moves the others; find it as ops does, before the edit.
+	var mods []model.Modification
+	if p := t.a.rec.Projection(proj); p != nil {
+		mods = p.Mods
+	}
+	idx := slices.IndexFunc(mods, func(m model.Modification) bool {
+		return isInflation(m) && !m.IsScale()
+	})
+	if t.a.edit("set inflation", func() (*ops.Result, error) { return ops.SetInflation(t.a.st, t.a.rec, proj, val, ops.Options{}) }) {
+		switch {
+		case val == nil && idx >= 0:
+			t.removed(proj, idx)
+		case val != nil && idx < 0:
+			at := slices.IndexFunc(mods, func(m model.Modification) bool { return isInflation(m) && m.IsScale() })
+			if at < 0 {
+				at = len(mods)
+			}
+			t.inserted(proj, at)
+		}
+	}
 }
 
 func isInflation(m model.Modification) bool {
@@ -544,6 +578,7 @@ func (t *projTab) mods(p *model.Projection) {
 	if len(p.Mods) == 0 {
 		imgui.TextDisabled("No modifications yet.")
 	}
+	t.timelineEditor(p)
 	t.addForm(p)
 }
 
@@ -578,9 +613,11 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 	if imgui.BeginDragDropTarget() {
 		if pl := imgui.AcceptDragDropPayload(dragMod); pl != nil && pl.CData != nil && t.dragFrom != i {
 			from := t.dragFrom
-			t.a.edit("reorder modifications", func() (*ops.Result, error) {
+			if t.a.edit("reorder modifications", func() (*ops.Result, error) {
 				return ops.MoveMod(t.a.st, t.a.rec, p.Name, from, i, ops.Options{})
-			})
+			}) {
+				t.moved(p.Name, from, i)
+			}
 		}
 		imgui.EndDragDropTarget()
 	}
@@ -668,10 +705,11 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 		imgui.AlignTextToFramePadding()
 		imgui.TextDisabled("see object")
 	default:
-		imgui.AlignTextToFramePadding()
-		imgui.TextUnformatted("varies")
+		if imgui.SmallButton("Timeline") {
+			t.openTimeline(p.Name, i, m)
+		}
 		if imgui.IsItemHovered() {
-			imgui.SetTooltip("This value changes over time. The timeline editor, which comes next, edits it.")
+			imgui.SetTooltip("This value changes over time. Edit it on a timeline under the table.")
 		}
 	}
 	if editable {
@@ -680,9 +718,11 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 
 	imgui.TableSetColumnIndex(6)
 	if imgui.SmallButton("x") {
-		t.a.edit("remove modification", func() (*ops.Result, error) {
+		if t.a.edit("remove modification", func() (*ops.Result, error) {
 			return ops.RemoveMod(t.a.st, t.a.rec, p.Name, i, ops.Options{})
-		})
+		}) {
+			t.removed(p.Name, i)
+		}
 	}
 	if imgui.IsItemHovered() {
 		imgui.SetTooltip("Remove this modification")

@@ -71,6 +71,7 @@ func (a *app) restore(label string, ps []*model.Projection, rename *ops.Rename) 
 		return false
 	}
 	a.install(res)
+	a.generation++
 	return true
 }
 
