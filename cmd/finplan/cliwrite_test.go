@@ -530,7 +530,7 @@ func TestCLIWriteHelp(t *testing.T) {
 		"projection set-start", "projection set-override-history", "projection set-inflation",
 		"mod add", "mod edit", "mod move", "mod remove", "item add", "item edit", "item end",
 		"asset new", "asset rename", "asset delete", "asset add-member", "asset remove-member",
-		"asset add-default", "asset remove-default", "asset set-param", "account new", "account edit",
+		"asset add-default", "asset edit-default", "asset move-default", "asset remove-default", "asset set-param", "account new", "account edit",
 		"account close", "account reopen", "account delete",
 		"entry add-snapshot", "entry add-transaction", "entry correct", "entry void",
 		"budget add", "budget edit", "budget end", "budget delete",

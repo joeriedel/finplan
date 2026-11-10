@@ -526,3 +526,41 @@ func TestFailedAddAssetConsumesNoSeq(t *testing.T) {
 		t.Errorf("seq after failed AddAsset = %d, want 4", m[1].Seq)
 	}
 }
+
+func TestGrowthLayers(t *testing.T) {
+	a := acct("a", TypeChecking, 0, 0)
+	a.StatedRate = 0.03
+	r := newRecord(t, a)
+	addAsset(t, r, "inner", AccountMember("a"))
+	addAsset(t, r, "outer", AssetMember("inner"))
+	jan, jun := day(time.January, 1), day(time.June, 1)
+	r.Asset("inner").Params = map[string]Schedule{PropGrowth: Constant(0.05)}
+	r.Asset("outer").Params = map[string]Schedule{PropGrowth: MustSchedule(Segment{From: jan, End: Ptr(jun), Value: 0.08})}
+	res, err := r.Resolve("outer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	layers, eff := res.GrowthLayers("a")
+	var got []AssetID
+	for _, l := range layers {
+		got = append(got, l.Asset)
+	}
+	if want := []AssetID{"", "inner", "outer"}; !slices.Equal(got, want) {
+		t.Fatalf("layers: got %v, want %v", got, want)
+	}
+	for _, c := range []struct {
+		d    Date
+		want float64
+	}{{jan.Add(-1), 0.05}, {jan, 0.08}, {jun, 0.08}, {jun.Add(1), 0.05}} {
+		if v, ok := eff.At(c.d); !ok || v != c.want {
+			t.Errorf("effective at %v: got %v %v, want %v", c.d, v, ok, c.want)
+		}
+	}
+	// Without settings the stated rate is the only layer.
+	r.Asset("inner").Params, r.Asset("outer").Params = nil, nil
+	res, _ = r.Resolve("outer")
+	layers, eff = res.GrowthLayers("a")
+	if v, _ := eff.At(jan); len(layers) != 1 || v != 0.03 {
+		t.Errorf("no settings: got %d layers, %v", len(layers), v)
+	}
+}

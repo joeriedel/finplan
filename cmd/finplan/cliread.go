@@ -57,6 +57,12 @@ var commands = []*command{
 		run:    cmdAssetList,
 	},
 	{
+		Name: "asset params", Summary: "show an asset's default balance intervals and growth setting, and for each account under it the layers of its growth and the effective value",
+		Args:   []argDef{{Name: "asset", Description: assetNote, Required: true}},
+		Output: "{asset, default: [{from, to, value}] (in the order they apply, the last winning where they overlap), growth: [{from, end, value}] or null, today, accounts: [{account, name, layers: [{source, asset, schedule: [{from, end, value}], today, applies}], effective: [{from, end, value}], today}]}; layers are in the order they apply: source is stated_rate (asset null) for the account's stated rate, then asset for each asset's growth setting, the last applied winning on each date; today is a layer's or the effective value on the record's today, null where it has none, and applies marks the layer that sets the effective value today, the layers before it being overwritten",
+		run:    cmdAssetParams,
+	},
+	{
 		Name: "budget list", Summary: "list the budget items",
 		Output: "[{id, name, kind, amount, recurrence: {kind, anchor, month, day, day2}, start, end, indexed, account, from, to}]; recurrence fields that its kind does not use are null",
 		run:    cmdBudgetList,
@@ -466,6 +472,61 @@ func cmdAssetList(c *call) (any, error) {
 	out := []jasset{}
 	for _, a := range rec.Assets {
 		out = append(out, assetJSON(rec, a))
+	}
+	return out, nil
+}
+
+func cmdAssetParams(c *call) (any, error) {
+	_, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	id, err := c.assetArg(0)
+	if err != nil {
+		return nil, err
+	}
+	growth, err := assetGrowth(rec, id)
+	if err != nil {
+		return nil, failErr("invalid", "%v", err)
+	}
+	type jlayer struct {
+		Source   string     `json:"source"`
+		Asset    *string    `json:"asset"`
+		Schedule []jsegment `json:"schedule"`
+		Today    *float64   `json:"today"`
+		Applies  bool       `json:"applies"`
+	}
+	type jaccount struct {
+		Account   string     `json:"account"`
+		Name      string     `json:"name"`
+		Layers    []jlayer   `json:"layers"`
+		Effective []jsegment `json:"effective"`
+		Today     *float64   `json:"today"`
+	}
+	ja := assetJSON(rec, rec.Asset(id))
+	out := struct {
+		Asset    string      `json:"asset"`
+		Default  []jinterval `json:"default"`
+		Growth   []jsegment  `json:"growth"`
+		Today    jdate       `json:"today"`
+		Accounts []jaccount  `json:"accounts"`
+	}{string(id), ja.Default, ja.Params[model.PropGrowth], jd(rec.Today), []jaccount{}}
+	opt := func(v float64, ok bool) *float64 {
+		if !ok {
+			return nil
+		}
+		return &v
+	}
+	for _, g := range growth {
+		acct := jaccount{string(g.Account), g.Name, []jlayer{}, scheduleJSONOut(g.Effective), opt(g.Today, g.HasToday)}
+		for _, l := range g.Layers {
+			source := "stated_rate"
+			if l.Asset != "" {
+				source = "asset"
+			}
+			acct.Layers = append(acct.Layers, jlayer{source, nullable(string(l.Asset)), scheduleJSONOut(l.Schedule), opt(l.Today, l.HasToday), l.Applies})
+		}
+		out.Accounts = append(out.Accounts, acct)
 	}
 	return out, nil
 }

@@ -24,6 +24,8 @@ const (
 	entryNote  = "entry id, as listed by account entries"
 )
 
+const defaultIndexNote = "the interval's index from 0, in the order the default list of asset list shows"
+
 var accountTypes = func() []string {
 	var out []string
 	for _, t := range model.AccountTypes {
@@ -94,10 +96,34 @@ var dataCommands = []*command{
 		run:    cmdAssetAddDefault,
 	},
 	{
+		Name: "asset edit-default", Summary: "replace a default balance interval of an asset or account in place, keeping its place in the list; the interval is given whole, as asset add-default does",
+		Args: []argDef{
+			{Name: "asset", Description: assetNote, Required: true},
+			{Name: "index", Description: defaultIndexNote, Required: true},
+		},
+		Flags: []flagDef{
+			{Name: "value", Type: typeNumber, Required: true, Description: "the default balance"},
+			{Name: "from", Type: typeDate, Description: "first date of the interval: " + dateNote + "; unbounded when omitted"},
+			{Name: "to", Type: typeDate, EndOfMonth: true, Description: "last date of the interval, inclusive: " + endNote + "; unbounded when omitted"},
+		},
+		Output: assetOut,
+		run:    cmdAssetEditDefault,
+	},
+	{
+		Name: "asset move-default", Summary: "move a default balance interval so that it ends up at another index; where intervals overlap, the later one in the list wins",
+		Args: []argDef{
+			{Name: "asset", Description: assetNote, Required: true},
+			{Name: "from", Description: "index it is at, " + defaultIndexNote, Required: true},
+			{Name: "to", Description: "index it ends up at", Required: true},
+		},
+		Output: assetOut,
+		run:    cmdAssetMoveDefault,
+	},
+	{
 		Name: "asset remove-default", Summary: "remove a default balance interval",
 		Args: []argDef{
 			{Name: "asset", Description: assetNote, Required: true},
-			{Name: "index", Description: "the interval's index from 0, in the order the default list of asset list shows", Required: true},
+			{Name: "index", Description: defaultIndexNote, Required: true},
 		},
 		Output: assetOut,
 		run:    cmdAssetRemoveDefault,
@@ -429,22 +455,74 @@ func cmdAssetAddDefault(c *call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	v, _, err := c.number("value")
+	iv, err := c.intervalFlags()
 	if err != nil {
 		return nil, err
 	}
+	res, err := ops.AddDefault(c.st, c.rec, id, iv, c.options())
+	return c.assetResult(res, err, id)
+}
+
+// intervalFlags reads --value, --from and --to as an interval; omitted dates leave it unbounded on that side.
+func (c *call) intervalFlags() (model.Interval, error) {
+	v, _, err := c.number("value")
+	if err != nil {
+		return model.Interval{}, err
+	}
 	iv := model.Interval{From: model.MinDate, Value: v}
 	if d, ok, err := c.date("from"); err != nil {
-		return nil, err
+		return model.Interval{}, err
 	} else if ok {
 		iv.From = d
 	}
 	if d, ok, err := c.date("to"); err != nil {
-		return nil, err
+		return model.Interval{}, err
 	} else if ok {
 		iv.To = &d
 	}
-	res, err := ops.AddDefault(c.st, c.rec, id, iv, c.options())
+	return iv, nil
+}
+
+// indexArg reads the positional argument at pos as a whole number.
+func (c *call) indexArg(pos int) (int, error) {
+	i, err := strconv.Atoi(c.args[pos])
+	if err != nil {
+		return 0, usageErr("<%s>: %q is not a whole number", c.cmd.Args[pos].Name, c.args[pos])
+	}
+	return i, nil
+}
+
+func cmdAssetEditDefault(c *call) (any, error) {
+	id, err := c.assetArg(0)
+	if err != nil {
+		return nil, err
+	}
+	i, err := c.indexArg(1)
+	if err != nil {
+		return nil, err
+	}
+	iv, err := c.intervalFlags()
+	if err != nil {
+		return nil, err
+	}
+	res, err := ops.EditDefault(c.st, c.rec, id, i, iv, c.options())
+	return c.assetResult(res, err, id)
+}
+
+func cmdAssetMoveDefault(c *call) (any, error) {
+	id, err := c.assetArg(0)
+	if err != nil {
+		return nil, err
+	}
+	from, err := c.indexArg(1)
+	if err != nil {
+		return nil, err
+	}
+	to, err := c.indexArg(2)
+	if err != nil {
+		return nil, err
+	}
+	res, err := ops.MoveDefault(c.st, c.rec, id, from, to, c.options())
 	return c.assetResult(res, err, id)
 }
 

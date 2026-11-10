@@ -115,6 +115,13 @@ type assetsTab struct {
 
 	newName string
 	add     memberForm
+	// dragFrom is the index of the default balance interval being dragged; ivFrom, ivTo and ivValue are the Add interval form and growthNew the new growth setting's field.
+	dragFrom              int
+	ivFrom, ivTo, ivValue string
+	growthNew             string
+	// tl is the timeline editor on the growth setting of tlAsset.
+	tl      timelineState
+	tlAsset model.AssetID
 }
 
 func (t *assetsTab) reset() {
@@ -286,6 +293,9 @@ func (t *assetsTab) detail(asset *model.Asset) {
 		imgui.TextUnformatted(graph.FormatMoney(row.Balance))
 		t.members(asset, row)
 	}
+	t.defaults(asset)
+	t.params(asset)
+	t.effectiveGrowth(asset)
 	t.chartArea(id)
 	t.lifecycle(asset)
 }

@@ -500,6 +500,7 @@ var readCommands = [][]string{
 	{"account", "entries", "checking"},
 	{"entry", "history", "1"},
 	{"asset", "list"},
+	{"asset", "params", "retirement"},
 	{"budget", "list"},
 	{"projection", "list"},
 	{"projection", "show", "New job"},

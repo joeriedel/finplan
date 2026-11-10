@@ -377,6 +377,26 @@ func (res *Resolution) AssetsAround(acct AccountID) []AssetID {
 	return out
 }
 
+// GrowthLayer is one setting that shapes an account's growth: its stated rate (Asset empty), or the growth parameter of an asset around it.
+type GrowthLayer struct {
+	Asset AssetID
+	Value Schedule
+}
+
+// GrowthLayers returns the record-level layers of the account's growth on this resolution's line, in the order they apply: the account's stated rate as a constant, then the growth parameter of each asset from AssetsAround that has one. The effective schedule is the layers applied in that order, the last winning on each date it covers. Projection modifications are layered over it by the engine.
+func (res *Resolution) GrowthLayers(acct AccountID) (layers []GrowthLayer, effective Schedule) {
+	var defs []Setting[Schedule]
+	layers = []GrowthLayer{{Value: Constant(res.rec.Account(acct).StatedRate)}}
+	for _, a := range res.AssetsAround(acct) {
+		if v, ok := res.rec.Asset(a).Params[PropGrowth]; ok {
+			defs = append(defs, Setting[Schedule]{Asset: a, Value: v})
+			layers = append(layers, GrowthLayer{Asset: a, Value: v})
+		}
+	}
+	effective, _, _ = Apply(layers[0].Value, defs, func(AssetID) bool { return true }, Schedule.Overlay)
+	return layers, effective
+}
+
 // Has reports whether the account lies under the root through valid members.
 func (res *Resolution) Has(acct AccountID) bool { return res.accountSet[acct] }
 

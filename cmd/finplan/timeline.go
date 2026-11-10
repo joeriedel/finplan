@@ -116,7 +116,21 @@ func (t *projTab) openTimeline(proj string, mod int, m model.Modification) {
 	t.tl = timelineState{open: true, proj: proj, mod: mod, generation: t.a.generation, target: m.Target, property: m.Property, mode: m.Mode, sel: -1}
 }
 
-// timelineEditor draws the editor for the modification openTimeline chose: the strip, the controls for the selected segment, and the Delete key.
+// timelineStrip is the timeline strip editor on a schedule that its host owns: the strip, the controls for the selected segment and the Delete key. The host decides which schedule it shows and where an edit of it is written: commit writes the edited schedule to it as one edit.
+type timelineStrip struct {
+	a  *app
+	st *timelineState
+	// prop and mode say how segment values are written and read.
+	prop string
+	mode model.Mode
+	// field, setErr and dropBuf are the host tab's text field and the bookkeeping of its refused input.
+	field   func(id, hint, value string, width float32) (string, bool)
+	setErr  func(id, msg string)
+	dropBuf func(id string)
+	commit  func(label string, next model.Schedule)
+}
+
+// timelineEditor draws the editor for the modification openTimeline chose.
 func (t *projTab) timelineEditor(p *model.Projection) {
 	st := &t.tl
 	if st.open && (st.generation != t.a.generation || st.proj != p.Name || st.mod >= len(p.Mods) || !st.edits(p.Mods[st.mod])) {
@@ -127,7 +141,29 @@ func (t *projTab) timelineEditor(p *model.Projection) {
 	}
 	rec := t.a.rec
 	m := p.Mods[st.mod]
-	segs := m.Values.Segments()
+	if len(m.Values.Segments()) == 0 {
+		return
+	}
+	start := rec.Today
+	if p.Start != nil {
+		start = *p.Start
+	}
+	s := &timelineStrip{
+		a: t.a, st: st, prop: m.Property, mode: m.Mode,
+		field: t.field, setErr: t.setErr, dropBuf: t.dropBuf,
+		commit: func(label string, next model.Schedule) {
+			t.a.edit(label, func() (*ops.Result, error) {
+				return ops.SetModValues(t.a.st, t.a.rec, st.proj, st.mod, next, ops.Options{})
+			})
+		},
+	}
+	s.draw(fmt.Sprintf("Timeline of modification %d: %s %s", st.mod+1, objectText(effective(rec, p.Name), m.Target), m.Property), m.Values, start)
+}
+
+// draw draws the editor for the schedule values, whose axis starts at start when the schedule has no earlier date, under a header with title and a Close button.
+func (s *timelineStrip) draw(title string, values model.Schedule, start model.Date) {
+	st := s.st
+	segs := values.Segments()
 	if len(segs) == 0 {
 		return
 	}
@@ -137,35 +173,31 @@ func (t *projTab) timelineEditor(p *model.Projection) {
 
 	imgui.Separator()
 	imgui.AlignTextToFramePadding()
-	imgui.TextUnformatted(fmt.Sprintf("Timeline of modification %d: %s %s", st.mod+1, objectText(effective(rec, p.Name), m.Target), m.Property))
+	imgui.TextUnformatted(title)
 	imgui.SameLine()
 	if imgui.SmallButton("Close##timeline") {
 		*st = timelineState{}
 		return
 	}
 
-	start := rec.Today
-	if p.Start != nil {
-		start = *p.Start
-	}
-	cur := m.Values
+	cur := values
 	var lo, hi model.Date
 	if d := st.drag; d != nil {
 		cur, lo, hi = d.cur, d.lo, d.hi
 	} else {
 		lo, hi = timeline.Span(cur, start)
 	}
-	t.strip(m, cur, lo, hi)
-	t.timelineControls(m, segs, lo)
+	s.strip(cur, lo, hi)
+	s.controls(values, segs, lo)
 
 	if st.sel >= 0 && !imgui.IsAnyItemActive() && imgui.IsKeyPressedBoolV(imgui.KeyDelete, false) {
-		t.timelineEdit("delete segment", m.Values, func(s model.Schedule) (model.Schedule, error) { return timeline.Delete(s, st.sel) })
+		s.edit("delete segment", values, func(x model.Schedule) (model.Schedule, error) { return timeline.Delete(x, st.sel) })
 	}
 }
 
 // strip draws the schedule cur as blocks on a time axis from lo to hi, with a handle on each edge, and handles clicks and drags on it.
-func (t *projTab) strip(m model.Modification, cur model.Schedule, lo, hi model.Date) {
-	st := &t.tl
+func (t *timelineStrip) strip(cur model.Schedule, lo, hi model.Date) {
+	st := t.st
 	s := uiScale
 	dl := imgui.WindowDrawList()
 	origin := imgui.CursorScreenPos()
@@ -209,7 +241,7 @@ func (t *projTab) strip(m model.Modification, cur model.Schedule, lo, hi model.D
 		a, b := imgui.NewVec2(xa, y0), imgui.NewVec2(xb, y1)
 		dl.AddRectFilledV(a, b, u32(rgba(fill, 1)), 2*s, 0)
 		dl.AddRectV(a, b, u32(rgba(colBorder, 1)), 2*s, s, 0)
-		text := formatValue(m.Property, m.Mode, g.Value)
+		text := formatValue(t.prop, t.mode, g.Value)
 		ts := imgui.CalcTextSize(text)
 		dl.PushClipRect(a, b)
 		dl.AddTextVec2(imgui.NewVec2(max(xa+(xb-xa-ts.X)/2, xa+4*s), y0+(bh-ts.Y)/2), u32(rgba(colText, 1)), text)
@@ -270,7 +302,7 @@ func (t *projTab) strip(m model.Modification, cur model.Schedule, lo, hi model.D
 			if imgui.IsItemDeactivated() {
 				st.drag = nil
 				if d.moved && !reflect.DeepEqual(d.cur, d.orig) {
-					t.timelineEdit("move timeline edge", d.orig, func(model.Schedule) (model.Schedule, error) { return d.cur, nil })
+					t.edit("move timeline edge", d.orig, func(model.Schedule) (model.Schedule, error) { return d.cur, nil })
 				}
 			}
 		}
@@ -324,9 +356,9 @@ func (d *timelineDrag) preview(boundary model.Date, snap bool) model.Schedule {
 	return next
 }
 
-// timelineControls draws the value field and buttons for the selected segment, and the button that adds one after the last. lo is the axis start, standing in for a segment that begins at the beginning of time.
-func (t *projTab) timelineControls(m model.Modification, segs []model.Segment, lo model.Date) {
-	st := &t.tl
+// controls draws the value field and buttons for the selected segment, and the button that adds one after the last. lo is the axis start, standing in for a segment that begins at the beginning of time.
+func (t *timelineStrip) controls(values model.Schedule, segs []model.Segment, lo model.Date) {
+	st := t.st
 	if st.sel >= 0 {
 		g := segs[st.sel]
 		last, bounded := timeline.LastDay(segs, st.sel)
@@ -334,15 +366,16 @@ func (t *projTab) timelineControls(m model.Modification, segs []model.Segment, l
 		imgui.TextUnformatted(fmt.Sprintf("Segment %d, %s. Value", st.sel+1, segmentRange(g.From, last, bounded)))
 		imgui.SameLine()
 		id := "tlvalue" + strconv.Itoa(st.sel)
-		if text, done := t.field(id, "", formatValue(m.Property, m.Mode, g.Value), imgui.FontSize()*8); done {
-			t.commit(id, func() {
-				v, err := parseValue(m.Property, m.Mode, text)
-				if err != nil {
-					t.setErr(id, err.Error())
-					return
-				}
-				t.timelineEdit("change segment value", m.Values, func(s model.Schedule) (model.Schedule, error) { return timeline.SetValue(s, st.sel, v) })
-			})
+		if text, done := t.field(id, "", formatValue(t.prop, t.mode, g.Value), imgui.FontSize()*8); done {
+			t.a.unchanged = false
+			if v, err := parseValue(t.prop, t.mode, text); err != nil {
+				t.setErr(id, err.Error())
+			} else {
+				t.edit("change segment value", values, func(s model.Schedule) (model.Schedule, error) { return timeline.SetValue(s, st.sel, v) })
+			}
+			if t.a.unchanged {
+				t.dropBuf(id)
+			}
 		}
 		imgui.SameLine()
 		if imgui.Button("Split") {
@@ -357,18 +390,18 @@ func (t *projTab) timelineControls(m model.Modification, segs []model.Segment, l
 			if mo := timeline.NearestMonth(at); mo > from && (!bounded || mo <= last) {
 				at = mo
 			}
-			t.timelineEdit("split segment", m.Values, func(s model.Schedule) (model.Schedule, error) { return timeline.Split(s, st.sel, at) })
+			t.edit("split segment", values, func(s model.Schedule) (model.Schedule, error) { return timeline.Split(s, st.sel, at) })
 		}
 		tooltipOn("Cut the segment in two, half way along; both halves keep its value.")
 		imgui.SameLine()
 		if imgui.Button("Delete") {
-			t.timelineEdit("delete segment", m.Values, func(s model.Schedule) (model.Schedule, error) { return timeline.Delete(s, st.sel) })
+			t.edit("delete segment", values, func(s model.Schedule) (model.Schedule, error) { return timeline.Delete(s, st.sel) })
 		}
 		tooltipOn("Remove the segment (or press Delete). What it covered goes to the segment before, unless that has an end.")
 		if st.sel == len(segs)-1 && g.End != nil {
 			imgui.SameLine()
 			if imgui.Button("No end") {
-				t.timelineEdit("clear end", m.Values, timeline.ClearEnd)
+				t.edit("clear end", values, timeline.ClearEnd)
 			}
 			tooltipOn("Let the last segment run on without end.")
 		}
@@ -386,22 +419,19 @@ func (t *projTab) timelineControls(m model.Modification, segs []model.Segment, l
 		if l.End != nil {
 			at = *l.End + 1
 		}
-		t.timelineEdit("add segment", m.Values, func(s model.Schedule) (model.Schedule, error) { return timeline.Append(s, at) })
+		t.edit("add segment", values, func(s model.Schedule) (model.Schedule, error) { return timeline.Append(s, at) })
 	}
 	tooltipOn("Add a segment after the last, with the last one's value.")
 }
 
-// timelineEdit applies do to the schedule the strip showed and writes the result to the modification, as one edit. A refusal is told to the user and changes nothing.
-func (t *projTab) timelineEdit(label string, from model.Schedule, do func(model.Schedule) (model.Schedule, error)) {
-	st := &t.tl
+// edit applies do to the schedule the strip showed and writes the result through commit, as one edit. A refusal is told to the user and changes nothing.
+func (t *timelineStrip) edit(label string, from model.Schedule, do func(model.Schedule) (model.Schedule, error)) {
 	next, err := do(from)
 	if err != nil {
 		t.a.notifyFailed(label, err)
 		return
 	}
-	t.a.edit(label, func() (*ops.Result, error) {
-		return ops.SetModValues(t.a.st, t.a.rec, st.proj, st.mod, next, ops.Options{})
-	})
+	t.commit(label, next)
 }
 
 // segmentRange says when a segment holds, for labels and tooltips.

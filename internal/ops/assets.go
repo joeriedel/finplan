@@ -251,14 +251,57 @@ func AddDefault(st *store.Store, rec *model.Record, asset model.AssetID, iv mode
 		if err != nil {
 			return Result{}, err
 		}
-		if v := iv.Value; v != v || v > maxValue || v < -maxValue {
-			return Result{}, refuse(ErrInvalidValue, "%v is not a number within range", v)
-		}
-		if iv.To != nil && *iv.To < iv.From {
-			return Result{}, refuse(ErrInvalidValue, "the interval ends %v, before it starts %v", *iv.To, iv.From)
+		if err := checkInterval(iv); err != nil {
+			return Result{}, err
 		}
 		iv.To = copyPtr(iv.To)
 		d.Intervals = append(d.Intervals, iv)
+		return Result{Asset: a, Account: ac}, nil
+	})
+}
+
+func checkInterval(iv model.Interval) error {
+	if v := iv.Value; v != v || v > maxValue || v < -maxValue {
+		return refuse(ErrInvalidValue, "%v is not a number within range", v)
+	}
+	if iv.To != nil && *iv.To < iv.From {
+		return refuse(ErrInvalidValue, "the interval ends %v, before it starts %v", *iv.To, iv.From)
+	}
+	return nil
+}
+
+// EditDefault replaces the default balance interval at index, counted from 0 in the order the asset lists them, keeping its place in that order. It is checked like AddDefault; an interval equal to the current one is ErrNoChange.
+func EditDefault(st *store.Store, rec *model.Record, asset model.AssetID, index int, iv model.Interval, o Options) (*Result, error) {
+	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
+		d, ac, a, err := defaultBalance(next, asset)
+		if err != nil {
+			return Result{}, err
+		}
+		if index < 0 || index >= len(d.Intervals) {
+			return Result{}, refuse(ErrInvalidValue, "asset %q has %d default balance intervals: index %d is out of range", asset, len(d.Intervals), index)
+		}
+		if err := checkInterval(iv); err != nil {
+			return Result{}, err
+		}
+		iv.To = copyPtr(iv.To)
+		d.Intervals[index] = iv
+		return Result{Asset: a, Account: ac}, nil
+	})
+}
+
+// MoveDefault moves the default balance interval at from so that it ends up at index to. Where intervals overlap, the one later in the list wins, so a move can change the balance.
+func MoveDefault(st *store.Store, rec *model.Record, asset model.AssetID, from, to int, o Options) (*Result, error) {
+	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
+		d, ac, a, err := defaultBalance(next, asset)
+		if err != nil {
+			return Result{}, err
+		}
+		n := len(d.Intervals)
+		if from < 0 || from >= n || to < 0 || to >= n {
+			return Result{}, refuse(ErrInvalidValue, "asset %q has %d default balance intervals: cannot move %d to %d", asset, n, from, to)
+		}
+		iv := d.Intervals[from]
+		d.Intervals = slices.Insert(slices.Delete(d.Intervals, from, from+1), to, iv)
 		return Result{Asset: a, Account: ac}, nil
 	})
 }

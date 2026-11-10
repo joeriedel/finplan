@@ -833,3 +833,91 @@ func TestEndBudgetItem(t *testing.T) {
 		t.Error("a refused end was saved")
 	}
 }
+
+func TestEditAndMoveDefault(t *testing.T) {
+	a := model.Interval{From: model.D(2016, 1, 1), To: model.Ptr(model.D(2021, 6, 30)), Value: 200000}
+	b := model.Interval{From: model.D(2018, 1, 1), Value: 50}
+	st, rec := seed(t)
+	for _, iv := range []model.Interval{a, b} {
+		if _, err := AddDefault(st, rec, demodata.Retirement, iv, Options{}); err != nil {
+			t.Fatal(err)
+		}
+		rec = reload(t, st)
+	}
+	edited := model.Interval{From: model.D(2016, 1, 1), To: model.Ptr(model.D(2020, 12, 31)), Value: 210000}
+	if _, err := EditDefault(st, rec, demodata.Retirement, 0, edited, Options{DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	sameDocs(t, "the store after a dry run", reload(t, st), rec)
+
+	res, err := EditDefault(st, rec, demodata.Retirement, 0, edited, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = reload(t, st)
+	got := rec.Asset(demodata.Retirement).Default.Intervals
+	if len(got) != 2 || !reflect.DeepEqual(got[0], edited) || !reflect.DeepEqual(got[1], b) || res.Asset == nil {
+		t.Errorf("after edit: %+v", got)
+	}
+	if _, err := EditDefault(st, rec, demodata.Retirement, 0, edited, Options{}); !errors.Is(err, ErrNoChange) {
+		t.Errorf("unchanged edit: %v", err)
+	}
+
+	// Moving the open-ended interval first lets the other win where they overlap.
+	d := model.D(2019, 6, 1)
+	if v, _ := rec.Asset(demodata.Retirement).Default.Covers(d); v != 50 {
+		t.Fatalf("before the move: %v", v)
+	}
+	if _, err := MoveDefault(st, rec, demodata.Retirement, 1, 0, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	rec = reload(t, st)
+	if v, _ := rec.Asset(demodata.Retirement).Default.Covers(d); v != 210000 {
+		t.Errorf("after the move: %v", v)
+	}
+	if _, err := MoveDefault(st, rec, demodata.Retirement, 1, 1, Options{}); !errors.Is(err, ErrNoChange) {
+		t.Errorf("move in place: %v", err)
+	}
+
+	// An account's default asset edits the account's intervals.
+	if _, err := AddDefault(st, rec, "acct:roth", b, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	rec = reload(t, st)
+	i := len(rec.Account(demodata.Roth).Default.Intervals) - 1
+	if _, err := EditDefault(st, rec, "acct:roth", i, model.Interval{From: b.From, Value: 7}, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if v := reload(t, st).Account(demodata.Roth).Default.Intervals[i].Value; v != 7 {
+		t.Errorf("account interval value %v", v)
+	}
+
+	for _, c := range []struct {
+		name string
+		op   func(st *store.Store, rec *model.Record) (*Result, error)
+		want error
+	}{
+		{"edit unknown asset", func(st *store.Store, rec *model.Record) (*Result, error) {
+			return EditDefault(st, rec, "nope", 0, a, Options{})
+		}, ErrUnknownObject},
+		{"edit out of range", func(st *store.Store, rec *model.Record) (*Result, error) {
+			return EditDefault(st, rec, demodata.NetWorth, 0, a, Options{})
+		}, ErrInvalidValue},
+		{"move out of range", func(st *store.Store, rec *model.Record) (*Result, error) {
+			return MoveDefault(st, rec, demodata.NetWorth, 0, 1, Options{})
+		}, ErrInvalidValue},
+		{"move unknown asset", func(st *store.Store, rec *model.Record) (*Result, error) {
+			return MoveDefault(st, rec, "nope", 0, 0, Options{})
+		}, ErrUnknownObject},
+	} {
+		dataRefused(t, c.want, c.op)
+	}
+	st3, rec3 := seed(t)
+	if _, err := AddDefault(st3, rec3, demodata.NetWorth, a, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	bad := model.Interval{From: a.From, To: model.Ptr(a.From - 1)}
+	if _, err := EditDefault(st3, reload(t, st3), demodata.NetWorth, 0, bad, Options{}); !errors.Is(err, ErrInvalidValue) {
+		t.Errorf("end before start: %v", err)
+	}
+}

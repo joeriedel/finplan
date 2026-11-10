@@ -310,13 +310,7 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 			p.startVal = p.readBack(p.start)
 			p.changes = append(p.changes, change{date: *acct.Opens, cause: CauseOpening, amount: p.def.At(*acct.Opens) - p.startVal, rank: rankOpening})
 		}
-		var defs []model.Setting[model.Schedule]
-		for _, a := range res.AssetsAround(id) {
-			if v, ok := rec.Asset(a).Params[model.PropGrowth]; ok {
-				defs = append(defs, model.Setting[model.Schedule]{Asset: a, Value: v})
-			}
-		}
-		rate, _, _ := model.Apply(model.Constant(acct.StatedRate), defs, func(model.AssetID) bool { return true }, model.Schedule.Overlay)
+		_, rate := res.GrowthLayers(id)
 		layered, _, _ := model.Apply(rateLayer{s: rate}, growth, underTarget, rateLayer.over)
 		p.rate = layered.s
 		return p
