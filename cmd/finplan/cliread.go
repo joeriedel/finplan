@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -64,8 +65,13 @@ var commands = []*command{
 	},
 	{
 		Name: "budget list", Summary: "list the budget items",
-		Output: "[{id, name, kind, amount, recurrence: {kind, anchor, month, day, day2}, start, end, indexed, account, from, to}]; recurrence fields that its kind does not use are null",
+		Output: "[{id, name, kind, amount, recurrence: {kind, anchor, month, day, day2}, start, end, indexed, growth, account, from, to}]; recurrence fields that its kind does not use are null, and growth is the annual raise as a fraction (0.03 for 3%, 0 for none)",
 		run:    cmdBudgetList,
+	},
+	{
+		Name: "budget totals", Summary: "show the monthly income and expenses of the budget items active on the record's today",
+		Output: "{as_of, monthly_income, monthly_expenses, monthly_net}; amounts are in today's dollars, rounded to cents, with no raises or inflation applied: a monthly item counts once a month, a semimonthly one twice, a biweekly one 26/12 times, an annual one a twelfth, a one-time one not at all; transfers are in neither total; an item counts when its start is empty or not after as_of and its end is empty or not before it, and a biweekly item's first date (its recurrence anchor) is not after as_of",
+		run:    cmdBudgetTotals,
 	},
 	{
 		Name: "projection list", Summary: "list the projections",
@@ -541,6 +547,21 @@ func cmdBudgetList(c *call) (any, error) {
 		out = append(out, budgetItemJSON(it))
 	}
 	return out, nil
+}
+
+func cmdBudgetTotals(c *call) (any, error) {
+	_, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	income, expenses := rec.Budget.MonthlyTotals(rec.Today)
+	cents := func(v float64) float64 { return math.Round(v*100) / 100 }
+	return struct {
+		AsOf            jdate   `json:"as_of"`
+		MonthlyIncome   float64 `json:"monthly_income"`
+		MonthlyExpenses float64 `json:"monthly_expenses"`
+		MonthlyNet      float64 `json:"monthly_net"`
+	}{jd(rec.Today), cents(income), cents(expenses), cents(income - expenses)}, nil
 }
 
 func cmdProjectionList(c *call) (any, error) {

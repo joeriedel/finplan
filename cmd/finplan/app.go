@@ -29,6 +29,7 @@ type app struct {
 	proj    *projTab
 	assets  *assetsTab
 	accts   *acctTab
+	budget  *budgetTab
 	// unchanged is whether the latest edit call ended as a no-change; field commits use it to drop their typed text.
 	unchanged bool
 	// generation counts the undos, redos and reloads done, so an editor opened before one closes and drops its drag.
@@ -55,6 +56,7 @@ func newApp(st *store.Store) (*app, error) {
 	a.proj = &projTab{a: a}
 	a.assets = &assetsTab{a: a}
 	a.accts = &acctTab{a: a}
+	a.budget = newBudgetTab(a)
 	return a, nil
 }
 
@@ -124,7 +126,7 @@ func (a *app) drawNotices() {
 	}
 }
 
-// tabs lists the tab bar in order; only Graph, Projections, Assets and Accounts are built.
+// tabs lists the tab bar in order; only Markets is not built.
 var tabs = []string{"Graph", "Projections", "Assets", "Accounts", "Budget", "Markets"}
 
 func (a *app) draw() {
@@ -170,6 +172,8 @@ func (a *app) draw() {
 						a.assets.draw()
 					case 3:
 						a.accts.draw()
+					case 4:
+						a.budget.draw()
 					default:
 						imgui.TextDisabled("The " + name + " tab is not built yet.")
 					}

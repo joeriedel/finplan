@@ -220,6 +220,30 @@ func TestDeleteAssetChecksAccountModifications(t *testing.T) {
 	}
 }
 
+func TestRestoreDocumentsRestoresTheBaseBudget(t *testing.T) {
+	st, rec := seed(t)
+	res, err := AddBudgetItem(st, rec, baseItem1(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = DeleteBudgetItem(st, res.Record, "groceries", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := RestoreDocuments(st, res.Record, rec, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []*model.Record{back.Record, reload(t, st)} {
+		if _, ok := r.Budget.Item("side-gig"); ok || len(r.Budget.Items) != len(rec.Budget.Items) {
+			t.Errorf("items after undo: %d", len(r.Budget.Items))
+		}
+		if _, ok := r.Budget.Item("groceries"); !ok {
+			t.Error("deleted item not restored")
+		}
+	}
+}
+
 func TestRestoreDocuments(t *testing.T) {
 	st, rec := seed(t)
 	before := rec

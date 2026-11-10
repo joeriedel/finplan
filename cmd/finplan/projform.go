@@ -62,6 +62,7 @@ type itemForm struct {
 	every                 model.RecurrenceKind
 	date, day, month, end string
 	account, from, to     model.AccountID
+	indexed               bool
 }
 
 func newItemForm() itemForm {
@@ -71,7 +72,7 @@ func newItemForm() itemForm {
 // formOf returns the form that shows the item.
 func formOf(it model.BudgetItem) itemForm {
 	r := it.Recurrence
-	f := itemForm{kind: it.Kind, name: it.Name, amount: trimFloat(it.Amount), every: r.Kind, account: it.Account, from: it.From, to: it.To}
+	f := itemForm{kind: it.Kind, name: it.Name, amount: trimFloat(it.Amount), every: r.Kind, account: it.Account, from: it.From, to: it.To, indexed: it.Indexed}
 	switch {
 	case r.Kind == model.OneTime || r.Kind == model.Biweekly:
 		f.date = r.Anchor.String()
@@ -93,11 +94,13 @@ func formOf(it model.BudgetItem) itemForm {
 	return f
 }
 
-// set changes one field: kind, name, amount, growth, every, date, day, month, end, account, from or to.
+// set changes one field: kind, name, amount, growth, every, date, day, month, end, account, from, to or indexed (text "true" or "false").
 func (f *itemForm) set(field, text string) {
 	switch field {
 	case "kind":
 		f.setKind(model.ItemKind(text))
+	case "indexed":
+		f.indexed = text == "true"
 	case "name":
 		f.name = text
 	case "amount":
@@ -170,7 +173,7 @@ func (f *itemForm) seed() {
 
 // item builds the budget item the form describes. It fails on what it cannot read and on a missing account; ops checks the rest.
 func (f itemForm) item() (model.BudgetItem, error) {
-	it := model.BudgetItem{Name: f.name, Kind: f.kind, Account: f.account, From: f.from, To: f.to}
+	it := model.BudgetItem{Name: f.name, Kind: f.kind, Account: f.account, From: f.from, To: f.to, Indexed: f.indexed}
 	if strings.TrimSpace(f.amount) == "" {
 		return it, errors.New("enter an amount")
 	}

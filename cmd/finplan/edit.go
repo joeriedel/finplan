@@ -16,7 +16,7 @@ import (
 
 // editStep is what the history keeps of one edit: the projections before and after it, its rename if it had one, and
 // the Graph switcher before and after, which the edit moves when it deletes the projection the switcher names.
-// An edit of the accounts or assets also keeps the records before and after it (docsBefore, docsAfter; nil otherwise), whose accounts and assets undo and redo restore with ops.RestoreDocuments.
+// An edit of the accounts, assets or base budget also keeps the records before and after it (docsBefore, docsAfter; nil otherwise), whose accounts, assets and base budget undo and redo restore with ops.RestoreDocuments.
 // The lists and records are never changed once kept: edits change copies, and undo and redo install copies.
 type editStep struct {
 	before, after         []*model.Projection
@@ -41,7 +41,7 @@ func (a *app) edit(label string, do func() (*ops.Result, error)) bool {
 	old, switchBefore := a.rec, a.graph.lines.Switcher()
 	a.install(res)
 	step := editStep{before: old.Projections, after: res.Record.Projections, rename: res.Rename, switchBefore: switchBefore, switchAfter: a.graph.lines.Switcher()}
-	if !reflect.DeepEqual(old.Accounts, res.Record.Accounts) || !reflect.DeepEqual(old.Assets, res.Record.Assets) {
+	if !reflect.DeepEqual(old.Accounts, res.Record.Accounts) || !reflect.DeepEqual(old.Assets, res.Record.Assets) || !reflect.DeepEqual(old.Budget, res.Record.Budget) {
 		step.docsBefore, step.docsAfter = old, res.Record
 	}
 	a.history.Push(label, step)
@@ -81,7 +81,7 @@ func (a *app) install(res *ops.Result) {
 	a.graph.setRecord(res.Record)
 }
 
-// restore saves the projections ps (with the rename the step they undo or redo made) through the same ops as an edit and installs the result; a step of docs restores the accounts and assets of docs instead, which keep the record entries added since. It reports whether that worked.
+// restore saves the projections ps (with the rename the step they undo or redo made) through the same ops as an edit and installs the result; a step of docs restores the accounts, assets and base budget of docs instead, which keep the record entries added since. It reports whether that worked.
 func (a *app) restore(label string, ps []*model.Projection, rename *ops.Rename, docs *model.Record) bool {
 	var res *ops.Result
 	var err error

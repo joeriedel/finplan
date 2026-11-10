@@ -502,6 +502,7 @@ var readCommands = [][]string{
 	{"asset", "list"},
 	{"asset", "params", "retirement"},
 	{"budget", "list"},
+	{"budget", "totals"},
 	{"projection", "list"},
 	{"projection", "show", "New job"},
 	{"balance", "net-worth", "--from", "2027-01", "--to", "2027-12", "--projection", "New job"},
