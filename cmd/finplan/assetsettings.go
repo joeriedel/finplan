@@ -226,7 +226,7 @@ func (t *assetsTab) effectiveGrowth(asset *model.Asset) {
 		return
 	}
 	imgui.TextDisabled("Layers apply top to bottom; greyed layers are overwritten today (" + t.a.rec.Today.String() + ").")
-	if !imgui.BeginTableV("##effgrowth", 3, imgui.TableFlagsRowBg|imgui.TableFlagsBordersInnerV, imgui.NewVec2(0, 0), 0) {
+	if !imgui.BeginTableV("##effgrowth", 3, imgui.TableFlagsRowBg|imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
 		return
 	}
 	imgui.TableSetupColumnV("Account / layer", 0, 3, 0)

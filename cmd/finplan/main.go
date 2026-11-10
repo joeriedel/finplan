@@ -43,7 +43,7 @@ func main() {
 		os.Exit(runCLI(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 	}
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: finplan [--demo]\n       finplan [--demo] --screenshot <out.png> [--tab <name>] [--frames N] [--size WxH] [--select <name>]\n       finplan [--demo | --db <path>] <command> ...   (run finplan help)")
+		fmt.Fprintln(os.Stderr, "usage: finplan [--demo]\n       finplan [--demo] --screenshot <out.png> [--tab <name>] [--frames N] [--size WxH] [--select <name>] [--open <picker>]\n       finplan [--demo | --db <path>] <command> ...   (run finplan help)")
 		flag.PrintDefaults()
 	}
 	demo := flag.Bool("demo", false, "use a throwaway database holding an invented family instead of your own")
@@ -52,11 +52,12 @@ func main() {
 	frames := flag.Int("frames", 10, "with --screenshot: how many frames to draw before saving")
 	size := flag.String("size", "1280x800", "with --screenshot: the window size in pixels, WxH")
 	sel := flag.String("select", "", "with --screenshot: the projection, asset or account to select, by name (Projections, Assets and Accounts tabs)")
+	open := flag.String("open", "", "with --screenshot: a picker to show open, one of add-line (Graph tab), target (Projections tab, needs --select) and member (Assets tab, needs --select)")
 	flag.Parse()
 	var shot *shotOptions
 	if *out != "" {
 		var err error
-		if shot, err = newShotOptions(*out, *tab, *frames, *size, *sel); err != nil {
+		if shot, err = newShotOptions(*out, *tab, *frames, *size, *sel, *open); err != nil {
 			log.Fatal(err)
 		}
 	} else {
@@ -116,6 +117,10 @@ func run(demo bool, shot *shotOptions) error {
 	if shot != nil {
 		if err := shot.selectItem(app); err != nil {
 			return err
+		}
+		openRequest = shot.openID
+		if shot.open == "member" {
+			app.assets.add.kind = memberAccount
 		}
 		setDefaultVideoDriver()
 	}

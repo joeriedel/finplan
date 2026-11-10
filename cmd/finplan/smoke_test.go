@@ -43,14 +43,18 @@ func TestScreenshotSmoke(t *testing.T) {
 	}
 	tmp := t.TempDir()
 
-	cases := []struct{ name, tab, sel string }{
-		{"graph", "Graph", ""},
-		{"projections", "Projections", ""},
-		{"assets", "Assets", ""},
-		{"accounts", "Accounts", ""},
-		{"budget", "Budget", ""},
-		{"markets", "Markets", ""},
-		{"accounts-selected", "Accounts", "Checking"},
+	cases := []struct{ name, tab, sel, open string }{
+		{"graph", "Graph", "", ""},
+		{"projections", "Projections", "", ""},
+		{"assets", "Assets", "", ""},
+		{"accounts", "Accounts", "", ""},
+		{"budget", "Budget", "", ""},
+		{"markets", "Markets", "", ""},
+		{"accounts-selected", "Accounts", "Checking", ""},
+		{"assets-selected", "Assets", "Net worth", ""},
+		{"add-line", "Graph", "", "add-line"},
+		{"target", "Projections", "Base", "target"},
+		{"member", "Assets", "Net worth", "member"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -59,6 +63,9 @@ func TestScreenshotSmoke(t *testing.T) {
 			args := []string{"--demo", "--screenshot", path, "--tab", c.tab}
 			if c.sel != "" {
 				args = append(args, "--select", c.sel)
+			}
+			if c.open != "" {
+				args = append(args, "--open", c.open)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
@@ -97,6 +104,10 @@ func TestScreenshotBadArguments(t *testing.T) {
 		{"--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Graph", "--select", "Checking"},
 		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Assets", "--select", "No such asset"},
 		{"--tab", "Assets"},
+		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Graph", "--open", "nothing"},
+		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Assets", "--select", "Net worth", "--open", "add-line"},
+		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Projections", "--open", "target"},
+		{"--open", "add-line"},
 	} {
 		cmd := exec.Command(bin, args...)
 		cmd.Env = smokeEnv(t.TempDir())

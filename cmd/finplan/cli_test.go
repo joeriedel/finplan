@@ -660,3 +660,20 @@ func TestIsCLI(t *testing.T) {
 		}
 	}
 }
+
+func TestCLIAssetListKind(t *testing.T) {
+	var assets []struct{ ID, Kind string }
+	cliJSON(t, &assets, "--demo", "asset", "list")
+	want := map[string]string{"acct:401k": "account", string(demodata.AllCash): "asset", string(demodata.Liquid): "asset"}
+	for _, a := range assets {
+		if w, ok := want[a.ID]; ok {
+			if a.Kind != w {
+				t.Errorf("%s kind = %q, want %q", a.ID, a.Kind, w)
+			}
+			delete(want, a.ID)
+		}
+	}
+	if len(want) != 0 {
+		t.Errorf("asset list lacks %v", want)
+	}
+}

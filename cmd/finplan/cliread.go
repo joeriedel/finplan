@@ -54,7 +54,7 @@ var commands = []*command{
 	},
 	{
 		Name: "asset list", Summary: "list the assets with their members and any members left out as invalid",
-		Output: "[{id, name, members: [{seq, member, account, asset, rule: {types, tax} or null}], invalid: [{seq, member, duplicates, against}], error, default: [{from, to, value}], params: {growth: [{from, end, value}]}}]; error is null unless the asset cannot be resolved, for example because of a cycle; default is the default balance intervals, an account's default asset (id acct:<account>) showing the account's, and params the asset's parameter settings",
+		Output: "[{id, name, kind: account for an account's default asset, else asset, members: [{seq, member, account, asset, rule: {types, tax} or null}], invalid: [{seq, member, duplicates, against}], error, default: [{from, to, value}], params: {growth: [{from, end, value}]}}]; error is null unless the asset cannot be resolved, for example because of a cycle; default is the default balance intervals, an account's default asset (id acct:<account>) showing the account's, and params the asset's parameter settings",
 		run:    cmdAssetList,
 	},
 	{
@@ -414,6 +414,7 @@ type jmember struct {
 type jasset struct {
 	ID      string                `json:"id"`
 	Name    string                `json:"name"`
+	Kind    string                `json:"kind"`
 	Members []jmember             `json:"members"`
 	Invalid []joverlap            `json:"invalid"`
 	Error   *string               `json:"error"`
@@ -437,7 +438,7 @@ func scheduleJSONOut(s model.Schedule) []jsegment {
 
 // assetJSON is the JSON shape of an asset with the members that are left out as invalid, as asset list prints it and the write commands print the asset they changed. The default balance of an account's default asset is the account's.
 func assetJSON(rec *model.Record, a *model.Asset) jasset {
-	ja := jasset{ID: string(a.ID), Name: a.Name, Members: []jmember{}, Invalid: []joverlap{}, Default: defaultJSON(a.Default), Params: map[string][]jsegment{}}
+	ja := jasset{ID: string(a.ID), Name: a.Name, Kind: assetKind(a.ID).String(), Members: []jmember{}, Invalid: []joverlap{}, Default: defaultJSON(a.Default), Params: map[string][]jsegment{}}
 	if acct, ok := strings.CutPrefix(string(a.ID), string(model.DefaultAssetID(""))); ok && rec.Account(model.AccountID(acct)) != nil {
 		ja.Default = defaultJSON(rec.Account(model.AccountID(acct)).Default)
 	}

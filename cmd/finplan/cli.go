@@ -312,7 +312,7 @@ func isCLI(args []string) bool {
 }
 
 // valueFlags are the window's flags that take a value, which may be the next argument.
-var valueFlags = []string{"screenshot", "tab", "frames", "size", "select"}
+var valueFlags = []string{"screenshot", "tab", "frames", "size", "select", "open"}
 
 func isDBFlag(a string) bool { return a == "--db" || a == "-db" }
 

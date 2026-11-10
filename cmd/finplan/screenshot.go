@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/AllenDang/cimgui-go/imgui"
 )
 
 // shotOptions is screenshot mode: draw a tab for a number of frames, save the last as a PNG and exit.
@@ -22,10 +24,52 @@ type shotOptions struct {
 	height int
 	// sel is the name of the projection, asset or account to select; empty selects nothing.
 	sel string
+	// open is the picker to show open, one of openNames, else empty.
+	open string
+	// openID is the id of that picker.
+	openID string
+}
+
+// openNames are the pickers --open can show, each with the tab it needs and the id the code that draws it asks takeOpen about.
+var openNames = []struct{ name, tab, id string }{
+	{"add-line", "Graph", "add-line"},
+	{"target", "Projections", "addsetasset"},
+	{"member", "Assets", "memberacct"},
+}
+
+// openRequest is the id of the picker the screenshot asks to be shown open; the tab that draws it opens it on the first frame it does and clears the request.
+var openRequest string
+
+// openComboPopup opens the popup of the combo labelled label in the current ID scope: ImGui opens it under the name "##ComboPopup" in the scope of the combo's id.
+func openComboPopup(label string) {
+	imgui.PushIDStr(label)
+	imgui.OpenPopupStr("##ComboPopup")
+	imgui.PopID()
+}
+
+// shotScroll is the picker opened for a screenshot, whose list is scrolled to where the accounts end and the assets begin.
+var shotScroll string
+
+// scrollToAssets scrolls the list of the picker id, in the item just drawn, to centre the first asset, so that a screenshot shows both icons; seen says whether that item has gone by. It does nothing outside a screenshot.
+func scrollToAssets(id string, k iconKind, seen *bool) {
+	if shotScroll != id || *seen || k != iconAsset {
+		return
+	}
+	*seen = true
+	imgui.SetScrollHereYV(0.5)
+}
+
+// takeOpen reports whether id is the picker asked for, once.
+func takeOpen(id string) bool {
+	if openRequest != id {
+		return false
+	}
+	openRequest, shotScroll = "", id
+	return true
 }
 
 // newShotOptions checks the screenshot flags and resolves the tab name to its spelling in tabs.
-func newShotOptions(out, tab string, frames int, size, sel string) (*shotOptions, error) {
+func newShotOptions(out, tab string, frames int, size, sel, open string) (*shotOptions, error) {
 	o := &shotOptions{out: out, frames: frames, sel: sel}
 	for _, name := range tabs {
 		if strings.EqualFold(name, tab) {
@@ -47,6 +91,26 @@ func newShotOptions(out, tab string, frames int, size, sel string) (*shotOptions
 	}
 	if sel != "" && o.tab != "Projections" && o.tab != "Assets" && o.tab != "Accounts" {
 		return nil, fmt.Errorf("--select works only with the Projections, Assets and Accounts tabs")
+	}
+	if open != "" {
+		for _, n := range openNames {
+			if strings.EqualFold(n.name, open) {
+				o.open, o.openID = n.name, n.id
+				if o.tab != n.tab {
+					return nil, fmt.Errorf("--open %s works only with the %s tab", n.name, n.tab)
+				}
+			}
+		}
+		if o.open == "" {
+			names := make([]string, len(openNames))
+			for i, n := range openNames {
+				names[i] = n.name
+			}
+			return nil, fmt.Errorf("unknown picker %q for --open; the pickers are %s", open, strings.Join(names, ", "))
+		}
+		if o.open != "add-line" && sel == "" {
+			return nil, fmt.Errorf("--open %s needs --select", o.open)
+		}
 	}
 	return o, nil
 }

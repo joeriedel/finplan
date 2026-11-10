@@ -945,16 +945,40 @@ var objectKinds = []model.ObjectKind{model.KindAccount, model.KindAsset, model.K
 
 // pick draws a combo previewing preview with an entry for each label and returns the index of the one chosen, else -1. A width of -1 fills the cell.
 func pick(id, preview string, width float32, labels []string, selected int) int {
+	return pickKinds(id, preview, iconNone, width, labels, nil, selected)
+}
+
+// pickKinds is pick with an icon in front of each label for its kind in kinds, which is nil for none, and in front of the preview, whose kind is previewKind. An entry of iconNone has no icon.
+func pickKinds(id, preview string, previewKind iconKind, width float32, labels []string, kinds []iconKind, selected int) int {
 	chosen := -1
-	imgui.SetNextItemWidth(width)
-	if imgui.BeginComboV("##"+id, preview, 0) {
-		for i, l := range labels {
-			if imgui.SelectableBoolV(l+"##"+strconv.Itoa(i), i == selected, 0, imgui.NewVec2(0, 0)) && i != selected {
-				chosen = i
-			}
-		}
-		imgui.EndCombo()
+	dl := imgui.WindowDrawList()
+	start := imgui.CursorScreenPos()
+	if takeOpen(id) {
+		openComboPopup("##" + id)
 	}
+	imgui.SetNextItemWidth(width)
+	frame := imgui.CurrentStyle().FramePadding()
+	open := imgui.BeginComboV("##"+id, iconLabel(previewKind, preview), 0)
+	// The combo's popup is a window of its own once open, so the preview's icon goes into the list saved before.
+	cy := start.Y + frame.Y + imgui.FontSize()/2
+	drawKindIcon(dl, start.X+frame.X, cy, previewKind, iconColor())
+	if !open {
+		hoverIcon(start.X+frame.X, cy, previewKind)
+		return chosen
+	}
+	seenAsset := false
+	for i, l := range labels {
+		kind := iconNone
+		if kinds != nil {
+			kind = kinds[i]
+		}
+		if imgui.SelectableBoolV(iconLabel(kind, l)+"##"+strconv.Itoa(i), i == selected, 0, imgui.NewVec2(0, 0)) && i != selected {
+			chosen = i
+		}
+		itemIcon(selectableTextX(), kind)
+		scrollToAssets(id, kind, &seenAsset)
+	}
+	imgui.EndCombo()
 	return chosen
 }
 
@@ -969,6 +993,17 @@ func kindCombo(id string, cur model.ObjectKind, width float32) (model.ObjectKind
 	return cur, false
 }
 
+// objectIconKind is the icon kind of the object of a modification of the kind: accounts and assets have one, budget items and the global object none.
+func objectIconKind(kind model.ObjectKind, id string) iconKind {
+	switch kind {
+	case model.KindAccount:
+		return iconAccount
+	case model.KindAsset:
+		return assetKind(model.AssetID(id))
+	}
+	return iconNone
+}
+
 // objectCombo picks the object of a modification of the kind at index of the projection's modifications.
 func (t *projTab) objectCombo(id string, kind model.ObjectKind, proj string, index int, cur string, width float32) (string, bool) {
 	choices := objectsFor(t.a.rec, kind, proj, index)
@@ -977,14 +1012,20 @@ func (t *projTab) objectCombo(id string, kind model.ObjectKind, proj string, ind
 		preview = objectText(effective(t.a.rec, proj), model.ObjectRef{Kind: kind, ID: cur})
 	}
 	labels := make([]string, len(choices))
+	kinds := make([]iconKind, len(choices))
 	sel := -1
 	for i, c := range choices {
 		labels[i] = c.name
+		kinds[i] = objectIconKind(kind, c.id)
 		if c.id == cur {
 			sel, preview = i, c.name
 		}
 	}
-	if k := pick(id, preview, width, labels, sel); k >= 0 {
+	previewKind := iconNone
+	if cur != "" {
+		previewKind = objectIconKind(kind, cur)
+	}
+	if k := pickKinds(id, preview, previewKind, width, labels, kinds, sel); k >= 0 {
 		return choices[k].id, true
 	}
 	return cur, false

@@ -142,7 +142,7 @@ func TestLineCandidatesIncludeTheProjectionsAccounts(t *testing.T) {
 	names := func(proj, search string) []string {
 		var out []string
 		for _, c := range lineCandidates(effective(a.rec, proj), search) {
-			out = append(out, string(c.id)+"/"+c.kind)
+			out = append(out, string(c.id)+"/"+c.kind.String())
 		}
 		return out
 	}

@@ -194,13 +194,14 @@ func (t *assetsTab) assetNode(r *assetRow, path, problem string) {
 	if problem != "" {
 		imgui.PushStyleColorVec4(imgui.ColText, rgba(colError, 1))
 	}
-	open := imgui.TreeNodeExStrV(r.Asset.Name, flags)
+	kind := assetKind(r.Asset.ID)
+	textX := treeTextX()
+	label := iconLabel(kind, r.Asset.Name)
+	open := imgui.TreeNodeExStrV(label+"###node", flags)
 	if imgui.IsItemClicked() && !imgui.IsItemToggledOpen() && !isDefaultAsset(r.Asset.ID) {
 		t.sel = r.Asset.ID
 	}
-	if problem != "" || r.Err != "" {
-		tooltipOn(problem + r.Err)
-	}
+	treeDecor(textX, label, r.Asset.Name, kind, problem+r.Err)
 	imgui.TableSetColumnIndex(1)
 	if r.Err != "" {
 		errorText("error")
@@ -236,14 +237,50 @@ func (t *assetsTab) memberNode(parent *assetRow, m memberRow) {
 	if m.Detail != "" {
 		label += " (" + m.Detail + ")"
 	}
-	imgui.TreeNodeExStrV(label, imgui.TreeNodeFlagsLeaf|imgui.TreeNodeFlagsNoTreePushOnOpen|imgui.TreeNodeFlagsSpanFullWidth)
-	if m.Problem != "" {
-		tooltipOn(m.Problem)
-	}
+	kind := memberKind(m.Member)
+	textX := treeTextX()
+	shown := iconLabel(kind, label)
+	imgui.TreeNodeExStrV(shown, imgui.TreeNodeFlagsLeaf|imgui.TreeNodeFlagsNoTreePushOnOpen|imgui.TreeNodeFlagsSpanFullWidth)
+	treeDecor(textX, shown, label, kind, m.Problem)
 	imgui.TableSetColumnIndex(1)
 	imgui.TextUnformatted(graph.FormatMoney(m.Balance))
 	if m.Problem != "" {
 		imgui.PopStyleColor()
+	}
+}
+
+// treeTextX is where the text of a tree node drawn at the cursor starts: after the arrow.
+func treeTextX() float32 {
+	return imgui.CursorScreenPos().X + imgui.FontSize() + 2*imgui.CurrentStyle().FramePadding().X
+}
+
+// textClipped reports whether text of width textW does not fit in availW.
+func textClipped(textW, availW float32) bool { return textW > availW }
+
+// treeTip is the tooltip of a tree row: the whole of name when the row clips it, then the problem with the row, else "".
+func treeTip(name string, clipped bool, problem string) string {
+	switch {
+	case clipped && problem != "":
+		return name + "\n\n" + problem
+	case clipped:
+		return name
+	}
+	return problem
+}
+
+// treeDecor finishes the tree node just drawn, whose text starts at textX and was drawn as label, a padded name: it draws the kind's icon and shows the tooltip of the icon, else of the row.
+func treeDecor(textX float32, label, name string, kind iconKind, problem string) {
+	if itemIcon(textX, kind) {
+		return
+	}
+	clipped := textClipped(imgui.CalcTextSize(label).X, imgui.ItemRectMax().X-textX)
+	if tip := treeTip(name, clipped, problem); tip != "" && imgui.IsItemHovered() {
+		if imgui.BeginTooltip() {
+			imgui.PushTextWrapPosV(imgui.FontSize() * 30)
+			imgui.TextUnformatted(tip)
+			imgui.PopTextWrapPos()
+			imgui.EndTooltip()
+		}
 	}
 }
 
@@ -333,12 +370,19 @@ func (t *assetsTab) members(asset *model.Asset, row *assetRow) {
 		if m.Detail != "" {
 			label += " (" + m.Detail + ")"
 		}
+		kind := memberKind(m.Member)
+		p := imgui.CursorScreenPos()
+		imgui.PushTextWrapPosV(em*30 - imgui.CurrentStyle().ItemSpacing().X*2)
 		if m.Problem != "" {
-			errorText(label)
+			errorText(iconLabel(kind, label))
 			tooltipOn(m.Problem)
 		} else {
-			imgui.TextUnformatted(label)
+			imgui.TextUnformatted(iconLabel(kind, label))
 		}
+		imgui.PopTextWrapPos()
+		cy := p.Y + imgui.CurrentStyle().FramePadding().Y + imgui.FontSize()/2
+		drawKindIcon(imgui.WindowDrawList(), p.X, cy, kind, iconColor())
+		hoverIcon(p.X, cy, kind)
 		imgui.SameLineV(em*30, -1)
 		imgui.AlignTextToFramePadding()
 		imgui.TextUnformatted(graph.FormatMoney(m.Balance))
@@ -364,22 +408,32 @@ func (t *assetsTab) members(asset *model.Asset, row *assetRow) {
 	case memberAccount:
 		t.label("Account")
 		names, ids := make([]string, len(t.a.rec.Accounts)), make([]model.AccountID, len(t.a.rec.Accounts))
+		kinds := make([]iconKind, len(names))
 		for i, a := range t.a.rec.Accounts {
-			names[i], ids[i] = a.Name, a.ID
+			names[i], ids[i], kinds[i] = a.Name, a.ID, iconAccount
 		}
-		if k := pick("memberacct", orChoose(accountName(t.a.rec, f.account)), em*16, names, slices.Index(ids, f.account)); k >= 0 {
+		previewKind := iconNone
+		if f.account != "" {
+			previewKind = iconAccount
+		}
+		if k := pickKinds("memberacct", orChoose(accountName(t.a.rec, f.account)), previewKind, em*16, names, kinds, slices.Index(ids, f.account)); k >= 0 {
 			f.account = ids[k]
 		}
 	case memberAsset:
 		t.label("Asset")
 		var names []string
 		var ids []model.AssetID
+		var kinds []iconKind
 		for _, r := range t.rows {
 			if r.Asset.ID != asset.ID {
-				names, ids = append(names, r.Asset.Name), append(ids, r.Asset.ID)
+				names, ids, kinds = append(names, r.Asset.Name), append(ids, r.Asset.ID), append(kinds, assetKind(r.Asset.ID))
 			}
 		}
-		if k := pick("memberasset", orChoose(assetLabel(t.a.rec, f.asset)), em*16, names, slices.Index(ids, f.asset)); k >= 0 {
+		previewKind := iconNone
+		if f.asset != "" {
+			previewKind = assetKind(f.asset)
+		}
+		if k := pickKinds("memberasset", orChoose(assetLabel(t.a.rec, f.asset)), previewKind, em*16, names, kinds, slices.Index(ids, f.asset)); k >= 0 {
 			f.asset = ids[k]
 		}
 	case memberRule:

@@ -107,6 +107,15 @@ func assetChoices(view *model.Record) (ids []model.AssetID, labels []string) {
 	return ids, labels
 }
 
+// assetKinds classifies each of the asset ids.
+func assetKinds(ids []model.AssetID) []iconKind {
+	kinds := make([]iconKind, len(ids))
+	for i, id := range ids {
+		kinds[i] = assetKind(id)
+	}
+	return kinds
+}
+
 func (t *projTab) settingRow(p *model.Projection, i int) {
 	s := p.AssetSettings[i]
 	view := effective(t.a.rec, p.Name)
@@ -141,7 +150,7 @@ func (t *projTab) settingRow(p *model.Projection, i int) {
 			sel = k
 		}
 	}
-	if k := pick("asset", assetLabel(view, s.Asset), -1, labels, sel); k >= 0 {
+	if k := pickKinds("asset", assetLabel(view, s.Asset), assetKind(s.Asset), -1, labels, assetKinds(ids), sel); k >= 0 {
 		t.changeSetting(p.Name, i, func(c *model.AssetSetting) { c.Asset = ids[k] })
 	}
 
@@ -209,7 +218,11 @@ func (t *projTab) addSettingForm(p *model.Projection) {
 			sel, preview = k, labels[k]
 		}
 	}
-	if k := pick("addsetasset", preview, em*12, labels, sel); k >= 0 {
+	previewKind := iconNone
+	if sel >= 0 {
+		previewKind = assetKind(f.asset)
+	}
+	if k := pickKinds("addsetasset", preview, previewKind, em*12, labels, assetKinds(ids), sel); k >= 0 {
 		f.asset = ids[k]
 	}
 	imgui.SameLine()

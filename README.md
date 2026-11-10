@@ -19,7 +19,7 @@ This builds the container image on first use (and whenever the `Containerfile` c
 
     scripts/test.sh
 
-Runs a gofmt check, `go vet` and `go test` in the container. The tests include a headless GUI smoke test (`cmd/finplan/smoke_test.go`): it builds the binary and, on the demo data and SDL's offscreen video driver, takes a screenshot of every tab (and of an account selected with `--select`). It fails on a non-zero exit, panic output, a PNG of the wrong size or a single-colour image, and also checks the errors for bad screenshot arguments and that a SIGINT to a running `--demo` window leaves no demo folder behind. `scripts/test.sh` sets `FINPLAN_SMOKE_OUT` so the screenshots are kept in `test-output/screenshots/` (ignored by git); without it they go to a temporary folder. The container installs Mesa's software OpenGL drivers, so the smoke test needs no display and runs in CI.
+Runs a gofmt check, `go vet` and `go test` in the container. The tests include a headless GUI smoke test (`cmd/finplan/smoke_test.go`): it builds the binary and, on the demo data and SDL's offscreen video driver, takes a screenshot of every tab (of an account selected with `--select`, of the Assets tab with Net worth selected and of each `--open` picker). It fails on a non-zero exit, panic output, a PNG of the wrong size or a single-colour image, and also checks the errors for bad screenshot arguments and that a SIGINT to a running `--demo` window leaves no demo folder behind. `scripts/test.sh` sets `FINPLAN_SMOKE_OUT` so the screenshots are kept in `test-output/screenshots/` (ignored by git); without it they go to a temporary folder. The container installs Mesa's software OpenGL drivers, so the smoke test needs no display and runs in CI.
 
 ## Run
 
@@ -41,14 +41,15 @@ The Budget tab shows the base budget's items grouped as income, expense and tran
 
 ## Screenshot
 
-    bin/finplan [--demo] --screenshot <out.png> [--tab <name>] [--frames N] [--size WxH] [--select <name>]
+    bin/finplan [--demo] --screenshot <out.png> [--tab <name>] [--frames N] [--size WxH] [--select <name>] [--open <picker>]
 
 Screenshot mode lets the GUI be inspected without a person at the window. It draws `--frames` frames (default 10) without waiting for input, reads the last frame back from the framebuffer, writes it to `<out.png>` at the framebuffer's pixel size and exits 0; any failure exits non-zero with a message.
 
 - `--tab <name>` is the tab to show: Graph (the default), Projections, Assets, Accounts, Budget or Markets; the name is case-insensitive.
 - `--size WxH` is the window size in pixels (default `1280x800`).
 - `--select <name>` selects the projection, asset or account of that name, and works only with the Projections, Assets and Accounts tabs. On the Assets tab an account's default asset is not listed and cannot be selected. An unknown name is an error.
-- Each of `--tab`, `--frames`, `--size` and `--select` is an error without `--screenshot`.
+- `--open <picker>` shows a picker open: `add-line` (the Graph tab's Add line picker), `target` (a Projections tab target picker, which needs `--select <projection>`) or `member` (the Assets tab's member picker, which needs `--select <asset>`). It is an error for an unknown picker or with a tab other than the one named. The add-line and target lists are scrolled so the boundary between accounts and assets is in view.
+- Each of `--tab`, `--frames`, `--size`, `--select` and `--open` is an error without `--screenshot`.
 
 If `SDL_VIDEO_DRIVER` is unset and neither `DISPLAY` nor `WAYLAND_DISPLAY` is set, screenshot mode sets `SDL_VIDEO_DRIVER=offscreen` itself; it can also be set explicitly, which needs no display server (OpenGL still needs a driver, such as Mesa's software one):
 
@@ -72,7 +73,7 @@ Read commands:
 | `account list` | accounts: id, name, type, tax, owner, `stated_rate`, `default` (the default balance intervals), `closed` (close date or null), `balance` (on the record's today; 0 once today is after the close date), `last_data` (date of the latest record entry, null without data) and `stale` (an open account whose last data is more than 45 days before today) |
 | `account entries <account> [--voided]` | the account's snapshots and transactions with current values (voided entries left out unless `--voided`, which includes them with a `void` field) |
 | `entry history <entry-id>` | every revision of one entry: original values, then each correction or void |
-| `asset list` | assets with their members, members left out as invalid, any resolve error, `default` (default balance intervals) and `params` (parameter settings) |
+| `asset list` | assets with their `kind` (`account` for an account's default asset, else `asset`), their members, members left out as invalid, any resolve error, `default` (default balance intervals) and `params` (parameter settings) |
 | `budget list` | budget items with recurrence, start, end, indexing, `growth` and accounts |
 | `budget totals` | `as_of` (the record's today), `monthly_income`, `monthly_expenses` and `monthly_net`, in today's dollars rounded to cents: a monthly item counts once a month, semimonthly twice, biweekly 26/12, annual a twelfth, one-time not at all; transfers are left out; only items active on `as_of` count |
 | `projection list` | projections: name, parent, start, override history, modification count |
