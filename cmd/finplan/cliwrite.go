@@ -243,6 +243,7 @@ var writeCommands = []*command{
 }
 
 func init() {
+	writeCommands = append(writeCommands, assetSettingCommands...)
 	writeCommands = append(writeCommands, dataCommands...)
 	for _, cmd := range writeCommands {
 		cmd.Write = true
@@ -290,11 +291,11 @@ func (c *call) finish(name string, res *ops.Result, err error) (map[string]any, 
 	switch {
 	case errors.Is(err, ops.ErrNoChange):
 		out["changed"] = false
-		out["projection"] = projectionJSON(c.rec.Projection(name))
+		out["projection"] = projectionJSON(c.rec, c.rec.Projection(name))
 	case err != nil:
 		return nil, opsError(err)
 	case res.Projection != nil:
-		out["projection"] = projectionJSON(res.Projection)
+		out["projection"] = projectionJSON(res.Record, res.Projection)
 	}
 	return out, nil
 }
@@ -377,7 +378,7 @@ func cmdProjectionDelete(c *call) (any, error) {
 	if err != nil {
 		return nil, opsError(err)
 	}
-	return map[string]any{"dry_run": c.options().DryRun, "changed": true, "removed": res.Removed, "projection": projectionJSON(p)}, nil
+	return map[string]any{"dry_run": c.options().DryRun, "changed": true, "removed": res.Removed, "projection": projectionJSON(c.rec, p)}, nil
 }
 
 func cmdProjectionAddAccount(c *call) (any, error) {

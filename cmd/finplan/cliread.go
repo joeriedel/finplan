@@ -479,11 +479,11 @@ func cmdProjectionShow(c *call) (any, error) {
 	if p == nil {
 		return nil, failErr("not_found", "there is no projection named %q", c.args[0])
 	}
-	return projectionJSON(p), nil
+	return projectionJSON(rec, p), nil
 }
 
-// projectionJSON is the JSON shape of a projection and its modifications, as projection show prints it and the write commands print the projection they changed.
-func projectionJSON(p *model.Projection) any {
+// projectionJSON is the JSON shape of a projection and its modifications, as projection show prints it and the write commands print the projection they changed. rec is the record that holds p; it says which modifications have a target that no longer exists.
+func projectionJSON(rec *model.Record, p *model.Projection) any {
 	type jsetting struct {
 		Asset           string `json:"asset"`
 		Start           *jdate `json:"start"`
@@ -509,7 +509,11 @@ func projectionJSON(p *model.Projection) any {
 		Mode     string       `json:"mode"`
 		Schedule []jsegment   `json:"schedule"`
 		Item     *jbudgetItem `json:"item"`
+		Missing  bool         `json:"missing"`
+		// MissingTarget names the target that does not exist; omitted when the modification's target resolves.
+		MissingTarget string `json:"missing_target,omitempty"`
 	}
+	missing, _ := rec.MissingTargets(p.Name)
 	out := struct {
 		Name            string     `json:"name"`
 		Parent          *string    `json:"parent"`
@@ -529,6 +533,9 @@ func projectionJSON(p *model.Projection) any {
 		jm := jmod{Index: i, Target: jtarget{string(m.Target.Kind), m.Target.ID}, Property: m.Property, Mode: string(cmp.Or(m.Mode, model.ModeSet)), Schedule: scheduleJSONOut(m.Values)}
 		if m.Item != nil {
 			jm.Item = model.Ptr(budgetItemJSON(*m.Item))
+		}
+		if i < len(missing) && missing[i] != "" {
+			jm.Missing, jm.MissingTarget = true, missing[i]
 		}
 		out.Modifications = append(out.Modifications, jm)
 	}

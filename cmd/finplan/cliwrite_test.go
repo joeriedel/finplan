@@ -45,7 +45,14 @@ type written struct {
 				Growth         float64
 				Account        *string
 			}
+			Missing       bool
+			MissingTarget string `json:"missing_target"`
 		}
+		AssetSettings []struct {
+			Asset           string
+			Start           *string
+			OverrideHistory *bool `json:"override_history"`
+		} `json:"asset_settings"`
 	}
 	Renamed *struct{ From, To string }
 	Presets []string `json:"rewritten_presets"`
@@ -525,7 +532,8 @@ func TestCLIWriteHelp(t *testing.T) {
 		"asset new", "asset rename", "asset delete", "asset add-member", "asset remove-member",
 		"asset add-default", "asset remove-default", "asset set-param", "account new", "account edit",
 		"entry add-snapshot", "entry add-transaction", "entry correct", "entry void",
-		"budget add", "budget edit", "budget end",
+		"budget add", "budget edit", "budget end", "budget delete",
+		"asset-setting add", "asset-setting edit", "asset-setting move", "asset-setting remove",
 	} {
 		if !writes[name] {
 			t.Errorf("help does not list the write command %q", name)

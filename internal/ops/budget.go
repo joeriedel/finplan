@@ -71,3 +71,16 @@ func EndBudgetItem(st *store.Store, rec *model.Record, id string, end model.Date
 		return Result{Item: &it}, nil
 	})
 }
+
+// DeleteBudgetItem deletes the base budget item. A modification of it in a projection is not refused: it is left pointing at nothing, which the engine skips and the editors show. The result's Item is the item as it was and Removed its id.
+func DeleteBudgetItem(st *store.Store, rec *model.Record, id string, o Options) (*Result, error) {
+	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
+		i, err := baseItem(next, id)
+		if err != nil {
+			return Result{}, err
+		}
+		it := next.Budget.Items[i]
+		next.Budget.Items = slices.Delete(next.Budget.Items, i, i+1)
+		return Result{Item: &it, Removed: id}, nil
+	})
+}

@@ -185,3 +185,32 @@ func (p *Projection) MoveMod(from, to int) error {
 	p.Mods = slices.Insert(p.Mods, to, m)
 	return nil
 }
+
+// InsertAssetSetting inserts s so that it is at index i of the projection's asset settings.
+func (p *Projection) InsertAssetSetting(i int, s AssetSetting) error {
+	if i < 0 || i > len(p.AssetSettings) {
+		return fmt.Errorf("model: projection %q: asset setting index %d out of range", p.Name, i)
+	}
+	p.AssetSettings = slices.Insert(p.AssetSettings, i, s)
+	return nil
+}
+
+// RemoveAssetSetting deletes the asset setting at index i.
+func (p *Projection) RemoveAssetSetting(i int) error {
+	if i < 0 || i >= len(p.AssetSettings) {
+		return fmt.Errorf("model: projection %q: asset setting index %d out of range", p.Name, i)
+	}
+	p.AssetSettings = slices.Delete(p.AssetSettings, i, i+1)
+	return nil
+}
+
+// MoveAssetSetting moves the asset setting at index from so that it ends up at index to.
+func (p *Projection) MoveAssetSetting(from, to int) error {
+	if from < 0 || from >= len(p.AssetSettings) || to < 0 || to >= len(p.AssetSettings) {
+		return fmt.Errorf("model: projection %q: cannot move asset setting %d to %d", p.Name, from, to)
+	}
+	s := p.AssetSettings[from]
+	p.AssetSettings = slices.Delete(p.AssetSettings, from, from+1)
+	p.AssetSettings = slices.Insert(p.AssetSettings, to, s)
+	return nil
+}

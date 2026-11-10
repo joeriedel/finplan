@@ -585,3 +585,20 @@ func transferCause(rec *model.Record, src, dst model.AccountID) Cause {
 	}
 	return CauseTransfer
 }
+
+// AllStarts returns the resolved start of every account the projection sees, its own and inherited hypothetical accounts included, in the order the projection's view lists them.
+func AllStarts(rec *model.Record, projection string) ([]AccountStart, error) {
+	view, err := rec.For(projection)
+	if err != nil {
+		return nil, err
+	}
+	var out []AccountStart
+	for _, a := range view.Accounts {
+		starts, err := Starts(rec, projection, model.DefaultAssetID(a.ID))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, starts...)
+	}
+	return out, nil
+}

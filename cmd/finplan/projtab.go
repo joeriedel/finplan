@@ -15,6 +15,7 @@ import (
 
 	"github.com/AllenDang/cimgui-go/imgui"
 
+	"github.com/joeriedel/finplan/internal/engine"
 	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/ops"
@@ -48,6 +49,12 @@ type projTab struct {
 	deleting   string
 	dragFrom   int
 	overwrites []*model.Overwrite
+	// missing holds, per modification of the selected projection, the target that does not exist, or "".
+	missing []string
+	// starts is the effective start of each account under the selected projection; startsErr is why there are none.
+	starts    []engine.AccountStart
+	startsErr error
+	startsFor string
 	// tl is the timeline editor under the modifications table.
 	tl timelineState
 
@@ -64,10 +71,12 @@ type projTab struct {
 	addItem itemForm
 	// addAcct is the Add account form.
 	addAcct acctForm
+	// addSetting is the Add start setting form.
+	addSetting settingForm
 }
 
 func (t *projTab) reset() {
-	t.bufs, t.errs, t.overwrites = map[string]string{}, map[string]string{}, nil
+	t.bufs, t.errs, t.overwrites, t.missing, t.startsFor = map[string]string{}, map[string]string{}, nil, nil, ""
 }
 
 // setErr records the error that refused an edit of field id; the edit path runs on a projTab that was never reset.
@@ -268,6 +277,8 @@ func (t *projTab) detail() {
 	t.header(p)
 	imgui.Separator()
 	t.accounts(p)
+	imgui.Separator()
+	t.settings(p)
 	imgui.Separator()
 	t.mods(p)
 }
@@ -559,6 +570,9 @@ func (t *projTab) mods(p *model.Projection) {
 	if t.overwrites == nil {
 		t.overwrites, _ = rec.OverwrittenMods(p.Name)
 	}
+	if t.missing == nil {
+		t.missing, _ = rec.MissingTargets(p.Name)
+	}
 	imgui.TextUnformatted("Modifications, applied in this order; a later one wins where it covers the same thing.")
 	flags := imgui.TableFlagsRowBg | imgui.TableFlagsBordersInnerV | imgui.TableFlagsSizingStretchProp
 	if imgui.BeginTableV("##mods", 7, flags, imgui.NewVec2(0, 0), 0) {
@@ -589,15 +603,27 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 	if i < len(t.overwrites) {
 		ow = t.overwrites[i]
 	}
+	gone := ""
+	if i < len(t.missing) {
+		gone = t.missing[i]
+	}
 	tip := func() {
-		if ow != nil && imgui.IsItemHovered() {
+		if !imgui.IsItemHovered() {
+			return
+		}
+		if gone != "" {
+			tooltipText("The " + gone + " no longer exists, so the engine skips this modification. Remove it, or retarget it.")
+		} else if ow != nil {
 			tooltipText(overwriteText(ow))
 		}
 	}
 	imgui.PushIDInt(int32(i))
 	defer imgui.PopID()
 	imgui.TableNextRowV(0, 0)
-	if ow != nil {
+	if gone != "" {
+		imgui.PushStyleColorVec4(imgui.ColText, rgba(colError, 1))
+		defer imgui.PopStyleColor()
+	} else if ow != nil {
 		imgui.PushStyleColorVec4(imgui.ColText, *imgui.StyleColorVec4(imgui.ColTextDisabled))
 		defer imgui.PopStyleColor()
 	}

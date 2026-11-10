@@ -209,6 +209,12 @@ var dataCommands = []*command{
 		Output: itemOut,
 		run:    cmdBudgetEnd,
 	},
+	{
+		Name: "budget delete", Summary: "delete a base budget item; a projection's modification of it is kept but points at nothing, so the engine skips it and projection show marks it missing",
+		Args:   []argDef{{Name: "item", Description: "item id or name", Required: true}},
+		Output: "{dry_run, changed, removed: item id, item: the item as it was, as budget list prints it}",
+		run:    cmdBudgetDelete,
+	},
 }
 
 // dataResult starts the output of a data write: {dry_run, changed}. The bool is false when the edit changed nothing. An error of the operation is the command's error.
@@ -687,4 +693,19 @@ func cmdBudgetEnd(c *call) (any, error) {
 	}
 	res, err := ops.EndBudgetItem(c.st, c.rec, cur.ID, end, c.options())
 	return c.itemResult(res, err, cur.ID)
+}
+
+func cmdBudgetDelete(c *call) (any, error) {
+	cur, err := c.baseItemArg(0)
+	if err != nil {
+		return nil, err
+	}
+	res, err := ops.DeleteBudgetItem(c.st, c.rec, cur.ID, c.options())
+	out, _, err := c.dataResult(err)
+	if err != nil {
+		return nil, err
+	}
+	out["removed"] = res.Removed
+	out["item"] = budgetItemJSON(*res.Item)
+	return out, nil
 }
