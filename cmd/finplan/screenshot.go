@@ -24,19 +24,28 @@ type shotOptions struct {
 	height int
 	// sel is the name of the projection, asset or account to select; empty selects nothing.
 	sel string
-	// open is the picker to show open, one of openNames, else empty.
+	// open is the state to show, one of openNames, else empty.
 	open string
-	// openID is the id of that picker.
+	// openID is the id of the picker that state is, if it is one.
 	openID string
 	// checkIDs asks for the widget ID conflict scan after the screenshot is saved.
 	checkIDs bool
 }
 
-// openNames are the pickers --open can show, each with the tab it needs and the id the code that draws it asks takeOpen about.
-var openNames = []struct{ name, tab, id string }{
-	{"add-line", "Graph", "add-line"},
-	{"target", "Projections", "addsetasset"},
-	{"member", "Assets", "memberacct"},
+// openState is a state --open can show, with the tab it needs, whether it needs --select, and the id the code that draws it asks takeOpen about, which is empty for a state set by applyOpen instead of a picker.
+type openState struct {
+	name, tab, id string
+	needsSel      bool
+}
+
+// openNames are the states --open can show.
+var openNames = []openState{
+	{"add-line", "Graph", "add-line", false},
+	{"target", "Projections", "addsetasset", true},
+	{"member", "Assets", "memberacct", true},
+	{"member-form", "Assets", "", true},
+	{"new-item", "Projections", "", true},
+	{"budget-item", "Budget", "", false},
 }
 
 // openRequest is the id of the picker the screenshot asks to be shown open; the tab that draws it opens it on the first frame it does and clears the request.
@@ -108,13 +117,42 @@ func newShotOptions(out, tab string, frames int, size, sel, open string) (*shotO
 			for i, n := range openNames {
 				names[i] = n.name
 			}
-			return nil, fmt.Errorf("unknown picker %q for --open; the pickers are %s", open, strings.Join(names, ", "))
+			return nil, fmt.Errorf("unknown state %q for --open; the states are %s", open, strings.Join(names, ", "))
 		}
-		if o.open != "add-line" && sel == "" {
+		if o.openName().needsSel && sel == "" {
 			return nil, fmt.Errorf("--open %s needs --select", o.open)
 		}
 	}
 	return o, nil
+}
+
+// openName returns the openNames entry of the open state asked for.
+func (o *shotOptions) openName() (n openState) {
+	for _, n = range openNames {
+		if n.name == o.open {
+			return n
+		}
+	}
+	return n
+}
+
+// applyOpen puts the app in the state --open asks for that is not a picker: the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, or the first Budget item's editor.
+func (o *shotOptions) applyOpen(a *app) error {
+	switch o.open {
+	case "member", "member-form":
+		a.assets.add.kind = memberAccount
+	case "new-item":
+		a.proj.addNew = true
+	case "budget-item":
+		for _, g := range budgetGroups(a.rec) {
+			if len(g.Rows) > 0 {
+				a.budget.open[g.Rows[0].ID] = true
+				return nil
+			}
+		}
+		return fmt.Errorf("the budget has no items to open")
+	}
+	return nil
 }
 
 // selectItem selects the projection, asset or account named by --select in the chosen tab.

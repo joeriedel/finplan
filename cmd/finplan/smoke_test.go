@@ -17,11 +17,16 @@ import (
 	"time"
 )
 
+// caseTimeout is the longest any one run of the GUI may take.
+const caseTimeout = 30 * time.Second
+
 // buildBinary builds finplan into a temporary folder.
 func buildBinary(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "finplan")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
 	return bin
@@ -44,6 +49,7 @@ func TestScreenshotSmoke(t *testing.T) {
 	}
 	tmp := t.TempDir()
 
+	// accounts-selected is Home because the entries table of an account with a long record, such as Checking, is thousands of pixels tall and the ID scan, which does not scroll, cannot reach all of it within its frame bound.
 	cases := []struct{ name, tab, sel, open string }{
 		{"graph", "Graph", "", ""},
 		{"projections", "Projections", "", ""},
@@ -51,12 +57,17 @@ func TestScreenshotSmoke(t *testing.T) {
 		{"accounts", "Accounts", "", ""},
 		{"budget", "Budget", "", ""},
 		{"markets", "Markets", "", ""},
+		// projections-selected also covers the Add modification form, which is the default mode of the add form.
 		{"projections-selected", "Projections", "Base", ""},
-		{"accounts-selected", "Accounts", "Checking", ""},
+		{"accounts-selected", "Accounts", "Home", ""},
 		{"assets-selected", "Assets", "Net worth", ""},
 		{"add-line", "Graph", "", "add-line"},
 		{"target", "Projections", "Base", "target"},
 		{"member", "Assets", "Net worth", "member"},
+		// An open picker blocks hover in the windows behind it, so these states draw its form with the picker closed.
+		{"member-form", "Assets", "Net worth", "member-form"},
+		{"projections-new-item", "Projections", "Base", "new-item"},
+		{"budget-item", "Budget", "", "budget-item"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -69,11 +80,13 @@ func TestScreenshotSmoke(t *testing.T) {
 			if c.open != "" {
 				args = append(args, "--open", c.open)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			ctx, cancel := context.WithTimeout(context.Background(), caseTimeout)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, bin, args...)
 			cmd.Env = smokeEnv(tmp)
+			start := time.Now()
 			out, err := cmd.CombinedOutput()
+			t.Logf("took %v\n%s", time.Since(start).Round(100*time.Millisecond), out)
 			if err != nil || bytes.Contains(out, []byte("panic")) {
 				t.Fatalf("finplan %s: %v\n%s", strings.Join(args, " "), err, out)
 			}
@@ -112,12 +125,18 @@ func TestScreenshotBadArguments(t *testing.T) {
 		{"--open", "add-line"},
 		{"--check-ids"},
 		{"--demo", "--check-ids"},
+		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Projections", "--open", "new-item"},
+		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Graph", "--select", "Base", "--open", "new-item"},
+		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Projections", "--select", "Base", "--open", "budget-item"},
+		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Assets", "--open", "budget-item"},
 	} {
-		cmd := exec.Command(bin, args...)
+		ctx, cancel := context.WithTimeout(context.Background(), caseTimeout)
+		cmd := exec.CommandContext(ctx, bin, args...)
 		cmd.Env = smokeEnv(t.TempDir())
 		if out, err := cmd.CombinedOutput(); err == nil {
 			t.Errorf("finplan %s succeeded:\n%s", strings.Join(args, " "), out)
 		}
+		cancel()
 	}
 }
 
@@ -125,7 +144,9 @@ func TestScreenshotBadArguments(t *testing.T) {
 func TestDemoSigintLeavesNothing(t *testing.T) {
 	bin := buildBinary(t)
 	tmp := t.TempDir()
-	cmd := exec.Command(bin, "--demo")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "--demo")
 	cmd.Env = smokeEnv(tmp)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out

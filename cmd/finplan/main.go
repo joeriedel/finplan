@@ -43,7 +43,7 @@ func main() {
 		os.Exit(runCLI(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 	}
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: finplan [--demo]\n       finplan [--demo] --screenshot <out.png> [--tab <name>] [--frames N] [--size WxH] [--select <name>] [--open <picker>] [--check-ids]\n       finplan [--demo | --db <path>] <command> ...   (run finplan help)")
+		fmt.Fprintln(os.Stderr, "usage: finplan [--demo]\n       finplan [--demo] --screenshot <out.png> [--tab <name>] [--frames N] [--size WxH] [--select <name>] [--open <state>] [--check-ids]\n       finplan [--demo | --db <path>] <command> ...   (run finplan help)")
 		flag.PrintDefaults()
 	}
 	demo := flag.Bool("demo", false, "use a throwaway database holding an invented family instead of your own")
@@ -52,8 +52,8 @@ func main() {
 	frames := flag.Int("frames", 10, "with --screenshot: how many frames to draw before saving")
 	size := flag.String("size", "1280x800", "with --screenshot: the window size in pixels, WxH")
 	sel := flag.String("select", "", "with --screenshot: the projection, asset or account to select, by name (Projections, Assets and Accounts tabs)")
-	open := flag.String("open", "", "with --screenshot: a picker to show open, one of add-line (Graph tab), target (Projections tab, needs --select) and member (Assets tab, needs --select)")
-	checkIDs := flag.Bool("check-ids", false, "with --screenshot: after saving, move the mouse over the whole window and fail if two visible widgets share an ID")
+	open := flag.String("open", "", "with --screenshot: a state to show, one of add-line (Graph tab), target (Projections tab, needs --select), member (Assets tab, needs --select), new-item (Projections tab, needs --select; the Add form for a new budget item) and budget-item (Budget tab; the first item's editor)")
+	checkIDs := flag.Bool("check-ids", false, "with --screenshot: after saving, move the mouse over every widget, in a window made tall enough to show them all, and fail if two visible widgets share an ID")
 	flag.Parse()
 	var shot *shotOptions
 	if *out != "" {
@@ -120,10 +120,10 @@ func run(demo bool, shot *shotOptions) error {
 		if err := shot.selectItem(app); err != nil {
 			return err
 		}
-		openRequest = shot.openID
-		if shot.open == "member" {
-			app.assets.add.kind = memberAccount
+		if err := shot.applyOpen(app); err != nil {
+			return err
 		}
+		openRequest = shot.openID
 		setDefaultVideoDriver()
 	}
 	imgui.CreateContext()

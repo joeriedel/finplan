@@ -7,13 +7,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE_NAME="localhost/finplan-build"
 
+# The most seconds a container may run; podman stops and, with --rm, removes it after that, which killing the client would not.
+CONTAINER_TIMEOUT="${FINPLAN_CONTAINER_TIMEOUT:-1800}"
+
+# The most seconds an image build may take.
+BUILD_TIMEOUT="${FINPLAN_BUILD_TIMEOUT:-3600}"
+
 # Build the container image unless one tagged with the current Containerfile hash exists.
 ensure_image() {
     local hash
     hash="$(sha256sum "$ROOT/Containerfile" | cut -c1-16)"
     IMAGE="$IMAGE_NAME:$hash"
     if ! podman image exists "$IMAGE"; then
-        podman build -t "$IMAGE" -f "$ROOT/Containerfile" "$ROOT"
+        timeout "$BUILD_TIMEOUT" podman build -t "$IMAGE" -f "$ROOT/Containerfile" "$ROOT"
     fi
 }
 
@@ -22,7 +28,7 @@ ensure_image() {
 ensure_volume() {
     if ! podman volume exists finplan-go; then
         podman volume create finplan-go >/dev/null
-        podman run --rm --userns=keep-id --user 0:0 -v finplan-go:/gopath:Z "$IMAGE" \
+        podman run --rm --timeout "$CONTAINER_TIMEOUT" --userns=keep-id --user 0:0 -v finplan-go:/gopath:Z "$IMAGE" \
             chown "$(id -u):$(id -g)" /gopath
     fi
 }
@@ -34,6 +40,7 @@ run_in_container() {
     ensure_image
     ensure_volume
     podman run --rm \
+        --timeout "$CONTAINER_TIMEOUT" \
         --userns=keep-id \
         --user "$(id -u):$(id -g)" \
         -v "$ROOT:/src:Z" \
