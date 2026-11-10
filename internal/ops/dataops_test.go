@@ -8,6 +8,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/joeriedel/finplan/internal/demodata"
@@ -92,8 +93,11 @@ func TestNewAsset(t *testing.T) {
 	if a == nil || a.Name != "Rainy day fund" || len(a.Members) != 0 || res.Asset.ID != "rainy-day-fund" {
 		t.Fatalf("asset %+v, result %+v", a, res.Asset)
 	}
-	// The same name again gets another id; a given id is used as it is.
-	res, err := NewAsset(st, reload(t, st), "Rainy day fund", "", Options{})
+	if _, err := NewAsset(st, reload(t, st), " rainy DAY fund", "other-id", Options{}); !errors.Is(err, ErrNameTaken) {
+		t.Errorf("name of an asset in other case: %v", err)
+	}
+	// A made id steps around an id that is taken; a given id is used as it is.
+	res, err := NewAsset(st, reload(t, st), "Rainy-day fund", "", Options{})
 	if err != nil || res.Asset.ID != "rainy-day-fund-2" {
 		t.Errorf("second asset: %v, %v", res, err)
 	}
@@ -109,6 +113,8 @@ func TestNewAsset(t *testing.T) {
 		{"X", "acct:x", ErrInvalidValue},
 		{"X", "net-worth", ErrNameTaken},
 		{"X", "checking", ErrNameTaken},
+		{"net worth", "", ErrNameTaken},
+		{" checking ", "", ErrNameTaken},
 	} {
 		dataRefused(t, c.want, func(st *store.Store, rec *model.Record) (*Result, error) {
 			return NewAsset(st, rec, c.name, c.id, Options{})
@@ -116,8 +122,11 @@ func TestNewAsset(t *testing.T) {
 	}
 	// A made id steps around an account id.
 	st2, rec := seed(t)
-	if res, err := NewAsset(st2, rec, "Checking", "", Options{}); err != nil || res.Asset.ID != "checking-2" {
-		t.Errorf("name of an account: %v, %v", res, err)
+	if res, err := NewAsset(st2, rec, "Checking pool", "checking-pool", Options{}); err != nil || res.Asset.ID != "checking-pool" {
+		t.Errorf("made id: %v, %v", res, err)
+	}
+	if _, err := NewAsset(st2, rec, "Checking", "", Options{}); !errors.Is(err, ErrNameTaken) || !strings.Contains(err.Error(), "Checking") {
+		t.Errorf("name of an account: %v", err)
 	}
 }
 
@@ -131,6 +140,10 @@ func TestRenameAsset(t *testing.T) {
 	if _, err := RenameAsset(st, reload(t, st), demodata.Liquid, "Cash and brokerage", Options{}); !errors.Is(err, ErrNoChange) {
 		t.Errorf("same name: %v", err)
 	}
+	// An asset can change the case of its own name.
+	if res, err := RenameAsset(st, reload(t, st), demodata.Liquid, "CASH and brokerage", Options{}); err != nil || res.Asset.Name != "CASH and brokerage" {
+		t.Errorf("own name in other case: %v, %v", res, err)
+	}
 	for _, c := range []struct {
 		id   model.AssetID
 		name string
@@ -139,6 +152,8 @@ func TestRenameAsset(t *testing.T) {
 		{"nope", "x", ErrUnknownObject},
 		{"acct:checking", "x", ErrInvalidValue},
 		{demodata.Liquid, "  ", ErrInvalidValue},
+		{demodata.Liquid, " all CASH ", ErrNameTaken},
+		{demodata.Liquid, "savings", ErrNameTaken},
 	} {
 		dataRefused(t, c.want, func(st *store.Store, rec *model.Record) (*Result, error) {
 			return RenameAsset(st, rec, c.id, c.name, Options{})

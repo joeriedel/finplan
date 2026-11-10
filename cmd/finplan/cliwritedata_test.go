@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -258,6 +259,10 @@ func TestCLIAssetRefusals(t *testing.T) {
 	refusedWrite(t, path, "", 1, "name_taken", "asset", "new", "X", "--id", "net-worth")
 	refusedWrite(t, path, "", 1, "invalid", "asset", "new", "X", "--id", "acct:x")
 	refusedWrite(t, path, "", 1, "invalid", "asset", "new", " ")
+	refusedWrite(t, path, "", 1, "name_taken", "asset", "new", "liquid ASSETS")
+	refusedWrite(t, path, "", 1, "name_taken", "asset", "new", "Savings")
+	refusedWrite(t, path, "", 1, "name_taken", "asset", "rename", "retirement", "net worth")
+	refusedWrite(t, path, "", 1, "name_taken", "asset", "rename", "retirement", "checking")
 	refusedWrite(t, path, "", 1, "cycle", "asset", "add-member", "all-cash", "--asset", "liquid")
 	refusedWrite(t, path, "", 1, "cycle", "asset", "add-member", "liquid", "--asset", "liquid")
 	refusedWrite(t, path, "", 1, "not_found", "asset", "add-member", "liquid", "--account", "no-such-account")
@@ -558,6 +563,72 @@ func TestCLIOverlappingAggregateScenario(t *testing.T) {
 	a = listAssets(t, path)["everyday-money"]
 	if len(a.Members) != 1 || len(a.Invalid) != 0 {
 		t.Errorf("after the removal: %+v", a)
+	}
+}
+
+func TestCLIAssetNameRefusalNamesTheClash(t *testing.T) {
+	path := seededFile(t)
+	code, out := wcli(t, "", "--db", path, "asset", "new", "all CASH")
+	if code != 1 || !strings.Contains(string(out), "name_taken") || !strings.Contains(string(out), "All cash") {
+		t.Errorf("new with a taken name exited %d: %s", code, out)
+	}
+	code, out = wcli(t, "", "--db", path, "asset", "rename", "retirement", "Savings")
+	if code != 1 || !strings.Contains(string(out), "name_taken") || !strings.Contains(string(out), "account named") {
+		t.Errorf("rename to an account name exited %d: %s", code, out)
+	}
+	// Another case of its own name is allowed.
+	if w := data(t, path, "", "asset", "rename", "retirement", "RETIREMENT"); w.Asset.Name != "RETIREMENT" {
+		t.Errorf("rename: %+v", w.Asset)
+	}
+}
+
+func TestCLIEmergencyFundScenario(t *testing.T) {
+	path := seededFile(t)
+	write(t, path, "", "asset", "new", "Emergency fund")
+	write(t, path, "", "asset", "add-member", "emergency-fund", "--account", "savings")
+	write(t, path, "", "asset", "add-member", "emergency-fund", "--account", "checking")
+	if a := listAssets(t, path)["emergency-fund"]; len(a.Members) != 2 || len(a.Invalid) != 0 {
+		t.Errorf("asset list: %+v", a)
+	}
+	write(t, path, "", "asset", "rename", "emergency-fund", "Rainy day")
+	if a := listAssets(t, path)["emergency-fund"]; a.Name != "Rainy day" {
+		t.Errorf("renamed: %+v", a)
+	}
+
+	// Another asset, a projection's asset setting and a modification each keep the asset.
+	write(t, path, "", "asset", "add-member", "net-worth", "--asset", "emergency-fund")
+	refusedWrite(t, path, "", 1, "in_use", "asset", "delete", "emergency-fund")
+	write(t, path, "", "asset", "remove-member", "net-worth", itoa(memberSeq(t, listAssets(t, path)["net-worth"], `asset "emergency-fund"`)))
+	write(t, path, "", "asset-setting", "add", "Base", "--asset", "emergency-fund", "--start", "2027-03-01")
+	refusedWrite(t, path, "", 1, "in_use", "asset", "delete", "emergency-fund")
+	write(t, path, "", "asset-setting", "remove", "Base", "0")
+	write(t, path, "", "mod", "add", "Base", "--target", "asset:emergency-fund", "--property", "growth", "--value", "0.01")
+	refusedWrite(t, path, "", 1, "in_use", "asset", "delete", "emergency-fund")
+	write(t, path, "", "mod", "remove", "Base", "0")
+
+	w := data(t, path, "", "asset", "delete", "emergency-fund")
+	if w.Removed != "emergency-fund" {
+		t.Errorf("delete: %+v", w)
+	}
+	if _, ok := listAssets(t, path)["emergency-fund"]; ok {
+		t.Error("the deleted asset is still listed")
+	}
+}
+
+func TestCLIRuleMemberTakesNewAccountsScenario(t *testing.T) {
+	path := seededFile(t)
+	write(t, path, "", "asset", "new", "Cash pool")
+	write(t, path, "", "asset", "add-member", "cash-pool", "--types", "checking,savings")
+	before := listAssets(t, path)["cash-pool"]
+	write(t, path, "", "account", "new", "Vacation savings", "--type", "savings", "--tax", "taxable")
+	after := listAssets(t, path)["cash-pool"]
+	if len(before.Members) != 1 || len(after.Members) != 1 || after.Error != nil || len(after.Invalid) != 0 {
+		t.Errorf("before %+v, after %+v", before, after)
+	}
+	var accts []waccount
+	cliJSON(t, &accts, "--db", path, "account", "list")
+	if !slices.ContainsFunc(accts, func(a waccount) bool { return a.ID == "vacation-savings" }) {
+		t.Errorf("account list: %+v", accts)
 	}
 }
 

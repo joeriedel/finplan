@@ -168,6 +168,11 @@ func describeInterval(iv model.Interval) string {
 	return fmt.Sprintf("%s to %s: %s", from, to, trimFloat(iv.Value))
 }
 
+// fieldEditor keeps the typed text and the refusal of the in-place text fields of a tab, by field id.
+type fieldEditor struct {
+	bufs, errs map[string]string
+}
+
 // acctTab is the Accounts tab: the accounts grouped by type on the left and the selected one on the right.
 type acctTab struct {
 	a *app
@@ -179,8 +184,7 @@ type acctTab struct {
 	delFor    model.AccountID
 	delReason string
 	delKnown  bool
-	// bufs and errs are the typed text and the refusal of each attribute field, by field id.
-	bufs, errs map[string]string
+	fieldEditor
 
 	add                   newAcctForm
 	snapDate, snapBalance string
@@ -277,7 +281,7 @@ func (t *acctTab) listRow(r listRow) {
 }
 
 // field draws a text field showing value and returns the text the user typed once they finish editing it.
-func (t *acctTab) field(id, hint, value string, width float32) (string, bool) {
+func (t *fieldEditor) field(id, hint, value string, width float32) (string, bool) {
 	text := value
 	if b, ok := t.bufs[id]; ok {
 		text = b
@@ -322,7 +326,7 @@ func (t *acctTab) editAttr(id model.AccountID, field, text string) {
 	}
 }
 
-func (t *acctTab) label(text string) {
+func (t *fieldEditor) label(text string) {
 	imgui.AlignTextToFramePadding()
 	imgui.TextUnformatted(text)
 	imgui.SameLineV(imgui.FontSize()*9, -1)

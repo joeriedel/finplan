@@ -62,7 +62,22 @@ func editableAsset(next *model.Record, id model.AssetID) (*model.Asset, error) {
 	return a, nil
 }
 
-// NewAsset adds an aggregate asset with no members. An empty id is made from the name; an id that an account or asset has is ErrNameTaken, and one that starts with "acct:" is reserved for the default assets of accounts.
+// freeAssetName refuses a name that another asset or any account already has, ignoring case and surrounding space: accounts count (an account's default asset is checked as its account) because they appear beside their default assets in the tree and pickers. The asset except is not compared, so an asset can change the case of its own name.
+func freeAssetName(rec *model.Record, name string, except model.AssetID) error {
+	for _, a := range rec.Assets {
+		if _, isDefault := accountOfDefault(a.ID); !isDefault && a.ID != except && strings.EqualFold(strings.TrimSpace(a.Name), name) {
+			return refuse(ErrNameTaken, "there is already an asset named %q", a.Name)
+		}
+	}
+	for _, a := range rec.Accounts {
+		if strings.EqualFold(strings.TrimSpace(a.Name), name) {
+			return refuse(ErrNameTaken, "there is already an account named %q", a.Name)
+		}
+	}
+	return nil
+}
+
+// NewAsset adds an aggregate asset with no members. A name that another asset or an account has is ErrNameTaken. An empty id is made from the name; an id that an account or asset has is ErrNameTaken, and one that starts with "acct:" is reserved for the default assets of accounts.
 func NewAsset(st *store.Store, rec *model.Record, name, id string, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		name = strings.TrimSpace(name)
@@ -71,6 +86,9 @@ func NewAsset(st *store.Store, rec *model.Record, name, id string, o Options) (*
 		}
 		if _, reserved := accountOfDefault(model.AssetID(strings.TrimSpace(id))); reserved {
 			return Result{}, refuse(ErrInvalidValue, "asset ids that start with %q are reserved for the default assets of accounts", model.DefaultAssetID(""))
+		}
+		if err := freeAssetName(next, name, ""); err != nil {
+			return Result{}, err
 		}
 		aid, err := newID(next, id, name)
 		if err != nil {
@@ -84,7 +102,7 @@ func NewAsset(st *store.Store, rec *model.Record, name, id string, o Options) (*
 	})
 }
 
-// RenameAsset changes the name of an asset. An account's default asset is renamed with its account.
+// RenameAsset changes the name of an asset; a name that another asset or an account has is ErrNameTaken. An account's default asset is renamed with its account.
 func RenameAsset(st *store.Store, rec *model.Record, id model.AssetID, name string, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		a, err := editableAsset(next, id)
@@ -93,6 +111,9 @@ func RenameAsset(st *store.Store, rec *model.Record, id model.AssetID, name stri
 		}
 		if name = strings.TrimSpace(name); name == "" {
 			return Result{}, refuse(ErrInvalidValue, "an asset needs a name")
+		}
+		if err := freeAssetName(next, name, id); err != nil {
+			return Result{}, err
 		}
 		a.Name = name
 		return Result{Asset: a}, nil
