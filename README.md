@@ -19,13 +19,13 @@ This builds the container image on first use (and whenever the `Containerfile` c
 
     scripts/test.sh
 
-Runs a gofmt check, `go vet` and `go test` in the container.
+Runs a gofmt check, `go vet` and `go test` in the container. The tests include a headless GUI smoke test (`cmd/finplan/smoke_test.go`): it builds the binary and, on the demo data and SDL's offscreen video driver, takes a screenshot of every tab (and of an account selected with `--select`). It fails on a non-zero exit, panic output, a PNG of the wrong size or a single-colour image, and also checks the errors for bad screenshot arguments and that a SIGINT to a running `--demo` window leaves no demo folder behind. `scripts/test.sh` sets `FINPLAN_SMOKE_OUT` so the screenshots are kept in `test-output/screenshots/` (ignored by git); without it they go to a temporary folder. The container installs Mesa's software OpenGL drivers, so the smoke test needs no display and runs in CI.
 
 ## Run
 
     bin/finplan [--demo]
 
-With `--demo` the app runs against a temporary database seeded from the invented family data and the family view presets; it is removed on exit and the window title is "finplan (demo)". Without it the app uses `$XDG_DATA_HOME/finplan/finplan.db` (only when `XDG_DATA_HOME` is an absolute path) or else `~/.local/share/finplan/finplan.db`; the folder is created with mode 0700. An empty database shows a hint on the Graph tab.
+With `--demo` the app runs against a temporary database seeded from the invented family data and the family view presets; it is removed on exit, including on SIGINT and SIGTERM, and the window title is "finplan (demo)". The demo folder is `finplan-demo-*` in the system temp folder, holding `demo.db` and an `owner.pid` file with the PID of the running process; when a demo starts, `finplan-demo-*` folders whose `owner.pid` names a process that is no longer running (for example after a kill) are removed, while folders with a live owner or without a readable `owner.pid` are left alone. Without it the app uses `$XDG_DATA_HOME/finplan/finplan.db` (only when `XDG_DATA_HOME` is an absolute path) or else `~/.local/share/finplan/finplan.db`; the folder is created with mode 0700. An empty database shows a hint on the Graph tab.
 
 File > Backup... opens a save dialog (`.db` filter, default name `finplan-backup-YYYY-MM-DD.db`) and writes a consistent copy of the database. It refuses to overwrite the open database itself.
 
@@ -38,6 +38,21 @@ The Assets tab shows a tree of the user's assets (aggregates) with their members
 The Accounts tab lists the accounts grouped by type with each one's balance, the date of its last data and a stale flag (an open account whose last data is more than 45 days old), and closed accounts apart. An Add account form (disabled with a red reason until valid) adds a manual account; the selected account's name, type, tax treatment, owner and stated rate are edited in place; a Record a balance form adds a snapshot; the default balance intervals are listed with remove and add. Close (with a date), Reopen and Delete are offered with a red reason when refused: an account with record entries cannot be deleted, so it is closed instead. A closed account keeps its history, reads 0 after its close date, stops its budget items after that date, is left out of the pickers for new Graph lines, modification targets and budget-item accounts, and refuses entries dated after the close date. Account and asset edits can be undone with Edit > Undo, except recording entries, which is append-only. The selected account's record entries are listed newest first (date descending, same-day ties newest-recorded first) with date, kind (snapshot, income, expense or transfer), amount or balance, counter account and memo; a Show voided checkbox includes voided entries, marked voided, and with it off the tab says how many voided entries are hidden. A Record a transaction form (date, amount, kind, a counter account picker that leaves out the account itself and closed accounts, memo) sits beside the Record a balance form and is disabled with a red reason until valid. Selecting an entry opens a panel with a Correct form prefilled with its current values and a note, a Void button with a note (for a voided entry, Restore instead: a correction that changes no value) and a history table of every revision with the time made (local), note and voided marker. Adding, correcting, voiding and restoring entries push no undo step.
 
 The Budget tab shows the base budget's items grouped as income, expense and transfer, each row with name, schedule, amount, accounts, start, end, indexed, annual raise and monthly equivalent. Above them are the monthly income, expenses and amount left over as of the record's today, in today's dollars (transfers are in neither; a one-time item counts for nothing and an annual one for a twelfth). Edit opens an item's fields in place (the Projections tab's item fields plus a "rises with inflation" checkbox), with an End date and a Delete button (a projection's modification of a deleted item is left pointing at nothing: red, and skipped, on the Projections tab); an Add form is disabled with a red reason until valid. Semimonthly items can be edited but not created. Edits can be undone with Edit > Undo. Comparing actual spending with the budget is not built yet.
+
+## Screenshot
+
+    bin/finplan [--demo] --screenshot <out.png> [--tab <name>] [--frames N] [--size WxH] [--select <name>]
+
+Screenshot mode lets the GUI be inspected without a person at the window. It draws `--frames` frames (default 10) without waiting for input, reads the last frame back from the framebuffer, writes it to `<out.png>` at the framebuffer's pixel size and exits 0; any failure exits non-zero with a message.
+
+- `--tab <name>` is the tab to show: Graph (the default), Projections, Assets, Accounts, Budget or Markets; the name is case-insensitive.
+- `--size WxH` is the window size in pixels (default `1280x800`).
+- `--select <name>` selects the projection, asset or account of that name, and works only with the Projections, Assets and Accounts tabs. On the Assets tab an account's default asset is not listed and cannot be selected. An unknown name is an error.
+- Each of `--tab`, `--frames`, `--size` and `--select` is an error without `--screenshot`.
+
+If `SDL_VIDEO_DRIVER` is unset and neither `DISPLAY` nor `WAYLAND_DISPLAY` is set, screenshot mode sets `SDL_VIDEO_DRIVER=offscreen` itself; it can also be set explicitly, which needs no display server (OpenGL still needs a driver, such as Mesa's software one):
+
+    SDL_VIDEO_DRIVER=offscreen bin/finplan --demo --screenshot /tmp/accounts.png --tab Accounts
 
 ## Command line
 

@@ -5,6 +5,7 @@
 *.test
 *.out
 /finplan
+/test-output/
 
 # Personal data: never commit databases, backups or credentials
 *.db

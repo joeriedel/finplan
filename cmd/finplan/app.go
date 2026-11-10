@@ -34,8 +34,8 @@ type app struct {
 	unchanged bool
 	// generation counts the undos, redos and reloads done, so an editor opened before one closes and drops its drag.
 	generation int
-	// showGraph selects the Graph tab for one frame.
-	showGraph bool
+	// forceTab is the name of a tab to select on the next frame it is drawn; empty leaves the selection alone.
+	forceTab string
 	// reported holds the preset problems already queued, so that a reload does not queue them again.
 	reported map[string]bool
 }
@@ -154,8 +154,8 @@ func (a *app) draw() {
 		if imgui.BeginTabBarV("##tabs", imgui.TabBarFlagsNone) {
 			for i, name := range tabs {
 				tabFlags := imgui.TabItemFlagsNone
-				if i == 0 && a.showGraph {
-					tabFlags, a.showGraph = imgui.TabItemFlagsSetSelected, false
+				if name == a.forceTab {
+					tabFlags, a.forceTab = imgui.TabItemFlagsSetSelected, ""
 				}
 				if !imgui.BeginTabItemV(name, nil, tabFlags) {
 					continue

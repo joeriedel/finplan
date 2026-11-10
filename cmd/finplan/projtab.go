@@ -560,7 +560,7 @@ func (t *projTab) showOnGraph(proj string) {
 		g.lines.Add(id, true, proj, graph.AssetColor(g.rec, id))
 	}
 	g.fitY = true
-	t.a.showGraph = true
+	t.a.forceTab = "Graph"
 }
 
 // ---- The modifications.

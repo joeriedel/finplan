@@ -11,7 +11,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"runtime"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/AllenDang/cimgui-go/imgui"
@@ -40,12 +43,34 @@ func main() {
 		os.Exit(runCLI(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 	}
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: finplan [--demo]\n       finplan [--demo | --db <path>] <command> ...   (run finplan help)")
+		fmt.Fprintln(os.Stderr, "usage: finplan [--demo]\n       finplan [--demo] --screenshot <out.png> [--tab <name>] [--frames N] [--size WxH] [--select <name>]\n       finplan [--demo | --db <path>] <command> ...   (run finplan help)")
 		flag.PrintDefaults()
 	}
 	demo := flag.Bool("demo", false, "use a throwaway database holding an invented family instead of your own")
+	out := flag.String("screenshot", "", "draw one frame sequence without waiting for input, save the last frame to this PNG file and exit")
+	tab := flag.String("tab", "Graph", "with --screenshot: the tab to show, one of "+strings.Join(tabs, ", "))
+	frames := flag.Int("frames", 10, "with --screenshot: how many frames to draw before saving")
+	size := flag.String("size", "1280x800", "with --screenshot: the window size in pixels, WxH")
+	sel := flag.String("select", "", "with --screenshot: the projection, asset or account to select, by name (Projections, Assets and Accounts tabs)")
 	flag.Parse()
-	if err := run(*demo); err != nil {
+	var shot *shotOptions
+	if *out != "" {
+		var err error
+		if shot, err = newShotOptions(*out, *tab, *frames, *size, *sel); err != nil {
+			log.Fatal(err)
+		}
+	} else {
+		bad := ""
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name != "demo" {
+				bad = f.Name
+			}
+		})
+		if bad != "" {
+			log.Fatalf("--%s needs --screenshot", bad)
+		}
+	}
+	if err := run(*demo, shot); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -66,7 +91,13 @@ func openStore(demo bool) (*store.Store, func(), error) {
 	return st, func() { st.Close() }, nil
 }
 
-func run(demo bool) error {
+// run shows the window until it is closed or a SIGINT or SIGTERM arrives, or, with shot set, draws the screenshot.
+func run(demo bool, shot *shotOptions) error {
+	// Notify before the demo folder exists, so a signal during setup is still handled, and before backend.Init: SDL installs its own SIGINT handler only over the default one.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(stop)
+
 	st, closeStore, err := openStore(demo)
 	if err != nil {
 		return err
@@ -82,6 +113,12 @@ func run(demo bool) error {
 		return err
 	}
 
+	if shot != nil {
+		if err := shot.selectItem(app); err != nil {
+			return err
+		}
+		setDefaultVideoDriver()
+	}
 	imgui.CreateContext()
 	defer imgui.DestroyContext()
 	implot.CreateContext()
@@ -91,7 +128,12 @@ func run(demo bool) error {
 	if demo {
 		title = "finplan (demo)"
 	}
-	if err := backend.Init(title, 1280, 800); err != nil {
+	width, height := 1280, 800
+	shotLeft := 0
+	if shot != nil {
+		width, height, shotLeft = shot.width, shot.height, shot.frames
+	}
+	if err := backend.Init(title, width, height); err != nil {
 		return fmt.Errorf("backend init: %w", err)
 	}
 	defer backend.Shutdown()
@@ -108,9 +150,23 @@ func run(demo bool) error {
 		if frames > 0 {
 			timeout = 0
 		}
+		if shot != nil {
+			timeout = 0
+		}
+		select {
+		case <-stop:
+			return nil
+		default:
+		}
 		events := backend.WaitEvents(timeout)
 		if events&backend.EventQuit != 0 {
+			if shot != nil {
+				return fmt.Errorf("the window was closed before the screenshot was taken")
+			}
 			return nil
+		}
+		if shot != nil {
+			app.forceTab, frames = shot.tab, 1
 		}
 		if events&backend.EventInput != 0 {
 			frames = settleFrames
@@ -147,6 +203,14 @@ func run(demo bool) error {
 		imgui.NewFrame()
 		app.draw()
 		imgui.Render()
+		if shotLeft == 1 {
+			img, err := backend.RenderCapture()
+			if err != nil {
+				return fmt.Errorf("read the frame back: %w", err)
+			}
+			return writePNG(shot.out, img)
+		}
+		shotLeft--
 		backend.Render()
 		if app.quit {
 			return nil

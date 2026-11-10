@@ -13,14 +13,18 @@
 typedef void (*PFN_glViewport)(int x, int y, int width, int height);
 typedef void (*PFN_glClearColor)(float r, float g, float b, float a);
 typedef void (*PFN_glClear)(unsigned int mask);
+typedef void (*PFN_glReadPixels)(int x, int y, int width, int height, unsigned int format, unsigned int type, void* pixels);
 
 static const unsigned int GL_COLOR_BUFFER_BIT_ = 0x00004000;
+static const unsigned int GL_RGBA_ = 0x1908;
+static const unsigned int GL_UNSIGNED_BYTE_ = 0x1401;
 
 static SDL_Window*      g_Window = nullptr;
 static SDL_GLContext    g_GLContext = nullptr;
 static PFN_glViewport   g_glViewport = nullptr;
 static PFN_glClearColor g_glClearColor = nullptr;
 static PFN_glClear      g_glClear = nullptr;
+static PFN_glReadPixels g_glReadPixels = nullptr;
 
 // The save dialog's callback may run on another thread, so its result waits in a slot guarded by g_SaveMutex.
 static std::mutex       g_SaveMutex;
@@ -59,7 +63,8 @@ bool FinplanBackend_Init(const char* title, int width, int height)
     g_glViewport = (PFN_glViewport)SDL_GL_GetProcAddress("glViewport");
     g_glClearColor = (PFN_glClearColor)SDL_GL_GetProcAddress("glClearColor");
     g_glClear = (PFN_glClear)SDL_GL_GetProcAddress("glClear");
-    if (g_glViewport == nullptr || g_glClearColor == nullptr || g_glClear == nullptr)
+    g_glReadPixels = (PFN_glReadPixels)SDL_GL_GetProcAddress("glReadPixels");
+    if (g_glViewport == nullptr || g_glClearColor == nullptr || g_glClear == nullptr || g_glReadPixels == nullptr)
         return false;
 
     g_SaveEvent = SDL_RegisterEvents(1);
@@ -129,13 +134,30 @@ void FinplanBackend_NewFrame(void)
     ImGui_ImplSDL3_NewFrame();
 }
 
-void FinplanBackend_Render(void)
+static void DrawFrame(void)
 {
     ImGuiIO& io = ImGui::GetIO();
     g_glViewport(0, 0, (int)(io.DisplaySize.x * io.DisplayFramebufferScale.x), (int)(io.DisplaySize.y * io.DisplayFramebufferScale.y));
     g_glClearColor(0.137f, 0.149f, 0.180f, 1.0f);
     g_glClear(GL_COLOR_BUFFER_BIT_);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
+
+void FinplanBackend_Render(void)
+{
+    DrawFrame();
+    SDL_GL_SwapWindow(g_Window);
+}
+
+bool FinplanBackend_PixelSize(int* width, int* height)
+{
+    return SDL_GetWindowSizeInPixels(g_Window, width, height);
+}
+
+void FinplanBackend_RenderCapture(unsigned char* rgba, int width, int height)
+{
+    DrawFrame();
+    g_glReadPixels(0, 0, width, height, GL_RGBA_, GL_UNSIGNED_BYTE_, rgba);
     SDL_GL_SwapWindow(g_Window);
 }
 

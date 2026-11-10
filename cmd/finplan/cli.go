@@ -11,9 +11,11 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/signal"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/joeriedel/finplan/internal/model"
@@ -207,11 +209,27 @@ func (c *call) open() (*store.Store, *model.Record, error) {
 
 // openDemoStore opens a throwaway demo database, removed when the command ends.
 func (c *call) openDemoStore() (*store.Store, error) {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	st, cleanup, err := openDemo()
 	if err != nil {
+		signal.Stop(sig)
 		return nil, failErr("database", "%v", err)
 	}
-	c.cleanup = append(c.cleanup, cleanup)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case s := <-sig:
+			cleanup()
+			os.Exit(128 + int(s.(syscall.Signal)))
+		case <-done:
+		}
+	}()
+	c.cleanup = append(c.cleanup, func() {
+		close(done)
+		cleanup()
+		signal.Stop(sig)
+	})
 	return st, nil
 }
 
@@ -278,11 +296,11 @@ func openErr(err error, path string) error {
 	}
 }
 
-// isCLI reports whether the arguments name a command, that is, hold something other than flags. The only flag that takes a separate value before the command is --db.
+// isCLI reports whether the arguments name a command, that is, hold something other than flags. The flags that take a separate value before the command are --db and the screenshot flags of the window.
 func isCLI(args []string) bool {
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
-		case a == "--db" || a == "-db":
+		case isDBFlag(a) || slices.Contains(valueFlags, strings.TrimLeft(a, "-")) && strings.HasPrefix(a, "-"):
 			i++
 		case !strings.HasPrefix(a, "-"):
 			return true
@@ -290,6 +308,9 @@ func isCLI(args []string) bool {
 	}
 	return false
 }
+
+// valueFlags are the window's flags that take a value, which may be the next argument.
+var valueFlags = []string{"screenshot", "tab", "frames", "size", "select"}
 
 func isDBFlag(a string) bool { return a == "--db" || a == "-db" }
 

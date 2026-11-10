@@ -50,6 +50,12 @@ int         FinplanBackend_PollSaveFile(char* buffer, int buffer_size);
 void        FinplanBackend_NewFrame(void);
 void        FinplanBackend_Render(void);
 
+// Size of the window's framebuffer in pixels.
+bool        FinplanBackend_PixelSize(int* width, int* height);
+
+// Like FinplanBackend_Render(), but reads the finished frame back into rgba (width * height * 4 bytes, bottom row first) before swapping. width and height must be the size from FinplanBackend_PixelSize().
+void        FinplanBackend_RenderCapture(unsigned char* rgba, int width, int height);
+
 #ifdef __cplusplus
 }
 #endif

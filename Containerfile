@@ -8,4 +8,5 @@ RUN dnf -y install \
         SDL3-devel \
         wayland-devel wayland-protocols-devel libxkbcommon-devel \
         mesa-libGL-devel mesa-libEGL-devel libglvnd-devel \
+        mesa-dri-drivers mesa-libEGL mesa-libGL \
     && dnf clean all

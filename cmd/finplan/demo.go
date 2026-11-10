@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/joeriedel/finplan/internal/demodata"
 	"github.com/joeriedel/finplan/internal/graph"
@@ -14,10 +15,15 @@ import (
 )
 
 // openDemo creates a throwaway database holding the invented Family record and its view presets. The returned
-// function closes the database and removes it.
+// function closes the database and removes it. Folders of demos that were killed are swept first.
 func openDemo() (*store.Store, func(), error) {
-	dir, err := os.MkdirTemp("", "finplan-demo-")
+	sweepDemos(os.TempDir())
+	dir, err := os.MkdirTemp("", demoPrefix)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, demoOwnerFile), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		os.RemoveAll(dir)
 		return nil, nil, err
 	}
 	st, err := seedDemo(filepath.Join(dir, "demo.db"))

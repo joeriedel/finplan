@@ -300,7 +300,7 @@ The GUI picks up changes made outside it (by the CLI) without a restart. The sto
 
 ## Storage and privacy
 
-All app data lives in SQLite outside the repository (the app uses `$XDG_DATA_HOME/finplan/finplan.db` when `XDG_DATA_HOME` is absolute, else `~/.local/share/finplan/finplan.db`; `--demo` uses a temporary seeded database instead). File → Backup... writes a consistent copy with `Store.Backup`. Credentials live in the OS keyring, never in files. The repository is public: real financial data never enters it, and tests and fixtures use invented numbers, such as an invented budget for a family of six.
+All app data lives in SQLite outside the repository (the app uses `$XDG_DATA_HOME/finplan/finplan.db` when `XDG_DATA_HOME` is absolute, else `~/.local/share/finplan/finplan.db`; `--demo` uses a temporary seeded database instead: a `finplan-demo-*` folder in the system temp folder with `demo.db` and an `owner.pid` file, removed on exit and on SIGINT/SIGTERM, and swept at the next demo start if its owner process is gone, `sweepDemos`). File → Backup... writes a consistent copy with `Store.Backup`. Credentials live in the OS keyring, never in files. The repository is public: real financial data never enters it, and tests and fixtures use invented numbers, such as an invented budget for a family of six.
 
 ### The storage layer
 
@@ -333,7 +333,7 @@ Migration 2 adds `presets`, kept apart because `Save` replaces the documents who
 
 ## CLI and agent access
 
-The `finplan` binary doubles as a CLI: with no subcommand (`finplan`, `finplan --demo`) it opens the GUI, and a non-flag argument routes to the CLI (`main`, `isCLI`), which does one job through the shared library and exits. Every command prints one JSON document on stdout; errors are `{"error":{"code","message"}}` on stdout, with exit 2 for usage errors and 1 for all others. The codes are `usage`, `not_found`, `ambiguous`, `no_database`, `old_schema`, `future_schema`, `database` and `engine`; the write commands add `unknown_target`, `name_taken`, `has_children`, `cycle`, `invalid`, `in_use` and `record_changed`.
+The `finplan` binary doubles as a CLI: with no subcommand (`finplan`, `finplan --demo`) it opens the GUI, and a non-flag argument routes to the CLI (`main`, `isCLI`; the values of `--db` and of the GUI's screenshot flags such as `--screenshot x.png` are not commands, so `finplan --demo --screenshot x.png` is the GUI in screenshot mode, see the README), which does one job through the shared library and exits. Every command prints one JSON document on stdout; errors are `{"error":{"code","message"}}` on stdout, with exit 2 for usage errors and 1 for all others. The codes are `usage`, `not_found`, `ambiguous`, `no_database`, `old_schema`, `future_schema`, `database` and `engine`; the write commands add `unknown_target`, `name_taken`, `has_children`, `cycle`, `invalid`, `in_use` and `record_changed`.
 
 Commands are data: `cmd/finplan/cliread.go` holds the read command table and `cmd/finplan/cliwrite.go` the projection write commands and `cmd/finplan/cliwritedata.go` (`dataCommands`) those for assets, accounts, entries and the base budget (name, summary, arguments, flags, output shape, whether it writes, its JSON input), and both the parser and `finplan help` / `finplan help --json` are generated from it, so the reference cannot drift from the code.
 

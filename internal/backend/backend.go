@@ -13,6 +13,7 @@ import "C"
 
 import (
 	"errors"
+	"image"
 	"unsafe"
 
 	// Linked for the imgui core symbols the backend files call; also keeps the backend on the same ImGui context.
@@ -102,4 +103,28 @@ func NewFrame() {
 // Render draws the current ImGui draw data and swaps buffers; call after imgui.Render.
 func Render() {
 	C.FinplanBackend_Render()
+}
+
+// RenderCapture is Render that also returns the frame it drew, read back before the swap.
+func RenderCapture() (*image.RGBA, error) {
+	var w, h C.int
+	if !C.FinplanBackend_PixelSize(&w, &h) {
+		return nil, lastError()
+	}
+	img := image.NewRGBA(image.Rect(0, 0, int(w), int(h)))
+	C.FinplanBackend_RenderCapture((*C.uchar)(unsafe.Pointer(&img.Pix[0])), w, h)
+	// OpenGL rows run bottom to top.
+	stride := img.Stride
+	row := make([]byte, stride)
+	for y := 0; y < int(h)/2; y++ {
+		top, bottom := img.Pix[y*stride:(y+1)*stride], img.Pix[(int(h)-1-y)*stride:(int(h)-y)*stride]
+		copy(row, top)
+		copy(top, bottom)
+		copy(bottom, row)
+	}
+	// The framebuffer's alpha is not meaningful; the window is opaque.
+	for i := 3; i < len(img.Pix); i += 4 {
+		img.Pix[i] = 0xff
+	}
+	return img, nil
 }
