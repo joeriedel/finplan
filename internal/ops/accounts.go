@@ -35,6 +35,9 @@ func NewAccount(st *store.Store, rec *model.Record, acct model.Account, o Option
 		if name == "" {
 			return Result{}, refuse(ErrInvalidValue, "an account needs a name")
 		}
+		if err := freeAccountName(next, name, ""); err != nil {
+			return Result{}, err
+		}
 		if err := checkAttrs(acct.Type, acct.Tax, acct.StatedRate); err != nil {
 			return Result{}, err
 		}
@@ -70,9 +73,14 @@ func EditAccount(st *store.Store, rec *model.Record, id model.AccountID, ch Acco
 			return Result{}, unknownAccount(id)
 		}
 		if ch.Name != nil {
-			if a.Name = strings.TrimSpace(*ch.Name); a.Name == "" {
+			name := strings.TrimSpace(*ch.Name)
+			if name == "" {
 				return Result{}, refuse(ErrInvalidValue, "an account needs a name")
 			}
+			if err := freeAccountName(next, name, id); err != nil {
+				return Result{}, err
+			}
+			a.Name = name
 			next.Asset(model.DefaultAssetID(id)).Name = a.Name
 		}
 		if ch.Type != nil {
