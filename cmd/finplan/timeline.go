@@ -62,26 +62,38 @@ func modAfterInsert(mod, at int) int {
 	return mod
 }
 
-// inserted follows the open editor's modification of projection proj when a modification is inserted at index at.
+// inserted follows the modification of each open editor of projection proj when a modification is inserted at index at.
 func (t *projTab) inserted(proj string, at int) {
 	if t.tl.open && t.tl.proj == proj {
 		t.tl.mod = modAfterInsert(t.tl.mod, at)
 	}
+	if t.itemTl.open && t.itemTl.proj == proj {
+		t.itemTl.mod = modAfterInsert(t.itemTl.mod, at)
+	}
 }
 
-// moved follows the open editor's modification of projection proj when the modification at from moves to to.
+// moved follows the modification of each open editor of projection proj when the modification at from moves to to.
 func (t *projTab) moved(proj string, from, to int) {
 	if t.tl.open && t.tl.proj == proj {
 		t.tl.mod = modAfterMove(t.tl.mod, from, to)
 	}
+	if t.itemTl.open && t.itemTl.proj == proj {
+		t.itemTl.mod = modAfterMove(t.itemTl.mod, from, to)
+	}
 }
 
-// removed follows the open editor's modification of projection proj when the modification at index is removed, and closes the editor if it was that one.
+// removed follows the modification of each open editor of projection proj when the modification at index is removed, and closes the editor if it was that one.
 func (t *projTab) removed(proj string, index int) {
 	if t.tl.open && t.tl.proj == proj {
 		var ok bool
 		if t.tl.mod, ok = modAfterRemove(t.tl.mod, index); !ok {
 			t.tl = timelineState{}
+		}
+	}
+	if t.itemTl.open && t.itemTl.proj == proj {
+		var ok bool
+		if t.itemTl.mod, ok = modAfterRemove(t.itemTl.mod, index); !ok {
+			t.itemTl = timelineState{}
 		}
 	}
 }
@@ -113,6 +125,7 @@ type timelineHandle struct {
 
 // openTimeline shows the timeline editor for modification mod of the projection, which is m.
 func (t *projTab) openTimeline(proj string, mod int, m model.Modification) {
+	t.itemTl = timelineState{}
 	t.tl = timelineState{open: true, proj: proj, mod: mod, generation: t.a.generation, target: m.Target, property: m.Property, mode: m.Mode, sel: -1}
 }
 

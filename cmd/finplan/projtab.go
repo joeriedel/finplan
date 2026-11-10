@@ -57,6 +57,8 @@ type projTab struct {
 	startsFor string
 	// tl is the timeline editor under the modifications table.
 	tl timelineState
+	// itemTl is the timeline editor of the amount or growth of a budget item that a modification adds.
+	itemTl timelineState
 
 	// The Add modification form.
 	addKind  model.ObjectKind
@@ -593,6 +595,7 @@ func (t *projTab) mods(p *model.Projection) {
 		imgui.TextDisabled("No modifications yet.")
 	}
 	t.timelineEditor(p)
+	t.itemTimelineEditor(p)
 	t.addForm(p)
 }
 
@@ -671,7 +674,7 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 	imgui.TableSetColumnIndex(2)
 	switch {
 	case adds:
-		t.itemFields("item"+strconv.Itoa(i), formOf(*m.Item, rec.Today), false, func(field, text string) { t.setItemField(p.Name, i, field, text) })
+		t.itemFields("item"+strconv.Itoa(i), formOf(*m.Item, rec.Today), false, func(field, text string) { t.setItemField(p.Name, i, field, text) }, func(field string) { t.openItemTimeline(p.Name, i, field) })
 	case editable:
 		kind, obj, prop := m.Target.Kind, m.Target.ID, rowProperty(m)
 		if k, changed := kindCombo("kind", kind, imgui.FontSize()*7); changed {
@@ -1039,8 +1042,8 @@ func propertyCombo(id string, kind model.ObjectKind, cur string, width float32) 
 	return cur, false
 }
 
-// itemFields draws the fields of a budget item. set is called with the field and its new text or choice: at every keystroke if live, else once the user finishes a text field. id prefixes the field ids.
-func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, text string)) {
+// itemFields draws the fields of a budget item. set is called with the field and its new text or choice: at every keystroke if live, else once the user finishes a text field. id prefixes the field ids. If timeline is not nil, amount and growth get a button that calls it with "amount" or "growth" to edit that property as a schedule; an amount or growth that already changes over time shows its value today instead of a text field.
+func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, text string), timeline func(field string)) {
 	em := imgui.FontSize()
 	input := func(field, label, hint, value string, width float32) {
 		fid := id + field
@@ -1071,6 +1074,25 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 			errorText("Not changed: " + e)
 		}
 	}
+	// scheduled shows the property as a value today and a button that opens its timeline, or draws input and, in an editor, the button that turns it into a schedule.
+	scheduled := func(field, label, hint, value string, width float32, sched bool) {
+		if sched {
+			imgui.AlignTextToFramePadding()
+			imgui.TextDisabled(label)
+			imgui.SameLine()
+			imgui.TextUnformatted(value + " now, changes over time")
+		} else {
+			input(field, label, hint, value, width)
+		}
+		if timeline == nil {
+			return
+		}
+		imgui.SameLine()
+		if imgui.SmallButton("timeline##" + id + field) {
+			timeline(field)
+		}
+		tooltipOn("Edit this as a schedule on a timeline: a different " + field + " over different periods.")
+	}
 	strs := func(n int, at func(i int) string) []string {
 		out := make([]string, n)
 		for i := range out {
@@ -1082,32 +1104,46 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 	choose("kind", "kind", string(f.kind), em*7, kinds, kinds, string(f.kind))
 	imgui.SameLine()
 	input("name", "name", "name", f.name, em*14)
-	input("amount", "amount", "e.g. 1500", f.amount, em*8)
+	scheduled("amount", "amount", "e.g. 1500", f.amount, em*8, f.amountSched)
 	imgui.SameLine()
-	every := strs(len(formRecurrences), func(i int) string { return string(formRecurrences[i]) })
-	choose("every", "when", string(f.every), em*8, every, every, string(f.every))
+	every := strs(len(formRecurrences), func(i int) string { return string(formRecurrences[i].kind) })
+	labels := strs(len(formRecurrences), func(i int) string { return formRecurrences[i].name + ": " + formRecurrences[i].hint })
+	choose("every", "repeats", recurrenceChoiceOf(f.every).name, em*8, every, labels, string(f.every))
 	switch f.every {
 	case model.OneTime:
 		input("date", "on", dateLayout, f.date, em*8)
 	case model.Biweekly:
 		input("date", "from", dateLayout, f.date, em*8)
+	case model.Weekly, model.Quarterly:
+		input("date", "from", "today", f.date, em*8)
+	case model.Semimonthly:
+		input("day", "on days", "1-31", f.day, em*4)
+		imgui.SameLine()
+		input("day2", "and", "1-31", f.day2, em*4)
+		imgui.SameLine()
+		input("date", "from", "today", f.date, em*8)
 	case model.Monthly:
 		input("day", "on day", "1-31", f.day, em*4)
 		imgui.SameLine()
-		input("date", "from", "optional", f.date, em*8)
+		input("date", "from", "today", f.date, em*8)
 	case model.Annual:
 		input("month", "in month", "1-12", f.month, em*4)
 		imgui.SameLine()
 		input("day", "day", "1-31", f.day, em*4)
 		imgui.SameLine()
-		input("date", "from", "optional", f.date, em*8)
-	default:
-		imgui.AlignTextToFramePadding()
-		imgui.TextDisabled(string(f.every) + " items are not edited here")
+		input("date", "from", "today", f.date, em*8)
+	case model.Custom:
+		input("count", "every", "N", f.count, em*4)
+		imgui.SameLine()
+		units := strs(len(formUnits), func(i int) string { return string(formUnits[i]) })
+		choose("unit", "unit", string(f.unit), em*8, units, units, string(f.unit))
+		imgui.SameLine()
+		input("date", "from", "today", f.date, em*8)
 	}
+	imgui.TextDisabled(recurrenceChoiceOf(f.every).hint)
 	input("end", "until", "no end", f.end, em*8)
 	imgui.SameLine()
-	input("growth", "raise per year", "percent, e.g. 3", f.growth, em*6)
+	scheduled("growth", "raise per year", "percent, e.g. 3", f.growth, em*6, f.growthSched)
 
 	rec := effective(t.a.rec, t.sel)
 	ids, names := itemAccountChoices(rec)
@@ -1170,7 +1206,7 @@ func (t *projTab) addForm(p *model.Projection) {
 		if t.addItem.kind == "" {
 			t.addItem = newItemForm()
 		}
-		t.itemFields("newitem", t.addItem, true, t.addItem.set)
+		t.itemFields("newitem", t.addItem, true, t.addItem.set, nil)
 		addButton(itemProblem(effective(rec, p.Name), t.addItem), func() { t.addNewItem(p.Name) })
 		return
 	}

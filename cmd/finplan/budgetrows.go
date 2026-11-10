@@ -4,6 +4,8 @@
 package main
 
 import (
+	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -14,6 +16,22 @@ import (
 // budgetRow is one base budget item as the Budget tab shows it, every column as text.
 type budgetRow struct {
 	ID, Name, Schedule, Amount, Accounts, Start, End, Indexed, Growth, Monthly string
+}
+
+// budgetHeaders are the column titles of the budget rows, in the order of the cells of budgetRow after its ID.
+var budgetHeaders = []string{"Name", "Repeats", "Amount", "Accounts", "Starts", "Ends", "Indexed", "Growth", "Per month"}
+
+// formatDollars writes an amount as "$5,000", keeping the cents when there are any: "$1,234.50".
+func formatDollars(v float64) string {
+	cents := int64(math.Round(math.Abs(v) * 100))
+	s := graph.FormatMoney(float64(cents / 100))
+	if v < 0 && cents != 0 {
+		s = "-" + s
+	}
+	if c := cents % 100; c != 0 {
+		s += fmt.Sprintf(".%02d", c)
+	}
+	return s
 }
 
 // budgetGroup is the base budget items of one kind, in the budget's order.
@@ -41,7 +59,7 @@ func budgetGroups(rec *model.Record) []budgetGroup {
 
 // budgetRowOf describes the item for the Budget tab.
 func budgetRowOf(rec *model.Record, it model.BudgetItem) budgetRow {
-	row := budgetRow{ID: it.ID, Name: it.Name, Schedule: scheduleText(it.Recurrence), Amount: "$" + trimFloat(valueNow(it.Amount, rec.Today)), Start: "-", End: "-"}
+	row := budgetRow{ID: it.ID, Name: it.Name, Schedule: scheduleText(it.Recurrence), Amount: formatDollars(valueNow(it.Amount, rec.Today)), Start: "-", End: "-"}
 	if it.Kind == model.ItemTransfer {
 		row.Accounts = budgetAccountName(rec, it.From) + " to " + budgetAccountName(rec, it.To)
 	} else {

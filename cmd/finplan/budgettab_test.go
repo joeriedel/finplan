@@ -10,6 +10,7 @@ import (
 
 	"github.com/joeriedel/finplan/internal/demodata"
 	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/timeline"
 )
 
 func baseItemOf(t *testing.T, a *app, id string) model.BudgetItem {
@@ -33,7 +34,7 @@ func TestBudgetTabGroupsRowsAndTotals(t *testing.T) {
 	}
 	salary := groups[0].Rows[0]
 	want := budgetRow{
-		ID: "salary-a", Name: "Salary (Parent A)", Schedule: "twice a month, days 15 and 31", Amount: "$5000",
+		ID: "salary-a", Name: "Salary (Parent A)", Schedule: "twice a month, days 15 and 31", Amount: "$5,000",
 		Accounts: accountName(a.rec, demodata.Checking), Start: "-", End: "-", Indexed: "indexed", Monthly: "$10,000 a month",
 	}
 	if salary != want {
@@ -240,5 +241,202 @@ func TestBudgetTabDelete(t *testing.T) {
 	a.redo()
 	if _, ok := a.rec.Budget.Item("salary-a"); ok {
 		t.Error("redo did not delete the item")
+	}
+}
+
+// Scenario 1: a quarterly item and a custom every-3-weeks item are added through the Add form, and a semimonthly one with two days.
+func TestBudgetTabAddsEveryRecurrence(t *testing.T) {
+	a := demoApp(t)
+	bt := a.budget
+	add := func(pairs ...string) model.BudgetItem {
+		t.Helper()
+		bt.addItem = newItemForm()
+		fillItem(&bt.addItem, append([]string{"kind", "expense", "account", string(demodata.Checking)}, pairs...)...)
+		if got := itemProblem(a.rec, bt.addItem); got != "" {
+			t.Fatalf("%v: %s", pairs, got)
+		}
+		if !bt.addNewItem() {
+			t.Fatalf("%v: not added: %v", pairs, a.notices)
+		}
+		return a.rec.Budget.Items[len(a.rec.Budget.Items)-1]
+	}
+
+	q := add("name", "Insurance", "amount", "400", "every", "quarterly", "date", "2027-02-10")
+	if q.Recurrence.Kind != model.Quarterly || q.Start == nil || *q.Start != model.D(2027, 2, 10) {
+		t.Errorf("quarterly %+v start %v", q.Recurrence, q.Start)
+	}
+	c := add("name", "Water filter", "amount", "30", "every", "custom", "count", "3", "unit", "weeks")
+	if c.Recurrence.Kind != model.Custom || c.Recurrence.Count != 3 || c.Recurrence.Unit != model.UnitWeeks || c.Start == nil || *c.Start != a.rec.Today {
+		t.Errorf("custom %+v start %v", c.Recurrence, c.Start)
+	}
+	if got := budgetRowOf(a.rec, c).Schedule; got != "every 3 weeks" {
+		t.Errorf("custom row %q", got)
+	}
+	w := add("name", "Lunch", "amount", "20", "every", "weekly", "end", "2030-01-01")
+	if w.Recurrence.Kind != model.Weekly || w.End == nil || *w.End != model.D(2030, 1, 1) {
+		t.Errorf("weekly %+v end %v", w.Recurrence, w.End)
+	}
+	// Choosing semimonthly offers the 1st and the 15th, and takes two different days.
+	bt.addItem = newItemForm()
+	fillItem(&bt.addItem, "kind", "expense", "account", string(demodata.Checking), "name", "Rent", "amount", "900", "every", "semimonthly")
+	if bt.addItem.day != "1" || bt.addItem.day2 != "15" {
+		t.Errorf("seeded days %q %q", bt.addItem.day, bt.addItem.day2)
+	}
+	bt.addItem.set("day2", "1")
+	if itemProblem(a.rec, bt.addItem) == "" {
+		t.Error("two equal days were accepted")
+	}
+	bt.addItem.set("day2", "20")
+	if r := add("name", "Rent", "amount", "900", "every", "semimonthly", "day", "5", "day2", "20").Recurrence; r.Day != 5 || r.Day2 != 20 {
+		t.Errorf("semimonthly %+v", r)
+	}
+	// A custom item needs a count.
+	bt.addItem = newItemForm()
+	fillItem(&bt.addItem, "kind", "expense", "account", string(demodata.Checking), "name", "X", "amount", "1", "every", "custom", "count", "")
+	if got := itemProblem(a.rec, bt.addItem); got != "enter how many as a whole number" {
+		t.Errorf("custom without count: %q", got)
+	}
+}
+
+// Scenario 3: a monthly item becomes biweekly in place, and a semimonthly one weekly; other fields stay.
+func TestBudgetTabEditRecurrenceInPlace(t *testing.T) {
+	a := demoApp(t)
+	bt := a.budget
+	if !bt.setField("groceries", "every", "biweekly") {
+		t.Fatalf("%v", a.notices)
+	}
+	g := baseItemOf(t, a, "groceries")
+	if g.Recurrence.Kind != model.Biweekly || g.Recurrence.Anchor != a.rec.Today {
+		t.Errorf("groceries %+v", g.Recurrence)
+	}
+	if !bt.setField("salary-a", "every", "weekly") {
+		t.Fatalf("%v", a.notices)
+	}
+	s := baseItemOf(t, a, "salary-a")
+	if s.Recurrence != (model.Recurrence{Kind: model.Weekly}) || s.Start == nil || *s.Start != a.rec.Today || valueNow(s.Amount, 0) != 5000 {
+		t.Errorf("salary-a %+v start %v", s.Recurrence, s.Start)
+	}
+	if !bt.setField("salary-a", "every", "custom") || !bt.setField("salary-a", "count", "3") || !bt.setField("salary-a", "unit", "months") {
+		t.Fatalf("%v", a.notices)
+	}
+	if r := baseItemOf(t, a, "salary-a").Recurrence; r != (model.Recurrence{Kind: model.Custom, Count: 3, Unit: model.UnitMonths}) {
+		t.Errorf("custom %+v", r)
+	}
+	if !bt.setField("salary-a", "every", "semimonthly") || !bt.setField("salary-a", "day", "10") || !bt.setField("salary-a", "day2", "25") {
+		t.Fatalf("%v", a.notices)
+	}
+	if r := baseItemOf(t, a, "salary-a").Recurrence; r != (model.Recurrence{Kind: model.Semimonthly, Day: 10, Day2: 25}) {
+		t.Errorf("semimonthly %+v", r)
+	}
+}
+
+// Scenario 2: an amount becomes a schedule with a step down in 2029 through the timeline commit path, the form shows it as a schedule, other edits keep it, and undo restores it.
+func TestBudgetTabAmountScheduleThroughTimeline(t *testing.T) {
+	a := demoApp(t)
+	bt := a.budget
+	before := baseItemOf(t, a, "groceries")
+	amount := valueNow(before.Amount, 0)
+
+	bt.openTimeline("groceries", "amount")
+	if !bt.tl.open || bt.tl.property != "amount" || bt.tl.target.ID != "groceries" {
+		t.Fatalf("timeline state %+v", bt.tl)
+	}
+	next, err := timeline.Split(before.Amount, 0, model.D(2029, 1, 1))
+	if err == nil {
+		next, err = timeline.SetValue(next, 1, amount-200)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bt.setSchedule("groceries", "amount", "edit", next) {
+		t.Fatalf("%v", a.notices)
+	}
+	g := baseItemOf(t, a, "groceries")
+	if v, _ := g.Amount.At(model.D(2029, 6, 1)); v != amount-200 || valueNow(g.Amount, a.rec.Today) != amount {
+		t.Errorf("amount %+v", g.Amount.Segments())
+	}
+	if f := formOf(g, a.rec.Today); !f.amountSched || f.growthSched || f.amount != trimFloat(amount) {
+		t.Errorf("form %+v", f)
+	}
+	// Another field's edit does not flatten the schedule.
+	if !bt.setField("groceries", "name", "Food") || len(baseItemOf(t, a, "groceries").Amount.Segments()) != 2 {
+		t.Errorf("the schedule was flattened")
+	}
+	a.undo()
+	a.undo()
+	if !reflect.DeepEqual(baseItemOf(t, a, "groceries"), before) {
+		t.Error("undo did not restore the item")
+	}
+
+	// A growth that is none starts as a schedule of zero that the strip can edit.
+	bt.openTimeline("groceries", "growth")
+	if g := baseItemOf(t, a, "groceries"); len(g.Growth.Segments()) != 1 || !bt.tl.open {
+		t.Errorf("growth %+v", g.Growth.Segments())
+	}
+	a.undo()
+	if len(baseItemOf(t, a, "groceries").Growth.Segments()) != 0 {
+		t.Error("undo did not remove the growth schedule")
+	}
+}
+
+// Scenario 4: amounts have separators and keep cents, and every column has a header.
+func TestBudgetRowFormatting(t *testing.T) {
+	for _, c := range []struct {
+		v    float64
+		want string
+	}{{5000, "$5,000"}, {1234.5, "$1,234.50"}, {0.05, "$0.05"}, {999, "$999"}, {1234567, "$1,234,567"}, {12.999, "$13"}, {-1234.5, "-$1,234.50"}} {
+		if got := formatDollars(c.v); got != c.want {
+			t.Errorf("formatDollars(%v) = %q, want %q", c.v, got, c.want)
+		}
+	}
+	a := demoApp(t)
+	it := baseItemOf(t, a, "groceries")
+	it.Amount = model.Constant(1234.5)
+	if r := budgetRowOf(a.rec, it); r.Amount != "$1,234.50" {
+		t.Errorf("amount %q", r.Amount)
+	}
+	if got := strings.Join(budgetHeaders, ","); got != "Name,Repeats,Amount,Accounts,Starts,Ends,Indexed,Growth,Per month" {
+		t.Errorf("headers %s", got)
+	}
+}
+
+var allRecurrences = []model.RecurrenceKind{model.OneTime, model.Weekly, model.Biweekly, model.Semimonthly, model.Monthly, model.Quarterly, model.Annual, model.Custom}
+
+// Every switch of the repeat kind of a base item, from any kind to any other, succeeds through the in-place editor.
+func TestBudgetTabEveryKindSwitchSucceeds(t *testing.T) {
+	for _, from := range allRecurrences {
+		for _, to := range allRecurrences {
+			if from == to {
+				continue
+			}
+			a := demoApp(t)
+			a.budget.setField("groceries", "every", string(from))
+			if got := baseItemOf(t, a, "groceries").Recurrence.Kind; got != from {
+				t.Fatalf("to %s: kind %s: %v", from, got, a.notices)
+			}
+			if !a.budget.setField("groceries", "every", string(to)) {
+				t.Errorf("%s to %s: %v %q", from, to, a.notices, a.budget.fields.errs)
+				continue
+			}
+			if got := baseItemOf(t, a, "groceries").Recurrence.Kind; got != to {
+				t.Errorf("%s to %s: kind %s", from, to, got)
+			}
+		}
+	}
+}
+
+// Deleting an item closes its timeline, so an item added later with the same id does not show a strip unasked.
+func TestBudgetTabDeleteClosesTimeline(t *testing.T) {
+	a := demoApp(t)
+	bt := a.budget
+	bt.openTimeline("groceries", "amount")
+	if !bt.tl.open {
+		t.Fatal("timeline did not open")
+	}
+	if !bt.deleteItem("groceries") {
+		t.Fatalf("%v", a.notices)
+	}
+	if bt.tl.open {
+		t.Errorf("timeline still open: %+v", bt.tl)
 	}
 }

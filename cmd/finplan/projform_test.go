@@ -12,6 +12,7 @@ import (
 	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/ops"
+	"github.com/joeriedel/finplan/internal/timeline"
 )
 
 // balanceOn is the balance the Graph draws for the account under the projection on the date.
@@ -438,5 +439,157 @@ func TestScenarioScaleAndRaisesInTheGUI(t *testing.T) {
 	// Raises are a property of a budget item to modify.
 	if !slices.Contains(propertiesFor(model.KindBudgetItem), model.PropGrowth) {
 		t.Error("no growth among the properties of a budget item")
+	}
+}
+
+// A budget item a projection adds can be edited into every recurrence, and keeps its amount schedule.
+func TestProjectionItemEditsEveryRecurrence(t *testing.T) {
+	a := demoApp(t)
+	pt := a.proj
+	w := demodata.ProjWithdraw
+	item := func() model.BudgetItem { return *a.rec.Projection(w).Mods[0].Item }
+	for _, c := range []struct {
+		field, text string
+		want        model.Recurrence
+	}{
+		{"every", "weekly", model.Recurrence{Kind: model.Weekly}},
+		{"every", "quarterly", model.Recurrence{Kind: model.Quarterly}},
+		{"every", "semimonthly", model.Recurrence{Kind: model.Semimonthly, Day: 1, Day2: 15}},
+		{"day2", "20", model.Recurrence{Kind: model.Semimonthly, Day: 1, Day2: 20}},
+		{"every", "custom", model.Recurrence{Kind: model.Custom, Unit: model.UnitWeeks, Count: 2}},
+	} {
+		pt.setItemField(w, 0, c.field, c.text)
+		if got := item().Recurrence; got != c.want {
+			t.Fatalf("%s %s: %+v, want %+v", c.field, c.text, got, c.want)
+		}
+	}
+	pt.setItemField(w, 0, "count", "")
+	if pt.errs[itemFieldID(0, "count")] == "" || item().Recurrence.Count != 2 {
+		t.Error("an empty count of a custom item was accepted")
+	}
+	f := formOf(item(), a.rec.Today)
+	f.set("every", "custom")
+	f.set("count", "3")
+	if _, err := f.item(a.rec.Today); err != nil {
+		t.Fatal(err)
+	}
+	pt.setItemField(w, 0, "every", "weekly")
+
+	// Switch the amount to a schedule through the item's timeline path.
+	it := item()
+	next, err := timeline.Split(it.Amount, 0, model.D(2029, 1, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pt.openItemTimeline(w, 0, "amount")
+	if !pt.itemTl.open || !pt.setItemSchedule(w, 0, "amount", "edit", next) {
+		t.Fatalf("%v", a.notices)
+	}
+	pt.setItemField(w, 0, "name", "Renamed")
+	if got := item(); got.Name != "Renamed" || len(got.Amount.Segments()) != 2 || got.Recurrence.Kind != model.Weekly {
+		t.Errorf("item %+v", got)
+	}
+}
+
+// Every switch of the repeat kind of a budget item a projection adds, from any kind to any other, succeeds.
+func TestProjectionItemEveryKindSwitchSucceeds(t *testing.T) {
+	for _, from := range allRecurrences {
+		for _, to := range allRecurrences {
+			if from == to {
+				continue
+			}
+			a := demoApp(t)
+			w := demodata.ProjWithdraw
+			a.proj.setItemField(w, 0, "every", string(from))
+			if got := a.rec.Projection(w).Mods[0].Item.Recurrence.Kind; got != from {
+				t.Fatalf("to %s: kind %s: %v", from, got, a.notices)
+			}
+			a.proj.setItemField(w, 0, "every", string(to))
+			if got := a.rec.Projection(w).Mods[0].Item.Recurrence.Kind; got != to {
+				t.Errorf("%s to %s: kind %s: %v", from, to, got, a.notices)
+			}
+		}
+	}
+}
+
+// Opening one timeline strip of the Projections tab closes the other, and removing the modification an item strip shows closes it.
+func TestProjectionTimelinesNeverOpenTogether(t *testing.T) {
+	a := demoApp(t)
+	pt := a.proj
+	w := demodata.ProjWithdraw
+	p := a.rec.Projection(w)
+	pt.openItemTimeline(w, 0, "amount")
+	if !pt.itemTl.open {
+		t.Fatalf("item strip did not open: %v", a.notices)
+	}
+	pt.openTimeline(w, 0, p.Mods[0])
+	if !pt.tl.open || pt.itemTl.open {
+		t.Errorf("after the modification strip: tl %v, itemTl %v", pt.tl.open, pt.itemTl.open)
+	}
+	pt.openItemTimeline(w, 0, "amount")
+	if !pt.itemTl.open || pt.tl.open {
+		t.Errorf("after the item strip: tl %v, itemTl %v", pt.tl.open, pt.itemTl.open)
+	}
+	pt.removed(w, 0)
+	if pt.itemTl.open {
+		t.Error("item strip still open after its modification was removed")
+	}
+
+	pt.openItemTimeline(w, 0, "amount")
+	pt.inserted(w, 0)
+	if !pt.itemTl.open || pt.itemTl.mod != 1 {
+		t.Errorf("after an insert before it: open %v, mod %d", pt.itemTl.open, pt.itemTl.mod)
+	}
+	pt.moved(w, 1, 0)
+	if !pt.itemTl.open || pt.itemTl.mod != 0 {
+		t.Errorf("after it moved up: open %v, mod %d", pt.itemTl.open, pt.itemTl.mod)
+	}
+}
+
+// An edit of an unrelated field never gives a legacy item without a start one, and never moves its anchor.
+func TestEditKeepsAbsentStart(t *testing.T) {
+	anchor := model.D(2025, 3, 7)
+	for _, r := range []model.Recurrence{
+		{Kind: model.Weekly, Anchor: anchor},
+		{Kind: model.Quarterly, Anchor: anchor},
+		{Kind: model.Custom, Count: 3, Unit: model.UnitWeeks, Anchor: anchor},
+	} {
+		it := model.BudgetItem{ID: "legacy", Name: "Legacy", Kind: model.ItemExpense, Amount: model.Constant(40), Account: demodata.Checking, Recurrence: r}
+		check := func(what string, got model.BudgetItem) {
+			if got.Start != nil || got.Recurrence.Anchor != anchor || got.Recurrence.Kind != r.Kind {
+				t.Errorf("%s %s: start %v, recurrence %+v", r.Kind, what, got.Start, got.Recurrence)
+			}
+		}
+
+		a := demoApp(t)
+		a.rec.Budget.Items = append(a.rec.Budget.Items, it)
+		if !a.budget.setField("legacy", "name", "Renamed") || !a.budget.setField("legacy", "amount", "45") {
+			t.Fatalf("%s: base edit refused: %v", r.Kind, a.notices)
+		}
+		got, _ := a.rec.Budget.Item("legacy")
+		if got.Name != "Renamed" || valueNow(got.Amount, 0) != 45 {
+			t.Errorf("%s: base item %+v", r.Kind, got)
+		}
+		check("base", got)
+
+		a = demoApp(t)
+		job := newChild(t, a, demodata.ProjWithdraw)
+		added := it
+		start := model.D(2025, 1, 1)
+		added.Start = &start
+		if !a.edit("add budget item", func() (*ops.Result, error) {
+			return ops.AddItem(a.st, a.rec, job, added, ops.Options{})
+		}) {
+			t.Fatalf("%s: not added: %v", r.Kind, a.notices)
+		}
+		i := len(a.rec.Projection(job).Mods) - 1
+		a.rec.Projection(job).Mods[i].Item.Start = nil
+		a.proj.setItemField(job, i, "name", "Renamed")
+		a.proj.setItemField(job, i, "amount", "45")
+		got = *a.rec.Projection(job).Mods[i].Item
+		if got.Name != "Renamed" || valueNow(got.Amount, 0) != 45 {
+			t.Errorf("%s: projection item %+v", r.Kind, got)
+		}
+		check("projection", got)
 	}
 }

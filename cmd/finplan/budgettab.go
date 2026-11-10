@@ -22,6 +22,8 @@ type budgetTab struct {
 	open map[string]bool
 	// endOn is the date typed for each item's End action.
 	endOn map[string]string
+	// tl is the timeline editor of the amount or growth of one item, which its target and property name.
+	tl timelineState
 	// addItem is the Add form.
 	addItem itemForm
 }
@@ -35,7 +37,7 @@ func newBudgetTab(a *app) *budgetTab {
 // itemPrefix is the id prefix of the fields of the base item with the id.
 func itemPrefix(id string) string { return "base" + id + "." }
 
-// setField changes one field of the base item through ops.EditBudgetItem: kind, name, amount, growth, every, date, day, month, end, account, from, to, or indexed (text "true" or "false"). An input that cannot be read, or that ops refuses, changes nothing.
+// setField changes one field of the base item through ops.EditBudgetItem: kind, name, amount, growth, every, date, day, day2, month, count, unit, end, account, from, to, or indexed (text "true" or "false"). An input that cannot be read, or that ops refuses, changes nothing.
 func (t *budgetTab) setField(id, field, text string) bool {
 	fid := itemPrefix(id) + field
 	old, ok := t.a.rec.Budget.Item(id)
@@ -93,6 +95,9 @@ func (t *budgetTab) deleteItem(id string) bool {
 	}
 	delete(t.open, id)
 	delete(t.endOn, id)
+	if t.tl.target.ID == id {
+		t.tl = timelineState{}
+	}
 	return true
 }
 
@@ -107,7 +112,7 @@ func (t *budgetTab) addNewItem() bool {
 	}) {
 		return false
 	}
-	t.addItem = itemForm{kind: t.addItem.kind, every: t.addItem.every}
+	t.addItem = itemForm{kind: t.addItem.kind, every: t.addItem.every, unit: t.addItem.unit}
 	return true
 }
 
@@ -129,12 +134,22 @@ func (t *budgetTab) draw() {
 	imgui.TextUnformatted("income " + income + "    expenses " + expenses + "    left over " + net)
 	imgui.TextDisabled("Transfers are in neither total; a one-time item counts for nothing, and an annual item for a twelfth.")
 
+	imgui.TextDisabled("A dash means no start or end date is set. Open an item with Edit to change it.")
 	offsets := []float32{8, 32, 52, 64, 76, 88, 98, 108, 120}
 	for _, g := range budgetGroups(a.rec) {
 		imgui.Spacing()
 		imgui.SeparatorText(g.Title)
 		if len(g.Rows) == 0 {
 			imgui.TextDisabled("No " + g.Title + " items.")
+		} else {
+			for i, h := range budgetHeaders {
+				if i == 0 {
+					imgui.SetCursorPosX(em * offsets[0])
+				} else {
+					imgui.SameLineV(em*offsets[i], -1)
+				}
+				imgui.TextDisabled(h)
+			}
 		}
 		for _, r := range g.Rows {
 			imgui.PushIDStr(r.ID)
@@ -171,7 +186,7 @@ func (t *budgetTab) editor(id string) {
 	}
 	em := imgui.FontSize()
 	prefix := itemPrefix(id)
-	t.fields.itemFields(prefix, formOf(it, t.a.rec.Today), false, func(field, text string) { t.setField(id, field, text) })
+	t.fields.itemFields(prefix, formOf(it, t.a.rec.Today), false, func(field, text string) { t.setField(id, field, text) }, func(field string) { t.openTimeline(id, field) })
 	indexed := it.Indexed
 	if imgui.Checkbox("rises with inflation##"+prefix, &indexed) {
 		t.setField(id, "indexed", boolText(indexed))
@@ -191,6 +206,7 @@ func (t *budgetTab) editor(id string) {
 	if imgui.Button("Delete") {
 		t.deleteItem(id)
 	}
+	t.timelineEditor(id)
 }
 
 func boolText(b bool) string {
@@ -201,7 +217,7 @@ func boolText(b bool) string {
 }
 
 func (t *budgetTab) addForm() {
-	t.fields.itemFields("newitem", t.addItem, true, t.addItem.set)
+	t.fields.itemFields("newitem", t.addItem, true, t.addItem.set, nil)
 	indexed := t.addItem.indexed
 	if imgui.Checkbox("rises with inflation##newitem", &indexed) {
 		t.addItem.set("indexed", boolText(indexed))

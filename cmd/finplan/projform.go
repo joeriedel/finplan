@@ -18,10 +18,37 @@ import (
 // propEndsOn is the property a budget item modification has in this tab when it ends the item: an amount of zero from a date, which ops.EndItem stores.
 const propEndsOn = "ends on"
 
+// recurrenceChoice is a repeat option of the item forms: the name the picker shows and what it means in plain words.
+type recurrenceChoice struct {
+	kind model.RecurrenceKind
+	name string
+	hint string
+}
+
 var (
 	formItemKinds   = []model.ItemKind{model.ItemIncome, model.ItemExpense, model.ItemTransfer}
-	formRecurrences = []model.RecurrenceKind{model.OneTime, model.Monthly, model.Biweekly, model.Annual}
+	formRecurrences = []recurrenceChoice{
+		{model.Weekly, "Weekly", "every week"},
+		{model.Biweekly, "Biweekly", "every 2 weeks"},
+		{model.Semimonthly, "Semimonthly", "twice a month, on two days you choose, e.g. the 1st and 15th"},
+		{model.Monthly, "Monthly", "once a month; a day from 29 to 31 falls on the last day of a shorter month"},
+		{model.Quarterly, "Quarterly", "every 3 months"},
+		{model.Annual, "Annually", "once a year, on a month and day"},
+		{model.OneTime, "One-time", "once, on one date"},
+		{model.Custom, "Custom", "every N days, weeks, months or years"},
+	}
+	formUnits = []model.RecurrenceUnit{model.UnitDays, model.UnitWeeks, model.UnitMonths, model.UnitYears}
 )
+
+// recurrenceChoiceOf is the form's choice for the kind; the zero choice if there is none.
+func recurrenceChoiceOf(k model.RecurrenceKind) recurrenceChoice {
+	for _, c := range formRecurrences {
+		if c.kind == k {
+			return c
+		}
+	}
+	return recurrenceChoice{}
+}
 
 // outsideAccount is the account of a transfer that stands for everything outside the record.
 const outsideAccount model.AccountID = "outside"
@@ -54,15 +81,28 @@ func modProblem(rec *model.Record, proj string, kind model.ObjectKind, obj, prop
 	return reasonOf(ops.CheckMod(rec, proj, m))
 }
 
-// itemForm is a budget item as the user edits it: every field is the text or choice as entered. For a one-time or biweekly item date is the day it happens or starts; for a monthly or annual item it is the optional day it starts from.
+// itemForm is a budget item as the user edits it: every field is the text or choice as entered. For a one-time or biweekly item date is the day it happens or starts; for any other it is the optional day it starts from, today if empty. amountSched and growthSched say that the amount or growth changes over time, so that amount and growth show its value today and are not to be edited as plain numbers.
 type itemForm struct {
 	kind                  model.ItemKind
 	name, amount          string
 	growth                string
 	every                 model.RecurrenceKind
 	date, day, month, end string
+	day2, count           string
+	unit                  model.RecurrenceUnit
 	account, from, to     model.AccountID
 	indexed               bool
+	amountSched           bool
+	growthSched           bool
+}
+
+// isPlain reports whether the schedule is a single number that always holds, or empty: what a plain number field can show and write without losing anything.
+func isPlain(s model.Schedule) bool {
+	if len(s.Segments()) == 0 {
+		return true
+	}
+	_, from, ok := constantOf(s)
+	return ok && from == nil
 }
 
 func newItemForm() itemForm {
@@ -83,7 +123,7 @@ func valueNow(s model.Schedule, today model.Date) float64 {
 // formOf returns the form that shows the item as it is on today.
 func formOf(it model.BudgetItem, today model.Date) itemForm {
 	r := it.Recurrence
-	f := itemForm{kind: it.Kind, name: it.Name, amount: trimFloat(valueNow(it.Amount, today)), every: r.Kind, account: it.Account, from: it.From, to: it.To, indexed: it.Indexed}
+	f := itemForm{kind: it.Kind, name: it.Name, amount: trimFloat(valueNow(it.Amount, today)), every: r.Kind, unit: r.Unit, account: it.Account, from: it.From, to: it.To, indexed: it.Indexed, amountSched: !isPlain(it.Amount), growthSched: !isPlain(it.Growth)}
 	switch {
 	case r.Kind == model.OneTime || r.Kind == model.Biweekly:
 		f.date = r.Anchor.String()
@@ -96,6 +136,12 @@ func formOf(it model.BudgetItem, today model.Date) itemForm {
 	if r.Day != 0 {
 		f.day = strconv.Itoa(r.Day)
 	}
+	if r.Day2 != 0 {
+		f.day2 = strconv.Itoa(r.Day2)
+	}
+	if r.Count != 0 {
+		f.count = strconv.Itoa(r.Count)
+	}
 	if r.Month != 0 {
 		f.month = strconv.Itoa(int(r.Month))
 	}
@@ -105,7 +151,7 @@ func formOf(it model.BudgetItem, today model.Date) itemForm {
 	return f
 }
 
-// set changes one field: kind, name, amount, growth, every, date, day, month, end, account, from, to or indexed (text "true" or "false").
+// set changes one field: kind, name, amount, growth, every, date, day, day2, month, count, unit, end, account, from, to or indexed (text "true" or "false").
 func (f *itemForm) set(field, text string) {
 	switch field {
 	case "kind":
@@ -125,8 +171,14 @@ func (f *itemForm) set(field, text string) {
 		f.date = text
 	case "day":
 		f.day = text
+	case "day2":
+		f.day2 = text
 	case "month":
 		f.month = text
+	case "count":
+		f.count = text
+	case "unit":
+		f.unit = model.RecurrenceUnit(text)
 	case "end":
 		f.end = text
 	case "account":
@@ -163,26 +215,59 @@ func (f *itemForm) setKind(kind model.ItemKind) {
 	}
 }
 
-// seed fills the day and month a monthly or annual item needs from the date the form has, so that switching to such a schedule does not start from nothing. An annual item with no date to take the month from gets January.
+// seed fills what the recurrence needs, so that switching to it yields a valid item: the day of a monthly, semimonthly or annual item comes from the date the form has (the 1st with no date), an annual item also gets its month (that of the date, else January) and a day that exists in it, a semimonthly item gets two different days (the 1st and the 15th, keeping a day that is set), and a custom item gets 2 weeks.
 func (f *itemForm) seed() {
-	if f.every != model.Monthly && f.every != model.Annual {
-		return
-	}
 	d, err := parseDate(strings.TrimSpace(f.date))
-	if err == nil && strings.TrimSpace(f.day) == "" {
-		_, _, day := d.YMD()
-		f.day = strconv.Itoa(day)
-	}
-	if f.every == model.Annual && strings.TrimSpace(f.month) == "" {
-		f.month = "1"
-		if err == nil {
-			_, m, _ := d.YMD()
-			f.month = strconv.Itoa(int(m))
+	switch f.every {
+	case model.Monthly, model.Annual:
+		if strings.TrimSpace(f.day) == "" {
+			f.day = "1"
+			if err == nil {
+				_, _, day := d.YMD()
+				f.day = strconv.Itoa(day)
+			}
+		}
+		if f.every == model.Annual {
+			if strings.TrimSpace(f.month) == "" {
+				f.month = "1"
+				if err == nil {
+					_, m, _ := d.YMD()
+					f.month = strconv.Itoa(int(m))
+				}
+			}
+			m, merr := strconv.Atoi(strings.TrimSpace(f.month))
+			day, derr := strconv.Atoi(strings.TrimSpace(f.day))
+			if merr == nil && derr == nil && m >= 1 && m <= 12 {
+				if last := time.Date(2024, time.Month(m)+1, 0, 0, 0, 0, 0, time.UTC).Day(); day > last {
+					f.day = strconv.Itoa(last)
+				}
+			}
+		}
+	case model.Semimonthly:
+		day, day2 := strings.TrimSpace(f.day), strings.TrimSpace(f.day2)
+		if day == "" {
+			f.day = "1"
+			if day2 == "1" {
+				f.day = "15"
+			}
+		}
+		if day2 == "" || day2 == strings.TrimSpace(f.day) {
+			f.day2 = "15"
+			if strings.TrimSpace(f.day) == "15" {
+				f.day2 = "1"
+			}
+		}
+	case model.Custom:
+		if f.unit == "" {
+			f.unit = model.UnitWeeks
+		}
+		if strings.TrimSpace(f.count) == "" {
+			f.count = "2"
 		}
 	}
 }
 
-// item builds the budget item the form describes; a monthly or annual item with no date starts today. It fails on what it cannot read and on a missing account; ops checks the rest.
+// item builds the budget item the form describes; an item that is not one-time or biweekly and has no date starts today. It fails on what it cannot read and on a missing account; ops checks the rest.
 func (f itemForm) item(today model.Date) (model.BudgetItem, error) {
 	it := model.BudgetItem{Name: f.name, Kind: f.kind, Account: f.account, From: f.from, To: f.to, Indexed: f.indexed}
 	if strings.TrimSpace(f.amount) == "" {
@@ -222,6 +307,21 @@ func (f itemForm) item(today model.Date) (model.BudgetItem, error) {
 		if r.Day, err = needInt(f.day, "the day of the month"); err != nil {
 			return it, err
 		}
+	case model.Semimonthly:
+		if r.Day, err = needInt(f.day, "the first day of the month"); err != nil {
+			return it, err
+		}
+		if r.Day2, err = needInt(f.day2, "the second day of the month"); err != nil {
+			return it, err
+		}
+	case model.Custom:
+		if r.Count, err = needInt(f.count, "how many"); err != nil {
+			return it, err
+		}
+		if !f.unit.Valid() {
+			return it, errors.New("pick days, weeks, months or years")
+		}
+		r.Unit = f.unit
 	case model.Annual:
 		m, err := needInt(f.month, "the month")
 		if err != nil {
@@ -233,7 +333,7 @@ func (f itemForm) item(today model.Date) (model.BudgetItem, error) {
 		}
 	}
 	it.Recurrence = r
-	if f.every == model.Monthly || f.every == model.Annual {
+	if f.every != model.OneTime && f.every != model.Biweekly {
 		d := today
 		if strings.TrimSpace(f.date) != "" {
 			if d, err = parseDate(strings.TrimSpace(f.date)); err != nil {
@@ -276,7 +376,7 @@ func itemProblem(rec *model.Record, f itemForm) string {
 	return reasonOf(ops.CheckItem(rec, it))
 }
 
-// keepUnedited makes it, built from the form f after editing field, keep what the form cannot show of the item old: an amount or growth that changes over time, a recurrence the form has no choice for (weekly, quarterly, semimonthly or custom), a start that is absent, and the later start of a biweekly item. Editing the date of a biweekly item moves its anchor and start.
+// keepUnedited makes it, built from the form f after editing field, keep what the form cannot show of the item old: an amount or growth that changes over time, a start that is absent, the anchor of a weekly, quarterly or custom item, and the later start of a biweekly item. Editing the date of a biweekly item moves its anchor and start.
 func keepUnedited(it *model.BudgetItem, old model.BudgetItem, f itemForm, field string) {
 	if field != "amount" {
 		it.Amount = old.Amount
@@ -284,12 +384,17 @@ func keepUnedited(it *model.BudgetItem, old model.BudgetItem, f itemForm, field 
 	if field != "growth" {
 		it.Growth = old.Growth
 	}
+	if k := old.Recurrence.Kind; k == model.Weekly || k == model.Quarterly || k == model.Custom {
+		if f.every == k && field != "every" && field != "date" {
+			it.Recurrence.Anchor = old.Recurrence.Anchor
+		}
+	}
 	switch {
-	case field != "every" && !slices.Contains(formRecurrences, old.Recurrence.Kind):
-		it.Recurrence, it.Start = old.Recurrence, old.Start
 	case old.Recurrence.Kind == model.Biweekly && f.every == model.Biweekly && field != "date":
 		it.Start = old.Start
-	case old.Start == nil && strings.TrimSpace(f.date) == "":
+	case old.Start == nil && f.every == old.Recurrence.Kind && field != "every" && field != "date":
+		it.Start = nil
+	case old.Start == nil && strings.TrimSpace(f.date) == "" && (f.every == model.Monthly || f.every == model.Semimonthly || f.every == model.Annual):
 		it.Start = nil
 	}
 }
@@ -329,7 +434,7 @@ func (t *projTab) addNewItem(proj string) bool {
 	}) {
 		return false
 	}
-	t.addItem = itemForm{kind: t.addItem.kind, every: t.addItem.every}
+	t.addItem = itemForm{kind: t.addItem.kind, every: t.addItem.every, unit: t.addItem.unit}
 	return true
 }
 
