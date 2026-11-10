@@ -24,6 +24,7 @@ const (
 	CauseWithdrawal   Cause = "withdrawal"
 	CauseTax          Cause = "tax"
 	CauseGrowth       Cause = "growth"
+	CauseOpening      Cause = "opening"
 	CauseUnexplained  Cause = "unexplained"
 	CauseDefault      Cause = "default"
 )
@@ -33,7 +34,7 @@ const residualTolerance = 1e-6
 
 var causeOrder = []Cause{
 	CauseIncome, CauseExpense, CauseTransfer, CauseContribution, CauseWithdrawal,
-	CauseTax, CauseGrowth, CauseUnexplained, CauseDefault,
+	CauseTax, CauseGrowth, CauseOpening, CauseUnexplained, CauseDefault,
 }
 
 // Line is the change attributed to one cause, split by where it came from: Actual is read back from
@@ -79,7 +80,7 @@ func Breakdown(rec *model.Record, projection string, target model.AssetID, from,
 		acc.inside[id] = true
 	}
 	for _, id := range r.res.Accounts {
-		r.paths[id].breakdown(rec, from, to, acc)
+		r.paths[id].breakdown(r.rec, from, to, acc)
 	}
 	s, e := r.eval(from), r.eval(to)
 	out := &BreakdownResult{Target: target, From: from, To: to, Start: s.Amount, End: e.Amount, Diagnostics: r.diag}

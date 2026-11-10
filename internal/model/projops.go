@@ -35,6 +35,7 @@ func (p *Projection) Clone() *Projection {
 		c.AssetSettings[i].Start = clonePtr(s.Start)
 		c.AssetSettings[i].OverrideHistory = clonePtr(s.OverrideHistory)
 	}
+	c.Accounts = slices.Clone(p.Accounts)
 	c.Mods = slices.Clone(p.Mods)
 	for i, m := range c.Mods {
 		c.Mods[i].Values = m.Values.clone()

@@ -68,6 +68,8 @@ type Projection struct {
 	OverrideHistory *bool
 	AssetSettings   []AssetSetting
 	Mods            []Modification
+	// Accounts are hypothetical accounts that exist only under this projection and the projections built on it.
+	Accounts []ProjAccount
 	// Shocks and Rebalances are stored but not executed by the placeholder engine.
 	Shocks     []Shock
 	Rebalances []Rebalance

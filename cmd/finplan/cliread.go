@@ -20,7 +20,7 @@ const (
 	targetArg = "the asset or account to look at, by asset id, asset name, account id or account name (ids win over names); an account stands for its own default asset"
 	dateNote  = "YYYY-MM-DD, or YYYY-MM for the first day of the month"
 	endNote   = "YYYY-MM-DD, or YYYY-MM for the last day of the month"
-	projDesc  = "projection to evaluate under; reality when omitted"
+	projDesc  = "projection to evaluate under, whose own accounts and those it inherits can be targets; reality when omitted"
 	diagShape = "diagnostics {skipped: [{projection, index, target: {kind, id}, property, reason}], overlaps: [{asset, seq, member, duplicates, against}]}"
 	jsonNote  = "Dates are YYYY-MM-DD, null when absent or unbounded. Money is a plain number. Statuses are lowercase: default, actual, projected, partly_projected."
 )
@@ -66,9 +66,9 @@ var commands = []*command{
 		run:    cmdProjectionList,
 	},
 	{
-		Name: "projection show", Summary: "show a projection's settings and modifications",
+		Name: "projection show", Summary: "show a projection's settings, its own hypothetical accounts and its modifications",
 		Args:   []argDef{{Name: "name", Description: "projection name", Required: true}},
-		Output: "{name, parent, start, override_history, asset_settings: [{asset, start, override_history}], modifications: [{index, target: {kind, id}, property, mode (set or scale), schedule: [{from, end, value}], item}]}; modifications are in the order they apply",
+		Output: "{name, parent, start, override_history, asset_settings: [{asset, start, override_history}], accounts: [{id, name, type, tax, stated_rate, opening, from}] (the hypothetical accounts the projection defines itself, not those it inherits), modifications: [{index, target: {kind, id}, property, mode (set or scale), schedule: [{from, end, value}], item}]}; modifications are in the order they apply",
 		run:    cmdProjectionShow,
 	},
 	{
@@ -493,6 +493,15 @@ func projectionJSON(p *model.Projection) any {
 		Kind string `json:"kind"`
 		ID   string `json:"id"`
 	}
+	type jaccount struct {
+		ID      string  `json:"id"`
+		Name    string  `json:"name"`
+		Type    string  `json:"type"`
+		Tax     string  `json:"tax"`
+		Rate    float64 `json:"stated_rate"`
+		Opening float64 `json:"opening"`
+		From    jdate   `json:"from"`
+	}
 	type jmod struct {
 		Index    int          `json:"index"`
 		Target   jtarget      `json:"target"`
@@ -507,8 +516,12 @@ func projectionJSON(p *model.Projection) any {
 		Start           *jdate     `json:"start"`
 		OverrideHistory *bool      `json:"override_history"`
 		AssetSettings   []jsetting `json:"asset_settings"`
+		Accounts        []jaccount `json:"accounts"`
 		Modifications   []jmod     `json:"modifications"`
-	}{p.Name, nullable(p.Parent), jdp(p.Start), p.OverrideHistory, []jsetting{}, []jmod{}}
+	}{p.Name, nullable(p.Parent), jdp(p.Start), p.OverrideHistory, []jsetting{}, []jaccount{}, []jmod{}}
+	for _, a := range p.Accounts {
+		out.Accounts = append(out.Accounts, jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.StatedRate, a.Opening, jd(a.From)})
+	}
 	for _, s := range p.AssetSettings {
 		out.AssetSettings = append(out.AssetSettings, jsetting{string(s.Asset), jdp(s.Start), s.OverrideHistory})
 	}
@@ -572,12 +585,19 @@ func (c *call) period() (rec *model.Record, target model.AssetID, projection str
 	if _, rec, err = c.open(); err != nil {
 		return
 	}
+	if projection, err = c.projection(rec); err != nil {
+		return
+	}
+	var view *model.Record
+	if view, err = rec.For(projection); err != nil {
+		err = failErr("invalid", "%v", err)
+		return
+	}
 	var cand candidate
-	if cand, err = resolveTarget(rec, c.args[0], false); err != nil {
+	if cand, err = resolveTarget(view, c.args[0], false); err != nil {
 		return
 	}
 	target = cand.asset
-	projection, err = c.projection(rec)
 	return
 }
 
@@ -682,15 +702,19 @@ func cmdStarts(c *call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	view, err := rec.For(projection)
+	if err != nil {
+		return nil, failErr("invalid", "%v", err)
+	}
 	var targets []model.AssetID
 	if len(c.args) > 0 {
-		cand, err := resolveTarget(rec, c.args[0], false)
+		cand, err := resolveTarget(view, c.args[0], false)
 		if err != nil {
 			return nil, err
 		}
 		targets = append(targets, cand.asset)
 	} else {
-		for _, a := range rec.Accounts {
+		for _, a := range view.Accounts {
 			targets = append(targets, model.DefaultAssetID(a.ID))
 		}
 	}

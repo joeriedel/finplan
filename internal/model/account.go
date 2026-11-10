@@ -90,6 +90,8 @@ type Account struct {
 	StatedRate float64
 	// Default is the fallback balance for dates with no actual data.
 	Default DefaultBalance
+	// Opens is set only on a projection's own accounts (see ProjAccount): the account has no value before that date and projects from it.
+	Opens *Date
 
 	Snapshots    []Snapshot
 	Transactions []Transaction

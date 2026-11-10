@@ -371,7 +371,42 @@ func (g *graphTab) row(ln graph.Line) {
 	imgui.Dummy(imgui.NewVec2(w, imgui.CurrentStyle().ItemSpacing().Y))
 }
 
-// addPopup is the Add line dialog: a searchable list of assets and accounts, the projection and the colour.
+// addProjection is the projection whose accounts the Add line dialog offers: the one chosen in it, else the one lines follow.
+func (g *graphTab) addProjection() string {
+	if g.addProj != "" {
+		return g.addProj
+	}
+	return g.lines.Switcher()
+}
+
+// lineCandidate is an asset or account the Add line dialog offers.
+type lineCandidate struct {
+	id         model.AssetID
+	name, kind string
+}
+
+// lineCandidates lists the assets and accounts of rec, which is the record as a projection sees it, whose names contain search (any case), in record order.
+func lineCandidates(rec *model.Record, search string) []lineCandidate {
+	needle := strings.ToLower(search)
+	accounts := map[model.AssetID]bool{}
+	for _, a := range rec.Accounts {
+		accounts[model.DefaultAssetID(a.ID)] = true
+	}
+	var out []lineCandidate
+	for _, a := range rec.Assets {
+		if needle != "" && !strings.Contains(strings.ToLower(a.Name), needle) {
+			continue
+		}
+		kind := "asset"
+		if accounts[a.ID] {
+			kind = "account"
+		}
+		out = append(out, lineCandidate{a.ID, a.Name, kind})
+	}
+	return out
+}
+
+// addPopup is the Add line dialog: a searchable list of assets and accounts, including the accounts the chosen projection defines, the projection and the colour.
 func (g *graphTab) addPopup() {
 	if !imgui.BeginPopupV("add line", 0) {
 		return
@@ -381,27 +416,16 @@ func (g *graphTab) addPopup() {
 	imgui.InputTextWithHint("##search", "Search assets and accounts", &g.search, 0, nil)
 
 	if imgui.BeginChildStrV("##candidates", imgui.NewVec2(imgui.FontSize()*20, 180*s), imgui.ChildFlagsBorders, 0) {
-		needle := strings.ToLower(g.search)
-		accounts := map[model.AssetID]bool{}
-		for _, a := range g.rec.Accounts {
-			accounts[model.DefaultAssetID(a.ID)] = true
-		}
-		for _, a := range g.rec.Assets {
-			if needle != "" && !strings.Contains(strings.ToLower(a.Name), needle) {
-				continue
-			}
-			if imgui.SelectableBoolV(a.Name+"##"+string(a.ID), g.addAsset == a.ID, 0, imgui.NewVec2(0, 0)) {
-				g.addAsset = a.ID
-				g.addDefault = colorFloats(graph.AssetColor(g.rec, a.ID))
+		view := effective(g.rec, g.addProjection())
+		for _, c := range lineCandidates(view, g.search) {
+			if imgui.SelectableBoolV(c.name+"##"+string(c.id), g.addAsset == c.id, 0, imgui.NewVec2(0, 0)) {
+				g.addAsset = c.id
+				g.addDefault = colorFloats(graph.AssetColor(view, c.id))
 				g.addColor = g.addDefault
 			}
-			kind := "asset"
-			if accounts[a.ID] {
-				kind = "account"
-			}
-			imgui.SameLineV(imgui.WindowWidth()-imgui.CalcTextSize(kind).X-imgui.CurrentStyle().WindowPadding().X*1.5, 0)
+			imgui.SameLineV(imgui.WindowWidth()-imgui.CalcTextSize(c.kind).X-imgui.CurrentStyle().WindowPadding().X*1.5, 0)
 			imgui.PushStyleColorVec4(imgui.ColText, rgba(colMuted, 1))
-			imgui.TextUnformatted(kind)
+			imgui.TextUnformatted(c.kind)
 			imgui.PopStyleColor()
 		}
 	}
@@ -425,7 +449,7 @@ func (g *graphTab) addPopup() {
 	imgui.BeginDisabledV(g.addAsset == "")
 	imgui.PushStyleColorVec4(imgui.ColButton, rgba(colSelect, 1))
 	if imgui.Button("Add") {
-		id := g.lines.Add(g.addAsset, g.addProj != "", g.addProj, graph.AssetColor(g.rec, g.addAsset))
+		id := g.lines.Add(g.addAsset, g.addProj != "", g.addProj, graph.AssetColor(effective(g.rec, g.addProjection()), g.addAsset))
 		if g.addColor != g.addDefault {
 			g.lines.SetColor(id, floatsColor(g.addColor))
 		}

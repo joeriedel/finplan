@@ -15,8 +15,9 @@ import (
 // version, and decodeDoc dispatches on it, so a later format adds a case that reads the old shape and
 // converts it. Format 2 added the modification mode and the budget item growth to format 1's shape; a
 // format 1 document has neither and reads as set and zero, and the bump makes an older build refuse a
-// document whose scale modifications it would otherwise silently ignore.
-const formatCurrent = 2
+// document whose scale modifications it would otherwise silently ignore. Format 3 added the accounts a
+// projection defines; a format 1 or 2 document has none and reads as an empty list.
+const formatCurrent = 3
 
 // Document kinds.
 const (
@@ -29,7 +30,7 @@ const (
 	kindProjection = "projection"
 )
 
-// The DTOs below are the stored shape of formats 1 and 2. They are separate from the model types so that
+// The DTOs below are the stored shape of formats 1 to 3. They are separate from the model types so that
 // renaming a model field cannot change what is on disk.
 
 type recordDoc struct {
@@ -147,12 +148,23 @@ type rebalanceDoc struct {
 	Allocation []weightDoc     `json:"allocation"`
 }
 
+type projAccountDoc struct {
+	ID         model.AccountID    `json:"id"`
+	Name       string             `json:"name"`
+	Type       model.AccountType  `json:"type"`
+	Tax        model.TaxTreatment `json:"tax"`
+	StatedRate float64            `json:"stated_rate"`
+	Opening    float64            `json:"opening"`
+	From       model.Date         `json:"from"`
+}
+
 type projectionDoc struct {
 	Name            string            `json:"name"`
 	Parent          string            `json:"parent"`
 	Start           *model.Date       `json:"start"`
 	OverrideHistory *bool             `json:"override_history"`
 	AssetSettings   []assetSettingDoc `json:"asset_settings"`
+	Accounts        []projAccountDoc  `json:"accounts,omitempty"`
 	Mods            []modDoc          `json:"mods"`
 	Shocks          []shockDoc        `json:"shocks"`
 	Rebalances      []rebalanceDoc    `json:"rebalances"`
@@ -168,7 +180,7 @@ type docRow struct {
 // decodeDoc decodes a document body of the given format version into v, the current shape.
 func decodeDoc(row docRow, v any) error {
 	switch row.format {
-	case 1, 2:
+	case 1, 2, 3:
 		if err := json.Unmarshal(row.body, v); err != nil {
 			return fmt.Errorf("store: %s %q: %w", row.kind, row.key, err)
 		}
@@ -272,6 +284,7 @@ func projectionToDoc(p *model.Projection) projectionDoc {
 		AssetSettings: mapSlice(p.AssetSettings, func(a model.AssetSetting) assetSettingDoc {
 			return assetSettingDoc{a.Asset, a.Start, a.OverrideHistory}
 		}),
+		Accounts: mapSlice(p.Accounts, func(a model.ProjAccount) projAccountDoc { return projAccountDoc(a) }),
 		Mods: mapSlice(p.Mods, func(m model.Modification) modDoc {
 			d := modDoc{Target: objectRefDoc{m.Target.Kind, m.Target.ID}, Property: m.Property, Mode: m.Mode, Values: scheduleDoc(m.Values)}
 			if m.Item != nil {
@@ -292,6 +305,7 @@ func docProjection(d projectionDoc) (*model.Projection, error) {
 	p.AssetSettings = mapSlice(d.AssetSettings, func(a assetSettingDoc) model.AssetSetting {
 		return model.AssetSetting{Asset: a.Asset, Start: a.Start, OverrideHistory: a.OverrideHistory}
 	})
+	p.Accounts = mapSlice(d.Accounts, func(a projAccountDoc) model.ProjAccount { return model.ProjAccount(a) })
 	var err error
 	if d.Mods != nil {
 		p.Mods = make([]model.Modification, len(d.Mods))

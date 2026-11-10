@@ -113,7 +113,7 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	want := demodata.Family()
 	mustSave(t, s, want)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 2 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 3 {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
 	// Format 1 documents have no mode and no growth.
@@ -126,6 +126,37 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	}
 	if got := mustLoad(t, s); !reflect.DeepEqual(got, want) {
 		t.Fatal("format 1 record loads differently")
+	}
+}
+
+func TestFormat2DocumentsLoadUnchanged(t *testing.T) {
+	s, _ := openTemp(t)
+	want := demodata.Family()
+	mustSave(t, s, want)
+	var withAccounts int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM documents WHERE kind = 'projection' AND body LIKE '%"accounts":%'`).Scan(&withAccounts); err != nil || withAccounts != 0 {
+		t.Fatalf("projection documents with accounts: %d, %v", withAccounts, err)
+	}
+	if _, err := s.db.Exec(`UPDATE documents SET format = 2`); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoad(t, s); !reflect.DeepEqual(got, want) {
+		t.Fatal("format 2 record loads differently")
+	}
+}
+
+func TestProjectionAccountsRoundTrip(t *testing.T) {
+	s, _ := openTemp(t)
+	want := demodata.Family()
+	p := want.Projection("New job")
+	p.Accounts = []model.ProjAccount{{ID: "villa", Name: "Villa", Type: model.TypeProperty, Tax: model.Taxable, StatedRate: 0.03, Opening: 250000, From: model.D(2027, 3, 1)}}
+	mustSave(t, s, want)
+	got := mustLoad(t, s)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatal("projection account did not round-trip")
+	}
+	if got.Account("villa") != nil {
+		t.Fatal("a projection account became a record account")
 	}
 }
 

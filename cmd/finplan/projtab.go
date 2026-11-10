@@ -59,6 +59,8 @@ type projTab struct {
 	// addNew switches the form to a new budget item, which addItem holds.
 	addNew  bool
 	addItem itemForm
+	// addAcct is the Add account form.
+	addAcct acctForm
 }
 
 func (t *projTab) reset() {
@@ -261,6 +263,8 @@ func (t *projTab) detail() {
 		errorText("Not changed: " + e)
 	}
 	t.header(p)
+	imgui.Separator()
+	t.accounts(p)
 	imgui.Separator()
 	t.mods(p)
 }
@@ -617,7 +621,7 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 		}
 	default:
 		imgui.AlignTextToFramePadding()
-		imgui.TextUnformatted(objectText(rec, m.Target))
+		imgui.TextUnformatted(objectText(effective(rec, p.Name), m.Target))
 	}
 	tip()
 
@@ -752,6 +756,7 @@ func modeValues(rec *model.Record, proj string, i int, mode model.Mode) *model.S
 // baseValue is the value of the property modification i of the projection changes, as the record has it on d: an item's amount or raise rate, an account's stated rate, an asset's growth setting, or the global inflation. It is 0 where the record has none.
 func baseValue(rec *model.Record, proj string, i int, d model.Date) float64 {
 	m := rec.Projection(proj).Mods[i]
+	view := effective(rec, proj)
 	var v float64
 	switch m.Target.Kind {
 	case model.KindBudgetItem:
@@ -765,11 +770,11 @@ func baseValue(rec *model.Record, proj string, i int, d model.Date) float64 {
 			}
 		}
 	case model.KindAccount:
-		if a := rec.Account(model.AccountID(m.Target.ID)); a != nil {
+		if a := view.Account(model.AccountID(m.Target.ID)); a != nil {
 			v = a.StatedRate
 		}
 	case model.KindAsset:
-		if a := rec.Asset(model.AssetID(m.Target.ID)); a != nil {
+		if a := view.Asset(model.AssetID(m.Target.ID)); a != nil {
 			v, _ = a.Params[model.PropGrowth].At(d)
 		}
 	case model.KindGlobal:
@@ -820,8 +825,9 @@ func propertiesFor(kind model.ObjectKind) []string {
 
 type objectChoice struct{ id, name string }
 
-// objectsFor lists what a modification of the kind can aim at when it is at index of the projection's modifications (len for the end of the list). Default assets are left out: aiming at the account does the same. A budget item is offered where it exists: the record's, those added by the projection's ancestors, and those its own modifications before index add.
-func objectsFor(rec *model.Record, kind model.ObjectKind, proj string, index int) []objectChoice {
+// objectsFor lists what a modification of the kind can aim at when it is at index of the projection's modifications (len for the end of the list); accounts include those the projection's chain defines. Default assets are left out: aiming at the account does the same. A budget item is offered where it exists: the record's, those added by the projection's ancestors, and those its own modifications before index add.
+func objectsFor(base *model.Record, kind model.ObjectKind, proj string, index int) []objectChoice {
+	rec := effective(base, proj)
 	var out []objectChoice
 	switch kind {
 	case model.KindAccount:
@@ -835,7 +841,7 @@ func objectsFor(rec *model.Record, kind model.ObjectKind, proj string, index int
 			}
 		}
 	case model.KindBudgetItem:
-		items, _ := ops.ItemsBefore(rec, proj, index)
+		items, _ := ops.ItemsBefore(base, proj, index)
 		for _, it := range items {
 			name := it.Item.Name
 			if it.AddedBy != "" {
@@ -890,7 +896,7 @@ func (t *projTab) objectCombo(id string, kind model.ObjectKind, proj string, ind
 	choices := objectsFor(t.a.rec, kind, proj, index)
 	preview := "choose an object"
 	if cur != "" {
-		preview = objectText(t.a.rec, model.ObjectRef{Kind: kind, ID: cur})
+		preview = objectText(effective(t.a.rec, proj), model.ObjectRef{Kind: kind, ID: cur})
 	}
 	labels := make([]string, len(choices))
 	sel := -1
@@ -986,7 +992,7 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 
 	ids := []string{"", string(outsideAccount)}
 	names := []string{"choose an account", "outside the record"}
-	for _, a := range t.a.rec.Accounts {
+	for _, a := range effective(t.a.rec, t.sel).Accounts {
 		ids, names = append(ids, string(a.ID)), append(names, a.Name)
 	}
 	account := func(field, label string, cur model.AccountID) {
@@ -1030,7 +1036,7 @@ func (t *projTab) addForm(p *model.Projection) {
 			t.addItem = newItemForm()
 		}
 		t.itemFields("newitem", t.addItem, true, t.addItem.set)
-		addButton(itemProblem(rec, t.addItem), func() { t.addNewItem(p.Name) })
+		addButton(itemProblem(effective(rec, p.Name), t.addItem), func() { t.addNewItem(p.Name) })
 		return
 	}
 

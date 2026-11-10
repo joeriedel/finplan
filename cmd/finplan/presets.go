@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/joeriedel/finplan/internal/demodata"
 	"github.com/joeriedel/finplan/internal/graph"
@@ -12,10 +13,16 @@ import (
 	"github.com/joeriedel/finplan/internal/store"
 )
 
-// recordHas returns the predicate for Preset.Restore: whether rec has the asset and, if one is named, the projection.
+// recordHas returns the predicate for Preset.Restore: whether the asset exists, and the projection if one is named. An asset exists if the record has it, or, as the accounts a projection defines are assets only under it, if the named projection does; a line with no projection also keeps an asset of any projection, as it may follow one.
 func recordHas(rec *model.Record) func(asset model.AssetID, projection string) bool {
 	return func(asset model.AssetID, projection string) bool {
-		return rec.Asset(asset) != nil && (projection == "" || rec.Projection(projection) != nil)
+		switch {
+		case projection != "":
+			return rec.Projection(projection) != nil && effective(rec, projection).Asset(asset) != nil
+		case rec.Asset(asset) != nil:
+			return true
+		}
+		return slices.ContainsFunc(rec.Projections, func(p *model.Projection) bool { return effective(rec, p.Name).Asset(asset) != nil })
 	}
 }
 

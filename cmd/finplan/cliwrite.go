@@ -58,6 +58,22 @@ func itemFlags(forAdd bool) []flagDef {
 	return fs
 }
 
+// projAccountFlags are the flags that describe a projection's own account. Adding needs a name, a type, a tax treatment and an opening date.
+func projAccountFlags(forAdd bool) []flagDef {
+	fs := []flagDef{
+		{Name: "name", Type: typeString, Required: forAdd, Description: "the account's name"},
+		{Name: "type", Type: typeEnum, Required: forAdd, Choices: accountTypes, Description: "account type; a debt is mortgage, loan or credit card"},
+		{Name: "tax", Type: typeEnum, Required: forAdd, Choices: taxTreatments, Description: "tax treatment"},
+		{Name: "rate", Type: typeNumber, Description: "stated rate, the account's growth: a fraction per year between -1 and 1 (appreciation for property, interest for a debt); 0 when omitted"},
+		{Name: "opening", Type: typeNumber, Description: "opening balance on the opening date, negative for a debt; 0 when omitted"},
+		{Name: "from", Type: typeDate, Required: forAdd, Description: "the opening date: the account has no value before it. " + dateNote},
+	}
+	if forAdd {
+		fs = append(fs, flagDef{Name: "id", Type: typeString, Description: "the account's id; made from the name when omitted. It must differ from every account and asset id and from the accounts of the projection's relatives in its chain"})
+	}
+	return fs
+}
+
 var writeCommands = []*command{
 	{
 		Name: "projection new", Summary: "add an empty projection",
@@ -117,6 +133,32 @@ var writeCommands = []*command{
 		},
 		Output: writeOut,
 		run:    cmdProjectionSetInflation,
+	},
+	{
+		Name: "projection add-account", Summary: "add a hypothetical account to a projection; it exists only under that projection and the ones building on it, is never written to the record, and is picked up by rule-based aggregates such as Net worth. A mortgage is a debt account with a negative opening balance and the interest as its rate, paid down by a monthly transfer item",
+		Args:   []argDef{{Name: "projection", Description: "projection to add the account to", Required: true}},
+		Flags:  projAccountFlags(true),
+		Output: writeOut,
+		run:    cmdProjectionAddAccount,
+	},
+	{
+		Name: "projection edit-account", Summary: "change an account a projection defines; flags given override its current values",
+		Args: []argDef{
+			{Name: "projection", Description: "projection that defines the account", Required: true},
+			{Name: "account", Description: "account id or name", Required: true},
+		},
+		Flags:  projAccountFlags(false),
+		Output: writeOut,
+		run:    cmdProjectionEditAccount,
+	},
+	{
+		Name: "projection remove-account", Summary: "remove an account a projection defines; refused while a modification or item of the projection or one building on it uses it",
+		Args: []argDef{
+			{Name: "projection", Description: "projection that defines the account", Required: true},
+			{Name: "account", Description: "account id or name", Required: true},
+		},
+		Output: writeOut,
+		run:    cmdProjectionRemoveAccount,
 	},
 	{
 		Name: "mod add", Summary: "add a modification of an item's amount or growth, an account's or asset's growth, or inflation to a projection; its target must exist, for an item in the record or added earlier in the chain",
@@ -336,6 +378,93 @@ func cmdProjectionDelete(c *call) (any, error) {
 	return map[string]any{"dry_run": c.options().DryRun, "changed": true, "removed": res.Removed, "projection": projectionJSON(p)}, nil
 }
 
+func cmdProjectionAddAccount(c *call) (any, error) {
+	p, err := c.projectionArg()
+	if err != nil {
+		return nil, err
+	}
+	rate, _, err := c.number("rate")
+	if err != nil {
+		return nil, err
+	}
+	opening, _, err := c.number("opening")
+	if err != nil {
+		return nil, err
+	}
+	from, _, err := c.date("from")
+	if err != nil {
+		return nil, err
+	}
+	a := model.ProjAccount{
+		ID: model.AccountID(c.str("id")), Name: c.str("name"), Type: model.AccountType(c.str("type")),
+		Tax: model.TaxTreatment(c.str("tax")), StatedRate: rate, Opening: opening, From: from,
+	}
+	res, err := ops.AddProjAccount(c.st, c.rec, p.Name, a, c.options())
+	return c.finish(p.Name, res, err)
+}
+
+// projAccountArg returns the projection the first argument names and the id of the account of its own that the second names, by id or else by name.
+func (c *call) projAccountArg() (*model.Projection, model.AccountID, error) {
+	p, err := c.projectionArg()
+	if err != nil {
+		return nil, "", err
+	}
+	for _, byName := range []bool{false, true} {
+		for _, a := range p.Accounts {
+			if key := string(a.ID); byName && a.Name == c.args[1] || !byName && key == c.args[1] {
+				return p, a.ID, nil
+			}
+		}
+	}
+	return nil, "", failErr("not_found", "projection %q does not define an account %q", p.Name, c.args[1])
+}
+
+func cmdProjectionEditAccount(c *call) (any, error) {
+	p, id, err := c.projAccountArg()
+	if err != nil {
+		return nil, err
+	}
+	var ch ops.ProjAccountChange
+	if c.set["name"] {
+		ch.Name = model.Ptr(c.str("name"))
+	}
+	if c.set["type"] {
+		ch.Type = model.Ptr(model.AccountType(c.str("type")))
+	}
+	if c.set["tax"] {
+		ch.Tax = model.Ptr(model.TaxTreatment(c.str("tax")))
+	}
+	if v, ok, err := c.number("rate"); err != nil {
+		return nil, err
+	} else if ok {
+		ch.StatedRate = &v
+	}
+	if v, ok, err := c.number("opening"); err != nil {
+		return nil, err
+	} else if ok {
+		ch.Opening = &v
+	}
+	if d, ok, err := c.date("from"); err != nil {
+		return nil, err
+	} else if ok {
+		ch.From = &d
+	}
+	if ch == (ops.ProjAccountChange{}) {
+		return nil, usageErr("projection edit-account needs at least one of --name, --type, --tax, --rate, --opening and --from")
+	}
+	res, err := ops.EditProjAccount(c.st, c.rec, p.Name, id, ch, c.options())
+	return c.finish(p.Name, res, err)
+}
+
+func cmdProjectionRemoveAccount(c *call) (any, error) {
+	p, id, err := c.projAccountArg()
+	if err != nil {
+		return nil, err
+	}
+	res, err := ops.RemoveProjAccount(c.st, c.rec, p.Name, id, c.options())
+	return c.finish(p.Name, res, err)
+}
+
 func cmdProjectionSetStart(c *call) (any, error) {
 	st, rec, err := c.open()
 	if err != nil {
@@ -539,7 +668,7 @@ func pickItem(items []model.BudgetItem, s string) (string, error) {
 	return s, nil
 }
 
-// modTarget reads --target for the projection.
+// modTarget reads --target for the projection, whose own and inherited accounts count as accounts.
 func (c *call) modTarget(p *model.Projection) (model.ObjectRef, error) {
 	kind, name, _ := strings.Cut(c.str("target"), ":")
 	switch kind {
@@ -555,12 +684,16 @@ func (c *call) modTarget(p *model.Projection) (model.ObjectRef, error) {
 	default:
 		return model.ObjectRef{}, usageErr("--target %q: use item:<id or name>, account:<id or name>, asset:<id or name> or global", c.str("target"))
 	}
+	view, err := c.rec.For(p.Name)
+	if err != nil {
+		return model.ObjectRef{}, failErr("invalid", "%v", err)
+	}
 	switch kind {
 	case "item":
 		id, err := pickItem(itemsInChain(c.rec, p), name)
 		return model.ObjectRef{Kind: model.KindBudgetItem, ID: id}, err
 	case "account":
-		cand, err := resolveTarget(c.rec, name, true)
+		cand, err := resolveTarget(view, name, true)
 		if err != nil {
 			// Not found is the operation's to refuse as an unknown target; an ambiguous name is not.
 			if ce := (*cliError)(nil); errors.As(err, &ce) && ce.Code == "ambiguous" {
@@ -570,7 +703,7 @@ func (c *call) modTarget(p *model.Projection) (model.ObjectRef, error) {
 		}
 		return model.ObjectRef{Kind: model.KindAccount, ID: string(cand.account)}, nil
 	}
-	cand, err := resolveTarget(c.rec, name, false)
+	cand, err := resolveTarget(view, name, false)
 	if err != nil {
 		if ce := (*cliError)(nil); errors.As(err, &ce) && ce.Code == "ambiguous" {
 			return model.ObjectRef{}, err

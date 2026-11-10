@@ -139,7 +139,11 @@ func (r *run) eval(d model.Date) model.Evaluation {
 	return r.res.Eval(d, func(id model.AccountID) model.AccountData { return r.paths[id].data(d) })
 }
 
-func prepare(rec *model.Record, projection string, target model.AssetID, horizon model.Date) (*run, error) {
+func prepare(base *model.Record, projection string, target model.AssetID, horizon model.Date) (*run, error) {
+	rec, err := base.For(projection)
+	if err != nil {
+		return nil, err
+	}
 	res, err := rec.Resolve(target)
 	if err != nil {
 		return nil, err
@@ -258,11 +262,16 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 	}
 
 	// Settings apply in order, the last applied winning: asset definitions (innermost asset first), then the projection chain root first, each projection's settings in list order.
-	for _, id := range res.Accounts {
+	newPath := func(id model.AccountID) *path {
 		acct := rec.Account(id)
 		underTarget := func(asset model.AssetID) bool { return targets[asset].Has(id) }
 		p := &path{acct: acct}
 		start, _, _ := model.Apply(projStart, starts, underTarget, model.Replace)
+		flowsAfter := start
+		if acct.Opens != nil {
+			start = max(start, *acct.Opens)
+			flowsAfter = max(flowsAfter, acct.Opens.Add(-1))
+		}
 		ov, _, _ := model.Apply(override, overrides, underTarget, model.Replace)
 		p.info = AccountStart{Account: id, OverrideHistory: ov, ProjectionStart: start}
 		p.start = start
@@ -273,8 +282,19 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 				p.start = min(sp.To, start)
 			}
 		}
+		p.flowsAfter = p.start
+		if acct.Opens != nil {
+			p.start = *acct.Opens
+			p.flowsAfter = flowsAfter
+		}
 		p.info.Start = p.start
 		p.startVal = p.readBack(p.start)
+		if acct.Opens != nil && flowsAfter < *acct.Opens {
+			// The path starts the day before the account opens, so the opening balance is a change like any other on its date.
+			p.start = acct.Opens.Add(-1)
+			p.startVal = p.readBack(p.start)
+			p.changes = append(p.changes, change{date: *acct.Opens, cause: CauseOpening, amount: acct.Default.At(*acct.Opens) - p.startVal, rank: rankOpening})
+		}
 		var defs []model.Setting[model.Schedule]
 		for _, a := range res.AssetsAround(id) {
 			if v, ok := rec.Asset(a).Params[model.PropGrowth]; ok {
@@ -284,8 +304,38 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 		rate, _, _ := model.Apply(model.Constant(acct.StatedRate), defs, func(model.AssetID) bool { return true }, model.Schedule.Overlay)
 		layered, _, _ := model.Apply(rateLayer{s: rate}, growth, underTarget, rateLayer.over)
 		p.rate = layered.s
-		p.build(rec, items, amounts, growths, infl, horizon)
-		r.paths[id] = p
+		return p
+	}
+	for _, id := range res.Accounts {
+		r.paths[id] = newPath(id)
+	}
+	// Every side of an item that touches a hypothetical account counts only the occurrences after the latest cutoff of the accounts it touches, wherever they sit relative to the target, so both sides of a transfer agree.
+	cutoffs := map[string]model.Date{}
+	outside := map[model.AccountID]*path{}
+	for _, it := range items {
+		cut := model.MinDate
+		hypothetical := false
+		for _, id := range []model.AccountID{it.Account, it.From, it.To} {
+			a := rec.Account(id)
+			if a == nil {
+				continue
+			}
+			hypothetical = hypothetical || a.Opens != nil
+			p := r.paths[id]
+			if p == nil {
+				if outside[id] == nil {
+					outside[id] = newPath(id)
+				}
+				p = outside[id]
+			}
+			cut = max(cut, p.flowsAfter)
+		}
+		if hypothetical {
+			cutoffs[it.ID] = cut
+		}
+	}
+	for _, id := range res.Accounts {
+		r.paths[id].build(rec, items, cutoffs, amounts, growths, infl, horizon)
 	}
 	return r, nil
 }
@@ -361,19 +411,22 @@ type point struct {
 
 // path is one account's balance: real data up to start, then extrapolation.
 type path struct {
-	acct     *model.Account
-	info     AccountStart
-	start    model.Date
-	startVal float64
-	rate     model.Schedule
-	changes  []change // flows after start, ordered by date then rank
-	points   []point  // balance after each date with a flow, from start
+	acct  *model.Account
+	info  AccountStart
+	start model.Date
+	// flowsAfter is the date budget flows are taken strictly after: start, except for a hypothetical account, which opens on a date that its flows count on and grows from before the projection starts.
+	flowsAfter model.Date
+	startVal   float64
+	rate       model.Schedule
+	changes    []change // flows after start, ordered by date then rank
+	points     []point  // balance after each date with a flow, from start
 }
 
 // Order of flows on one date (docs/design.md, "The engine"): income, expenses, then transfers
 // (debt payments, contributions, withdrawals).
 const (
-	rankIncome = iota
+	rankOpening = iota
+	rankIncome
 	rankExpense
 	rankTransfer
 )
@@ -415,7 +468,7 @@ func (p *path) growthAt(d model.Date) float64 {
 	return pt.cumGrowth + pt.bal*(p.rate.Compound(pt.date, d)-1)
 }
 
-func (p *path) build(rec *model.Record, items []model.BudgetItem, amounts, growths map[string]model.Schedule, infl model.Schedule, horizon model.Date) {
+func (p *path) build(rec *model.Record, items []model.BudgetItem, cutoffs map[string]model.Date, amounts, growths map[string]model.Schedule, infl model.Schedule, horizon model.Date) {
 	p.points = []point{{date: p.start, bal: p.startVal}}
 	if horizon <= p.start {
 		return
@@ -424,7 +477,11 @@ func (p *path) build(rec *model.Record, items []model.BudgetItem, amounts, growt
 		if !it.Touches(p.acct.ID) {
 			continue
 		}
-		after, upTo := p.start, horizon
+		after, upTo := p.flowsAfter, horizon
+		// An item touching a hypothetical account is modelled on every side only after the latest cutoff of the accounts it touches.
+		if c, ok := cutoffs[it.ID]; ok {
+			after = c
+		}
 		if it.Start != nil {
 			after = max(after, it.Start.Add(-1))
 		}

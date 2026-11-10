@@ -152,8 +152,7 @@ func Family() *model.Record {
 		model.RuleMember(model.Rule{Tax: []model.TaxTreatment{model.Tax529}}),
 	}}))
 	must(rec.AddAsset(&model.Asset{ID: NetWorth, Name: "Net worth", Members: []model.Member{
-		model.AssetMember(AllCash), model.AccountMember(Card), model.AccountMember(Brokerage),
-		model.AssetMember(Retirement), model.AssetMember(Colleges), model.AccountMember(Home), model.AccountMember(Mortgage),
+		model.RuleMember(model.Rule{}),
 	}}))
 	must(rec.AddAsset(&model.Asset{ID: Liquid, Name: "Liquid assets", Members: []model.Member{
 		model.AssetMember(AllCash), model.AccountMember(Brokerage), model.AccountMember(Checking),

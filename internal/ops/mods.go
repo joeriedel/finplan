@@ -103,7 +103,7 @@ func insertMod(rec *model.Record, p *model.Projection, index int, m model.Modifi
 	return checkTarget(rec, p, index)
 }
 
-// checkTarget checks that the property of the modification of p at index suits its object and that the object resolves there: an account or asset the record has, or a budget item of the record or one added earlier in the chain.
+// checkTarget checks that the property of the modification of p at index suits its object and that the object resolves there: an account or asset the record has or the projection's chain defines, or a budget item of the record or one added earlier in the chain.
 func checkTarget(rec *model.Record, p *model.Projection, index int) error {
 	m := p.Mods[index]
 	want := ""
@@ -136,11 +136,19 @@ func checkTarget(rec *model.Record, p *model.Projection, index int) error {
 			return refuse(ErrUnknownTarget, "there is no budget item %q before this modification", m.Target.ID)
 		}
 	case model.KindAccount:
-		if rec.Account(model.AccountID(m.Target.ID)) == nil {
+		view, err := viewOf(rec, p)
+		if err != nil {
+			return err
+		}
+		if view.Account(model.AccountID(m.Target.ID)) == nil {
 			return refuse(ErrUnknownTarget, "there is no account %q", m.Target.ID)
 		}
 	case model.KindAsset:
-		if rec.Asset(model.AssetID(m.Target.ID)) == nil {
+		view, err := viewOf(rec, p)
+		if err != nil {
+			return err
+		}
+		if view.Asset(model.AssetID(m.Target.ID)) == nil {
 			return refuse(ErrUnknownTarget, "there is no asset %q", m.Target.ID)
 		}
 	}

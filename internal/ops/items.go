@@ -78,7 +78,7 @@ func checkItemAs(rec *model.Record, it model.BudgetItem, existing *model.BudgetI
 	return it, nil
 }
 
-// CheckItem returns the reason AddItem would refuse the item, nil if it would not. It is the check AddItem and EditItem make, for editors that show why an input cannot be added.
+// CheckItem returns the reason AddItem would refuse the item, nil if it would not. It is the check AddItem and EditItem make, for editors that show why an input cannot be added. Pass rec.For(projection) to check an item of a projection that defines accounts.
 func CheckItem(rec *model.Record, item model.BudgetItem) error {
 	_, err := checkItem(rec, item)
 	return err
@@ -136,7 +136,11 @@ func assignItemID(it *model.BudgetItem, ids map[string]bool) error {
 // AddItem adds a new budget item to the projection, as an add_item modification at the end of its list. An empty ID is generated from the name; an ID that another budget item or added item has is ErrNameTaken. The item must be complete: a name, an amount above zero, an account for income and expense, from and to for a transfer, and a one-time, monthly, biweekly or annual recurrence.
 func AddItem(st *store.Store, rec *model.Record, name string, item model.BudgetItem, o Options) (*Result, error) {
 	return editProjection(st, rec, o, name, func(p *model.Projection) error {
-		it, err := checkItem(rec, item)
+		view, err := viewOf(rec, p)
+		if err != nil {
+			return err
+		}
+		it, err := checkItem(view, item)
 		if err != nil {
 			return err
 		}
@@ -160,7 +164,11 @@ func EditItem(st *store.Store, rec *model.Record, name, itemID string, item mode
 		if item.ID != "" && item.ID != itemID {
 			return refuse(ErrInvalidValue, "the id of budget item %q cannot change", itemID)
 		}
-		it, err := checkItem(rec, item)
+		view, err := viewOf(rec, p)
+		if err != nil {
+			return err
+		}
+		it, err := checkItem(view, item)
 		if err != nil {
 			return err
 		}

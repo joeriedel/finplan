@@ -225,6 +225,13 @@ func (g *graphTab) assetName(id model.AssetID) string {
 	if a := g.rec.Asset(id); a != nil {
 		return a.Name
 	}
+	for _, p := range g.rec.Projections {
+		for _, a := range p.Accounts {
+			if model.DefaultAssetID(a.ID) == id {
+				return a.Name
+			}
+		}
+	}
 	return string(id)
 }
 

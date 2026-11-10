@@ -95,7 +95,7 @@ func DeleteProjection(st *store.Store, rec *model.Record, name string, o Options
 	})
 }
 
-// SetParent makes the projection build on parent, or on nothing if parent is empty. It refuses an unknown parent and one that would make a cycle; that error matches model.ErrCycle.
+// SetParent makes the projection build on parent, or on nothing if parent is empty. It refuses an unknown parent, one that would make a cycle (that error matches model.ErrCycle) and one that would give two accounts the same id (ErrNameTaken).
 func SetParent(st *store.Store, rec *model.Record, name, parent string, o Options) (*Result, error) {
 	return edit(st, rec, o, func(next *model.Record) (Result, error) {
 		p := next.Projection(name)
@@ -110,6 +110,11 @@ func SetParent(st *store.Store, rec *model.Record, name, parent string, o Option
 				return Result{}, refuse(model.ErrCycle, "%q cannot build on %q: that would make a cycle", name, parent)
 			}
 			return Result{}, err
+		}
+		for _, q := range append([]*model.Projection{p}, next.Descendants(name)...) {
+			if _, err := next.For(q.Name); err != nil {
+				return Result{}, refuse(ErrNameTaken, "%q cannot build on %q: %v", name, parent, err)
+			}
 		}
 		return Result{Projection: p}, nil
 	})
@@ -139,8 +144,17 @@ func copyPtr[T any](p *T) *T {
 	return &v
 }
 
-// RestoreProjections replaces the record's projections with copies of ps, which is how an editor undoes and redoes an edit. rename, if not nil, is the rename that edit made; the presets that name its From are rewritten to its To. Nothing is checked beyond what saving checks: ps comes from an earlier state of this record.
+// RestoreProjections replaces the record's projections with copies of ps, which is how an editor undoes and redoes an edit. rename, if not nil, is the rename that edit made; the presets that name its From are rewritten to its To. Little is checked, because ps comes from an earlier state of this record; but a restore that gives a projection an account id that a record account or asset has, or that its chain has twice, is ErrNameTaken and saves nothing.
 func RestoreProjections(st *store.Store, rec *model.Record, ps []*model.Projection, rename *Rename, o Options) (*Result, error) {
 	next := rec.WithProjections(ps)
+	for _, p := range next.Projections {
+		chain, err := next.Chain(p.Name)
+		if err != nil {
+			continue
+		}
+		if _, err := next.ForChain(chain); err != nil {
+			return nil, refuse(ErrNameTaken, "%v", err)
+		}
+	}
 	return commit(st, next, Result{Rename: rename}, o)
 }

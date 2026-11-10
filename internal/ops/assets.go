@@ -18,10 +18,15 @@ func accountOfDefault(id model.AssetID) (model.AccountID, bool) {
 	return model.AccountID(s), ok
 }
 
-// newID returns the id of a new account or asset: given if not empty, else made from name. Accounts and assets share one namespace of ids, because a command names either by id; a given id that is taken is ErrNameTaken, a made one gets -2, -3 and so on added.
+// newID returns the id of a new account or asset: given if not empty, else made from name. Accounts and assets share one namespace of ids, because a command names either by id, and the accounts that projections define count as taken; a given id that is taken is ErrNameTaken, a made one gets -2, -3 and so on added.
 func newID(rec *model.Record, given, name string) (string, error) {
 	taken := func(id string) bool {
-		return rec.Account(model.AccountID(id)) != nil || rec.Asset(model.AssetID(id)) != nil
+		if rec.Account(model.AccountID(id)) != nil || rec.Asset(model.AssetID(id)) != nil {
+			return true
+		}
+		return slices.ContainsFunc(rec.Projections, func(p *model.Projection) bool {
+			return slices.ContainsFunc(p.Accounts, func(a model.ProjAccount) bool { return string(a.ID) == id })
+		})
 	}
 	if given = strings.TrimSpace(given); given != "" {
 		if taken(given) {

@@ -285,7 +285,7 @@ func (t *projTab) setItemField(proj string, i int, field, text string) {
 
 // addNewItem adds the budget item the Add form describes to the projection and clears the form. It reports whether it did.
 func (t *projTab) addNewItem(proj string) bool {
-	if itemProblem(t.a.rec, t.addItem) != "" {
+	if itemProblem(effective(t.a.rec, proj), t.addItem) != "" {
 		return false
 	}
 	it, _ := t.addItem.item()
