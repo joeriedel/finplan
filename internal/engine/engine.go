@@ -179,6 +179,8 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 	items := slices.Clone(rec.Budget.Items)
 	amounts := map[string]model.Schedule{}
 	growths := map[string]model.Schedule{}
+	acctDefaults := map[model.AccountID][]model.Modification{}
+	assetDefaults := map[model.AssetID][]model.Modification{}
 	for _, p := range chain {
 		if p.Start != nil {
 			projStart = *p.Start
@@ -246,6 +248,17 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 						return nil, err
 					}
 					growth = append(growth, model.Setting[rateLayer]{Asset: asset, Value: rateLayer{m.Values, m.IsScale()}})
+				case m.Property == model.PropDefault:
+					// An account's default asset shares the account's default.
+					acct, isAcct := model.AccountID(m.Target.ID), m.Target.Kind == model.KindAccount
+					if !isAcct {
+						acct, isAcct = model.AccountOfDefaultAsset(asset)
+					}
+					if isAcct {
+						acctDefaults[acct] = append(acctDefaults[acct], m)
+					} else {
+						assetDefaults[asset] = append(assetDefaults[asset], m)
+					}
 				default:
 					skip("unsupported property")
 				}
@@ -261,11 +274,13 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 		}
 	}
 
+	res.SetAssetDefaultMods(assetDefaults)
+
 	// Settings apply in order, the last applied winning: asset definitions (innermost asset first), then the projection chain root first, each projection's settings in list order.
 	newPath := func(id model.AccountID) *path {
 		acct := rec.Account(id)
 		underTarget := func(asset model.AssetID) bool { return targets[asset].Has(id) }
-		p := &path{acct: acct}
+		p := &path{acct: acct, def: model.ModifiedDefault{Base: acct.Default, Mods: acctDefaults[id], Opens: acct.Opens}}
 		start, _, _ := model.Apply(projStart, starts, underTarget, model.Replace)
 		flowsAfter := start
 		if acct.Opens != nil {
@@ -293,7 +308,7 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 			// The path starts the day before the account opens, so the opening balance is a change like any other on its date.
 			p.start = acct.Opens.Add(-1)
 			p.startVal = p.readBack(p.start)
-			p.changes = append(p.changes, change{date: *acct.Opens, cause: CauseOpening, amount: acct.Default.At(*acct.Opens) - p.startVal, rank: rankOpening})
+			p.changes = append(p.changes, change{date: *acct.Opens, cause: CauseOpening, amount: p.def.At(*acct.Opens) - p.startVal, rank: rankOpening})
 		}
 		var defs []model.Setting[model.Schedule]
 		for _, a := range res.AssetsAround(id) {
@@ -412,6 +427,7 @@ type point struct {
 // path is one account's balance: real data up to start, then extrapolation.
 type path struct {
 	acct  *model.Account
+	def   model.ModifiedDefault // the account's default balance under the projection
 	info  AccountStart
 	start model.Date
 	// flowsAfter is the date budget flows are taken strictly after: start, except for a hypothetical account, which opens on a date that its flows count on and grows from before the projection starts.
@@ -435,7 +451,7 @@ func (p *path) readBack(d model.Date) float64 {
 	if v, ok := p.acct.ActualAt(d); ok {
 		return v
 	}
-	return p.acct.Default.At(d)
+	return p.def.At(d)
 }
 
 func (p *path) data(d model.Date) model.AccountData {
@@ -445,7 +461,7 @@ func (p *path) data(d model.Date) model.AccountData {
 	if v, ok := p.acct.ActualAt(d); ok {
 		return model.AccountData{Amount: v, Kind: model.DataActual}
 	}
-	return model.AccountData{Amount: p.acct.Default.At(d), Kind: model.DataNone}
+	return model.AccountData{Amount: p.def.At(d), Kind: model.DataNone}
 }
 
 func (p *path) pointAt(d model.Date) point {

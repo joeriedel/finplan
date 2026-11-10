@@ -16,6 +16,7 @@ const (
 	PropInflation = "inflation"
 	PropAmount    = "amount"
 	PropAddItem   = "add_item"
+	PropDefault   = "default"
 )
 
 // Segment is one piece of a schedule: Value holds on [From, End], both inclusive like BudgetItem.End and

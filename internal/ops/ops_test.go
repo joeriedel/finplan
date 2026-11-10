@@ -1155,3 +1155,35 @@ func TestItemGrowth(t *testing.T) {
 		t.Errorf("base growth %v", got)
 	}
 }
+
+func TestAddModDefaultBalanceTargets(t *testing.T) {
+	end := model.D(2024, 6, 30)
+	ranged := model.MustSchedule(model.Segment{From: model.D(2024, 1, 1), End: &end, Value: 250000})
+	mod := func(kind model.ObjectKind, id, prop string, mode model.Mode, vals model.Schedule) model.Modification {
+		return model.Modification{Target: model.ObjectRef{Kind: kind, ID: id}, Property: prop, Mode: mode, Values: vals}
+	}
+	for _, m := range []model.Modification{
+		mod(model.KindAccount, string(demodata.Home), model.PropDefault, "", ranged),
+		mod(model.KindAsset, "retirement", model.PropDefault, model.ModeSet, ranged),
+		mod(model.KindAccount, string(demodata.Home), model.PropDefault, model.ModeScale, model.Constant(0.8)),
+		mod(model.KindAccount, string(demodata.Card), model.PropDefault, "", model.Constant(-4000)),
+	} {
+		st, rec := seed(t)
+		if _, err := AddMod(st, rec, demodata.ProjNewJob, m, Options{}); err != nil {
+			t.Errorf("%+v: %v", m, err)
+		}
+	}
+	for _, m := range []model.Modification{
+		mod(model.KindBudgetItem, "salary-a", model.PropDefault, "", ranged),
+		mod(model.KindGlobal, "", model.PropDefault, "", ranged),
+		mod(model.KindAccount, string(demodata.Home), model.PropAmount, "", ranged),
+		mod(model.KindAccount, string(demodata.Home), model.PropDefault, model.ModeScale, model.Constant(-1)),
+	} {
+		refused(t, ErrInvalidValue, func(st *store.Store, rec *model.Record) (*Result, error) {
+			return AddMod(st, rec, demodata.ProjNewJob, m, Options{})
+		})
+	}
+	refused(t, ErrUnknownTarget, func(st *store.Store, rec *model.Record) (*Result, error) {
+		return AddMod(st, rec, demodata.ProjNewJob, mod(model.KindAccount, "nope", model.PropDefault, "", ranged), Options{})
+	})
+}

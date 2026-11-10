@@ -60,6 +60,7 @@ type Resolution struct {
 	scopeList  []AssetID
 	accountSet map[AccountID]bool
 	nested     map[AssetID]map[AssetID]bool
+	assetMods  map[AssetID][]Modification
 }
 
 // Resolve checks the asset and everything nested in it, whenever it is used. Overlap never fails
@@ -227,6 +228,9 @@ type Evaluation struct {
 	Projected int
 }
 
+// SetAssetDefaultMods makes Eval read the default of each asset in mods with those default modifications layered over it. The record is unchanged.
+func (res *Resolution) SetAssetDefaultMods(mods map[AssetID][]Modification) { res.assetMods = mods }
+
 // Eval resolves the root asset's value on d, calling f for each account's value on d. The rule
 // (docs/design.md, "Resolving an asset's balance"): if any account under an asset has data, the asset
 // is the sum of its members; otherwise a default interval of the asset beats its members' defaults;
@@ -252,7 +256,7 @@ func (res *Resolution) Eval(d Date, f func(AccountID) AccountData) Evaluation {
 			}
 		}
 		if !hasData {
-			if v, ok := res.rec.Asset(id).Default.Covers(d); ok {
+			if v, ok := (ModifiedDefault{Base: res.rec.Asset(id).Default, Mods: res.assetMods[id]}).Covers(d); ok {
 				return v
 			}
 		}

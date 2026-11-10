@@ -161,14 +161,15 @@ var writeCommands = []*command{
 		run:    cmdProjectionRemoveAccount,
 	},
 	{
-		Name: "mod add", Summary: "add a modification of an item's amount or growth, an account's or asset's growth, or inflation to a projection; its target must exist, for an item in the record or added earlier in the chain",
+		Name: "mod add", Summary: "add a modification of an item's amount or growth, an account's or asset's growth or default balance, or inflation to a projection; its target must exist, for an item in the record or added earlier in the chain",
 		Args: []argDef{{Name: "projection", Description: "projection to change", Required: true}},
 		Flags: []flagDef{
 			{Name: "target", Type: typeString, Required: true, Description: "what to change: item:<id or name>, account:<id or name>, asset:<id or name> or global"},
-			{Name: "property", Type: typeEnum, Required: true, Choices: []string{model.PropAmount, model.PropGrowth, model.PropInflation}, Description: "amount or growth (an annual raise) for an item, growth for an account or asset, inflation for global"},
+			{Name: "property", Type: typeEnum, Required: true, Choices: []string{model.PropAmount, model.PropGrowth, model.PropDefault, model.PropInflation}, Description: "amount or growth (an annual raise) for an item, growth or default (the balance on dates with no actual data) for an account or asset, inflation for global"},
 			{Name: "mode", Type: typeEnum, Choices: modModes, Default: string(model.ModeSet), Description: "set replaces the value beneath; scale multiplies it, so the result follows what lies beneath"},
 			{Name: "value", Type: typeNumber, Description: "a constant value (a rate is a fraction: 0.04 for 4%; with --mode scale a multiplier: 0.7 cuts by 30%); without it the schedule is read as JSON"},
 			{Name: "from", Type: typeDate, Description: "with --value, the date the value starts: " + dateNote + "; always when omitted"},
+			{Name: "end", Type: typeDate, Description: "with --value and --from, the last date the value holds: " + dateNote + "; open-ended when omitted"},
 			{Name: "at", Type: typeInt, Description: "index to insert at; at the end when omitted"},
 		},
 		Input:  "without --value, a schedule: " + scheduleNote,
@@ -185,6 +186,7 @@ var writeCommands = []*command{
 			{Name: "mode", Type: typeEnum, Choices: modModes, Description: "change how the modification combines with what lies beneath: set or scale; unchanged when omitted. Alone it keeps the values; with --value or --json-file it replaces them too"},
 			{Name: "value", Type: typeNumber, Description: "a constant value (a multiplier for a scale modification); without it the schedule is read as JSON"},
 			{Name: "from", Type: typeDate, Description: "with --value, the date the value starts: " + dateNote + "; always when omitted"},
+			{Name: "end", Type: typeDate, Description: "with --value and --from, the last date the value holds: " + dateNote + "; open-ended when omitted"},
 		},
 		Input:  "without --value (and not --mode alone), a schedule: " + scheduleNote,
 		Output: writeOut,
@@ -572,8 +574,8 @@ func (c *call) schedule() (model.Schedule, error) {
 		return model.Schedule{}, err
 	}
 	if !ok {
-		if c.set["from"] {
-			return model.Schedule{}, usageErr("--from needs --value")
+		if c.set["from"] || c.set["end"] {
+			return model.Schedule{}, usageErr("--from and --end need --value")
 		}
 		return c.scheduleJSON()
 	}
@@ -584,10 +586,25 @@ func (c *call) schedule() (model.Schedule, error) {
 	if err != nil {
 		return model.Schedule{}, err
 	}
+	end, endSet, err := c.date("end")
+	if err != nil {
+		return model.Schedule{}, err
+	}
 	if !ok {
+		if endSet {
+			return model.Schedule{}, usageErr("--end needs --from")
+		}
 		return model.Constant(v), nil
 	}
-	return model.NewSchedule(model.Segment{From: from, Value: v})
+	seg := model.Segment{From: from, Value: v}
+	if endSet {
+		seg.End = &end
+	}
+	sched, err := model.NewSchedule(seg)
+	if err != nil {
+		return model.Schedule{}, usageErr("%v", err)
+	}
+	return sched, nil
 }
 
 func (c *call) scheduleJSON() (model.Schedule, error) {
@@ -758,7 +775,7 @@ func cmdModEdit(c *call) (any, error) {
 	if p.Mods[i].Property == model.PropAddItem {
 		return nil, failErr("invalid", "modification %d adds an item: change it with item edit", i)
 	}
-	if c.set["mode"] && !c.set["value"] && !c.set["from"] && !c.set["json-file"] {
+	if c.set["mode"] && !c.set["value"] && !c.set["from"] && !c.set["end"] && !c.set["json-file"] {
 		res, err := ops.SetModMode(c.st, c.rec, p.Name, i, model.Mode(c.str("mode")), nil, c.options())
 		return c.finish(p.Name, res, err)
 	}

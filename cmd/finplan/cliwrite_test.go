@@ -745,3 +745,63 @@ func TestCLIBudgetGrowth(t *testing.T) {
 	}
 	refusedWrite(t, path, "", 1, "invalid", "budget", "edit", "tutoring", "--growth", "-1")
 }
+
+func TestCLIDefaultBalanceScenario(t *testing.T) {
+	path := seededFile(t)
+	write(t, path, "", "projection", "new", "Defaults", "--parent", "Base")
+	balance := func(proj, target, date string) (float64, string) {
+		t.Helper()
+		args := []string{"--db", path, "balance", target, "--from", date, "--to", date}
+		if proj != "" {
+			args = append(args, "--projection", proj)
+		}
+		var b balanceOut
+		cliJSON(t, &b, args...)
+		return b.Samples[0].Value, b.Samples[0].Status
+	}
+	// The Home has no default and no actual data before 2024-12-15.
+	const inside, outside, withData = "2024-03-01", "2024-09-01", "2025-06-01"
+	baseInside, _ := balance("", "home", inside)
+	baseData, dataStatus := balance("", "home", withData)
+	if baseInside != 0 || dataStatus != "actual" {
+		t.Fatalf("unexpected demo data: %v on %s, %q on %s", baseInside, inside, dataStatus, withData)
+	}
+
+	before := dbSnapshot(t, path)
+	code, _ := wcli(t, "", "--db", path, "mod", "add", "Defaults", "--target", "account:home", "--property", "default", "--value", "310000", "--from", "2024-01-01", "--end", "2024-06-30", "--dry-run")
+	if code != 0 || !reflect.DeepEqual(before, dbSnapshot(t, path)) {
+		t.Errorf("--dry-run: exit %d, or it wrote", code)
+	}
+
+	w := write(t, path, "", "mod", "add", "Defaults", "--target", "account:home", "--property", "default", "--value", "310000", "--from", "2024-01-01", "--end", "2024-06-30")
+	if m := w.Projection.Modifications[0]; m.Property != "default" || m.Schedule[0].End == nil || *m.Schedule[0].End != "2024-06-30" {
+		t.Errorf("mod add: %+v", m)
+	}
+	if v, _ := balance("Defaults", "home", inside); v != 310000 {
+		t.Errorf("in the range: %v, want 310000", v)
+	}
+	if v, _ := balance("Defaults", "home", outside); v != 0 {
+		t.Errorf("after the range: %v, want 0", v)
+	}
+	if v, s := balance("Defaults", "home", withData); v != baseData || s != "actual" {
+		t.Errorf("with actual data: %v %q, want %v actual", v, s, baseData)
+	}
+	if v, _ := balance("", "home", inside); v != 0 {
+		t.Errorf("the base projection changed: %v", v)
+	}
+	if v, _ := balance("Base", "home", inside); v != 0 {
+		t.Errorf("the parent changed: %v", v)
+	}
+
+	// A scale multiplies the default beneath it.
+	write(t, path, "", "mod", "add", "Defaults", "--target", "account:home", "--property", "default", "--mode", "scale", "--value", "0.5", "--from", "2024-04-01", "--end", "2024-04-30")
+	if v, _ := balance("Defaults", "home", "2024-04-15"); v != 155000 {
+		t.Errorf("scaled: %v, want 155000", v)
+	}
+
+	refusedWrite(t, path, "", 1, "invalid", "mod", "add", "Defaults", "--target", "item:salary-a", "--property", "default", "--value", "1")
+	refusedWrite(t, path, "", 1, "invalid", "mod", "add", "Defaults", "--target", "global", "--property", "default", "--value", "1")
+	refusedWrite(t, path, "", 2, "usage", "mod", "add", "Defaults", "--target", "account:home", "--property", "default", "--value", "1", "--end", "2024-06-30")
+	refusedWrite(t, path, "", 2, "usage", "mod", "add", "Defaults", "--target", "account:home", "--property", "default", "--value", "1", "--from", "2024-07-01", "--end", "2024-06-30")
+	refusedWrite(t, path, "", 2, "usage", "mod", "add", "Defaults", "--target", "account:home", "--property", "default", "--end", "2024-06-30")
+}

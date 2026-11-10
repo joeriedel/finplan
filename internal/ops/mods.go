@@ -6,6 +6,7 @@ package ops
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/store"
@@ -106,25 +107,19 @@ func insertMod(rec *model.Record, p *model.Projection, index int, m model.Modifi
 // checkTarget checks that the property of the modification of p at index suits its object and that the object resolves there: an account or asset the record has or the projection's chain defines, or a budget item of the record or one added earlier in the chain.
 func checkTarget(rec *model.Record, p *model.Projection, index int) error {
 	m := p.Mods[index]
-	want := ""
+	var want []string
 	switch m.Target.Kind {
 	case model.KindBudgetItem:
-		want = model.PropAmount
-		if m.Property == model.PropGrowth {
-			want = model.PropGrowth
-		}
+		want = []string{model.PropAmount, model.PropGrowth}
 	case model.KindAccount, model.KindAsset:
-		want = model.PropGrowth
+		want = []string{model.PropGrowth, model.PropDefault}
 	case model.KindGlobal:
-		want = model.PropInflation
+		want = []string{model.PropInflation}
 	default:
 		return refuse(ErrInvalidValue, "unknown object kind %q", m.Target.Kind)
 	}
-	if m.Property != want {
-		if m.Target.Kind == model.KindBudgetItem {
-			return refuse(ErrInvalidValue, "a modification of a budget item changes its amount or growth, not %q", m.Property)
-		}
-		return refuse(ErrInvalidValue, "a modification of a %s changes its %s, not %q", m.Target.Kind, want, m.Property)
+	if !slices.Contains(want, m.Property) {
+		return refuse(ErrInvalidValue, "a modification of a %s changes its %s, not %q", m.Target.Kind, strings.Join(want, " or "), m.Property)
 	}
 	switch m.Target.Kind {
 	case model.KindBudgetItem:

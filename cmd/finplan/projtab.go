@@ -56,6 +56,7 @@ type projTab struct {
 	addMode  model.Mode
 	addValue string
 	addStart string
+	addEnd   string
 	// addNew switches the form to a new budget item, which addItem holds.
 	addNew  bool
 	addItem itemForm
@@ -753,7 +754,7 @@ func modeValues(rec *model.Record, proj string, i int, mode model.Mode) *model.S
 	return &s
 }
 
-// baseValue is the value of the property modification i of the projection changes, as the record has it on d: an item's amount or raise rate, an account's stated rate, an asset's growth setting, or the global inflation. It is 0 where the record has none.
+// baseValue is the value of the property modification i of the projection changes, as the record has it on d: an item's amount or raise rate, an account's stated rate or default balance, an asset's growth setting or default balance, or the global inflation. It is 0 where the record has none.
 func baseValue(rec *model.Record, proj string, i int, d model.Date) float64 {
 	m := rec.Projection(proj).Mods[i]
 	view := effective(rec, proj)
@@ -772,10 +773,19 @@ func baseValue(rec *model.Record, proj string, i int, d model.Date) float64 {
 	case model.KindAccount:
 		if a := view.Account(model.AccountID(m.Target.ID)); a != nil {
 			v = a.StatedRate
+			if m.Property == model.PropDefault {
+				v = a.Default.At(d)
+			}
 		}
 	case model.KindAsset:
 		if a := view.Asset(model.AssetID(m.Target.ID)); a != nil {
 			v, _ = a.Params[model.PropGrowth].At(d)
+			if m.Property == model.PropDefault {
+				v = a.Default.At(d)
+				if acct, ok := model.AccountOfDefaultAsset(a.ID); ok {
+					v = view.Account(acct).Default.At(d)
+				}
+			}
 		}
 	case model.KindGlobal:
 		v, _ = rec.Globals[model.PropInflation].At(d)
@@ -814,7 +824,7 @@ func objectText(rec *model.Record, o model.ObjectRef) string {
 func propertiesFor(kind model.ObjectKind) []string {
 	switch kind {
 	case model.KindAccount, model.KindAsset:
-		return []string{model.PropGrowth}
+		return []string{model.PropGrowth, model.PropDefault}
 	case model.KindBudgetItem:
 		return []string{model.PropAmount, model.PropGrowth, propEndsOn}
 	case model.KindGlobal:
@@ -1077,8 +1087,11 @@ func (t *projTab) addForm(p *model.Projection) {
 		t.label("From (optional)")
 		imgui.SetNextItemWidth(imgui.FontSize() * 16)
 		imgui.InputTextWithHint("##addstart", "always; or "+dateLayout, &t.addStart, 0, nil)
+		t.label("To (optional)")
+		imgui.SetNextItemWidth(imgui.FontSize() * 16)
+		imgui.InputTextWithHint("##addend", "no end; or "+dateLayout+", needs a start", &t.addEnd, 0, nil)
 	}
-	addButton(modProblem(rec, p.Name, t.addKind, t.addObj, t.addProp, t.addMode, t.addValue, t.addStart), func() { t.addMod(p.Name) })
+	addButton(modProblem(rec, p.Name, t.addKind, t.addObj, t.addProp, t.addMode, t.addValue, t.addStart, t.addEnd), func() { t.addMod(p.Name) })
 }
 
 // addButton draws the Add button, disabled with the reason beside it while problem is not empty.
@@ -1101,15 +1114,18 @@ func valueHint(prop string, mode model.Mode) string {
 	if prop == model.PropAmount {
 		return "amount, e.g. 1500"
 	}
+	if prop == model.PropDefault {
+		return "balance, e.g. 25000"
+	}
 	return "percent, e.g. 4"
 }
 
 // addMod adds the modification the Add form describes, unless modProblem finds one. It reports whether it did.
 func (t *projTab) addMod(proj string) bool {
-	if modProblem(t.a.rec, proj, t.addKind, t.addObj, t.addProp, t.addMode, t.addValue, t.addStart) != "" {
+	if modProblem(t.a.rec, proj, t.addKind, t.addObj, t.addProp, t.addMode, t.addValue, t.addStart, t.addEnd) != "" {
 		return false
 	}
-	m, _ := newMod(t.addKind, t.addObj, t.addProp, t.addMode, t.addValue, t.addStart)
+	m, _ := newMod(t.addKind, t.addObj, t.addProp, t.addMode, t.addValue, t.addStart, t.addEnd)
 	if !t.a.edit("add modification", func() (*ops.Result, error) {
 		if from, ends := ops.EndedOn(m); ends && t.addProp == propEndsOn {
 			return ops.EndItem(t.a.st, t.a.rec, proj, t.addObj, from, ops.Options{})
@@ -1118,14 +1134,14 @@ func (t *projTab) addMod(proj string) bool {
 	}) {
 		return false
 	}
-	t.addValue, t.addStart = "", ""
+	t.addValue, t.addStart, t.addEnd = "", "", ""
 	return true
 }
 
 // ---- Parsing and formatting.
 
-// newMod builds the modification the Add form describes: the value from the optional start date on, or for propEndsOn what ops.EndItem stores, from the date in start. ops validates it.
-func newMod(kind model.ObjectKind, obj, prop string, mode model.Mode, value, start string) (model.Modification, error) {
+// newMod builds the modification the Add form describes: the value from the optional start date to the optional end date (inclusive, and needing a start), or for propEndsOn what ops.EndItem stores, from the date in start. ops validates it.
+func newMod(kind model.ObjectKind, obj, prop string, mode model.Mode, value, start, end string) (model.Modification, error) {
 	if prop == propEndsOn {
 		d, err := needDate(start, "the date it ends on")
 		if err != nil {
@@ -1148,7 +1164,20 @@ func newMod(kind model.ObjectKind, obj, prop string, mode model.Mode, value, sta
 		}
 		from = &d
 	}
-	return model.Modification{Target: model.ObjectRef{Kind: kind, ID: obj}, Property: prop, Mode: mode, Values: scheduleFrom(v, from)}, nil
+	values := scheduleFrom(v, from)
+	if s := strings.TrimSpace(end); s != "" {
+		if from == nil {
+			return model.Modification{}, errors.New("an end date needs a start date")
+		}
+		d, err := parseDate(s)
+		if err != nil {
+			return model.Modification{}, err
+		}
+		if values, err = model.NewSchedule(model.Segment{From: *from, End: &d, Value: v}); err != nil {
+			return model.Modification{}, err
+		}
+	}
+	return model.Modification{Target: model.ObjectRef{Kind: kind, ID: obj}, Property: prop, Mode: mode, Values: values}, nil
 }
 
 // parseDate reads a date written as YYYY-MM-DD.
@@ -1161,9 +1190,9 @@ func parseDate(s string) (model.Date, error) {
 	return model.D(y, m, d), nil
 }
 
-// parseValue reads a property's value: a percentage for rates (the % sign is optional), else a number. In scale mode the value is the percentage change, so -30 reads as the multiplier 0.7.
+// parseValue reads a property's value: a percentage for rates (the % sign is optional), else a number (an amount or a default balance). In scale mode the value is the percentage change, so -30 reads as the multiplier 0.7.
 func parseValue(prop string, mode model.Mode, s string) (float64, error) {
-	rate := prop != model.PropAmount
+	rate := prop != model.PropAmount && prop != model.PropDefault
 	num := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "%"))
 	v, err := strconv.ParseFloat(num, 64)
 	if err != nil || v != v || v > 1e15 || v < -1e15 {
@@ -1183,7 +1212,7 @@ func formatValue(prop string, mode model.Mode, v float64) string {
 	if mode == model.ModeScale {
 		return trimFloat((v-1)*100) + "%"
 	}
-	if prop == model.PropAmount {
+	if prop == model.PropAmount || prop == model.PropDefault {
 		return trimFloat(v)
 	}
 	return trimFloat(v*100) + "%"

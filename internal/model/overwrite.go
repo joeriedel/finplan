@@ -60,7 +60,7 @@ type modRef struct {
 
 // OverwrittenMods reports, for each of the projection's own modifications (by index), the later modification that
 // fully replaces it for some account it covers, or nil. Modifications apply in the order of the projection's
-// chain, root first, each in list order, so later means later in that order. Only amount, growth and inflation
+// chain, root first, each in list order, so later means later in that order. Only amount, growth, default and inflation
 // modifications can be overwritten; an item addition, or a target that does not exist, is never overwritten.
 func (r *Record) OverwrittenMods(name string) ([]*Overwrite, error) {
 	chain, err := r.Chain(name)
@@ -94,6 +94,16 @@ func (r *Record) OverwrittenMods(name string) ([]*Overwrite, error) {
 			continue
 		}
 		var ow *Overwrite
+		if early.mod.Property == PropDefault {
+			// A default is read per target, not per account under it, so only a modification of the same target replaces it.
+			for _, late := range order[k+1:] {
+				if !late.mod.IsScale() && late.mod.Target == early.mod.Target && late.mod.Property == PropDefault && late.mod.Values.Covers(early.mod.Values) {
+					ow = &Overwrite{Projection: late.proj, Index: late.index}
+				}
+			}
+			out[early.index] = ow
+			continue
+		}
 		switch early.mod.Target.Kind {
 		case KindBudgetItem, KindGlobal:
 			if early.mod.Property == PropAddItem {

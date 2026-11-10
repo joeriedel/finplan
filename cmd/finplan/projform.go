@@ -40,14 +40,14 @@ func reasonOf(err error) string {
 }
 
 // modProblem says why the modification the Add form describes cannot be added to the projection, or "" if it can. What the form cannot parse comes first; the rest is what ops.AddMod and ops.EndItem refuse.
-func modProblem(rec *model.Record, proj string, kind model.ObjectKind, obj, prop string, mode model.Mode, value, start string) string {
+func modProblem(rec *model.Record, proj string, kind model.ObjectKind, obj, prop string, mode model.Mode, value, start, end string) string {
 	if kind != model.KindGlobal && obj == "" {
 		return "pick an object"
 	}
 	if prop == "" {
 		return "pick a property"
 	}
-	m, err := newMod(kind, obj, prop, mode, value, start)
+	m, err := newMod(kind, obj, prop, mode, value, start, end)
 	if err != nil {
 		return err.Error()
 	}

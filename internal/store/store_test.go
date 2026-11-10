@@ -964,3 +964,18 @@ func TestTryCorrectAndTryVoidStoreNothing(t *testing.T) {
 		t.Errorf("unknown entry: %v", err)
 	}
 }
+
+func TestDefaultBalanceModRoundTrip(t *testing.T) {
+	s, _ := openTemp(t)
+	want := demodata.Family()
+	end := model.D(2024, 6, 30)
+	p := want.Projection("New job")
+	p.Mods = append(p.Mods,
+		model.Modification{Target: model.ObjectRef{Kind: model.KindAccount, ID: string(demodata.Home)}, Property: model.PropDefault, Values: model.MustSchedule(model.Segment{From: model.D(2024, 1, 1), End: &end, Value: 250000})},
+		model.Modification{Target: model.ObjectRef{Kind: model.KindAsset, ID: "retirement"}, Property: model.PropDefault, Mode: model.ModeScale, Values: model.MustSchedule(model.Segment{From: model.D(2024, 1, 1), End: &end, Value: 0.8})},
+	)
+	mustSave(t, s, want)
+	if got := mustLoad(t, s); !reflect.DeepEqual(got, want) {
+		t.Fatal("default balance modifications did not round-trip")
+	}
+}

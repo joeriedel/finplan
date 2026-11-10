@@ -89,7 +89,7 @@ func TestScenarioNewJobInTheGUI(t *testing.T) {
 	base := balanceOn(t, a, demodata.Checking, demodata.ProjBase, endOfYear)
 
 	pt.addKind, pt.addObj, pt.addProp, pt.addStart = model.KindBudgetItem, "salary-a", propEndsOn, ""
-	if got := modProblem(a.rec, name, pt.addKind, pt.addObj, pt.addProp, pt.addMode, pt.addValue, pt.addStart); !strings.Contains(got, "date") {
+	if got := modProblem(a.rec, name, pt.addKind, pt.addObj, pt.addProp, pt.addMode, pt.addValue, pt.addStart, pt.addEnd); !strings.Contains(got, "date") {
 		t.Errorf("no end date: %q", got)
 	}
 	pt.addStart = "2027-03-01"
@@ -310,16 +310,16 @@ func TestScenarioIncompleteModification(t *testing.T) {
 		{"property of another kind", model.KindAccount, "savings", model.PropAmount, "5", "", "growth"},
 		{"fine", model.KindAccount, "savings", model.PropGrowth, "4", "", ""},
 	} {
-		got := modProblem(rec, job, c.kind, c.obj, c.prop, "", c.value, c.start)
+		got := modProblem(rec, job, c.kind, c.obj, c.prop, "", c.value, c.start, "")
 		if c.want == "" && got != "" || !strings.Contains(got, c.want) {
 			t.Errorf("%s: %q, want %q", c.what, got, c.want)
 		}
 	}
 
-	if got := modProblem(rec, job, model.KindBudgetItem, "salary-a", model.PropGrowth, model.ModeScale, "-5", ""); got != "" {
+	if got := modProblem(rec, job, model.KindBudgetItem, "salary-a", model.PropGrowth, model.ModeScale, "-5", "", ""); got != "" {
 		t.Errorf("a scale of a budget item's growth: %q", got)
 	}
-	if got := modProblem(rec, job, model.KindBudgetItem, "salary-a", model.PropAmount, model.ModeScale, "-150", ""); !strings.Contains(got, "negative") {
+	if got := modProblem(rec, job, model.KindBudgetItem, "salary-a", model.PropAmount, model.ModeScale, "-150", "", ""); !strings.Contains(got, "negative") {
 		t.Errorf("a scale below zero: %q", got)
 	}
 

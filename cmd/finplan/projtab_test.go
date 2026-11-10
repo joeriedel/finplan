@@ -5,6 +5,7 @@ package main
 
 import (
 	"cmp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -91,17 +92,17 @@ func TestConstantOfAndDescribe(t *testing.T) {
 }
 
 func TestNewMod(t *testing.T) {
-	m, err := newMod(model.KindGlobal, "", model.PropInflation, "", "3", "")
+	m, err := newMod(model.KindGlobal, "", model.PropInflation, "", "3", "", "")
 	if err != nil || m.Target.Kind != model.KindGlobal || m.Property != model.PropInflation || m.Values.Segments()[0].Value != 0.03 {
 		t.Errorf("global: %+v %v", m, err)
 	}
-	if _, err := newMod(model.KindAccount, "x", model.PropGrowth, "", "3", "never"); err == nil {
+	if _, err := newMod(model.KindAccount, "x", model.PropGrowth, "", "3", "never", ""); err == nil {
 		t.Error("bad date accepted")
 	}
 }
 
 func TestNewScaleMod(t *testing.T) {
-	m, err := newMod(model.KindBudgetItem, "dining", model.PropAmount, model.ModeScale, "-30", "2026-01-01")
+	m, err := newMod(model.KindBudgetItem, "dining", model.PropAmount, model.ModeScale, "-30", "2026-01-01", "")
 	if err != nil || m.Mode != model.ModeScale || m.Property != model.PropAmount {
 		t.Fatalf("scale: %+v %v", m, err)
 	}
@@ -199,5 +200,42 @@ func TestModeValuesConvertOnAFlip(t *testing.T) {
 	segs := modeValues(r, "p", 0, model.ModeScale).Segments()
 	if len(segs) != 1 || segs[0].From != model.D(2028, 1, 1) || segs[0].End == nil || *segs[0].End != end || segs[0].Value != 1 {
 		t.Errorf("segments %+v", segs)
+	}
+}
+
+func TestDefaultBalanceProperty(t *testing.T) {
+	for _, k := range []model.ObjectKind{model.KindAccount, model.KindAsset} {
+		if !slices.Contains(propertiesFor(k), model.PropDefault) {
+			t.Errorf("%s: no default balance property", k)
+		}
+	}
+	if slices.Contains(propertiesFor(model.KindBudgetItem), model.PropDefault) || slices.Contains(propertiesFor(model.KindGlobal), model.PropDefault) {
+		t.Error("default balance offered for an item or the global")
+	}
+	v, err := parseValue(model.PropDefault, model.ModeSet, "-2500.5")
+	if err != nil || v != -2500.5 {
+		t.Errorf("parse set = %v %v, want money as typed", v, err)
+	}
+	if got := formatValue(model.PropDefault, model.ModeSet, 25000); got != "25000" {
+		t.Errorf("format set = %q", got)
+	}
+	if v, _ := parseValue(model.PropDefault, model.ModeScale, "-20"); v != 0.8 {
+		t.Errorf("parse scale = %v, want 0.8", v)
+	}
+	if got := formatValue(model.PropDefault, model.ModeScale, 0.8); got != "-20%" {
+		t.Errorf("format scale = %q", got)
+	}
+	m, err := newMod(model.KindAccount, "x", model.PropDefault, "", "9000", "2025-01-01", "2025-06-30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if segs := m.Values.Segments(); len(segs) != 1 || segs[0].Value != 9000 || segs[0].End == nil || *segs[0].End != model.D(2025, 6, 30) {
+		t.Errorf("ranged default: %+v", segs)
+	}
+	if _, err := newMod(model.KindAccount, "x", model.PropDefault, "", "9000", "", "2025-06-30"); err == nil {
+		t.Error("an end without a start accepted")
+	}
+	if _, err := newMod(model.KindAccount, "x", model.PropDefault, "", "9000", "2025-07-01", "2025-06-30"); err == nil {
+		t.Error("an end before the start accepted")
 	}
 }
