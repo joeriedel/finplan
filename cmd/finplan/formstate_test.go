@@ -36,6 +36,26 @@ func TestUntouchedForms(t *testing.T) {
 	}
 }
 
+func TestUntouchedProjectionForms(t *testing.T) {
+	if !(acctForm{}).untouched() || !(acctForm{name: " "}).untouched() {
+		t.Error("an empty acctForm should be untouched")
+	}
+	for _, f := range []acctForm{{name: "x"}, {rate: "3"}, {opening: "5"}, {from: "2030-01-01"}, {typ: model.AccountType("x")}, {tax: model.TaxTreatment("x")}} {
+		if f.untouched() {
+			t.Errorf("acctForm %+v should be touched", f)
+		}
+	}
+	if !(settingForm{}).untouched() || (settingForm{asset: model.AssetID("x")}).untouched() || (settingForm{start: "2030-01-01"}).untouched() || (settingForm{override: 1}).untouched() {
+		t.Error("settingForm.untouched wrong")
+	}
+	if !newItemForm().untouched() || (itemForm{name: "x"}).untouched() || (itemForm{amount: "5"}).untouched() || (itemForm{account: model.AccountID("x")}).untouched() {
+		t.Error("itemForm.untouched wrong")
+	}
+	if !modUntouched("", " ", "", "") || modUntouched("x", "", "", "") || modUntouched("", "5", "", "") || modUntouched("", "", "2030-01-01", "") || modUntouched("", "", "", "2031-01-01") {
+		t.Error("modUntouched wrong")
+	}
+}
+
 func TestTypedInvalidShowsReason(t *testing.T) {
 	a := demoApp(t)
 	d := entryDraft{date: "soon"}

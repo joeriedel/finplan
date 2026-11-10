@@ -460,7 +460,7 @@ func (t *assetsTab) members(asset *model.Asset, row *assetRow) {
 		imgui.TextDisabled("A rule takes in every account that matches, including accounts added later.")
 	}
 	t.label("")
-	formButton("Add", memberProblem(t.a.st, t.a.rec, asset.ID, *f), f.untouched(), func() {
+	formButton("Add##member", memberProblem(t.a.st, t.a.rec, asset.ID, *f), f.untouched(), func() {
 		m, _ := f.member()
 		if t.a.edit("add member", func() (*ops.Result, error) {
 			return ops.AddMember(t.a.st, t.a.rec, asset.ID, m, ops.Options{})

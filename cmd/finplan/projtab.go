@@ -1209,7 +1209,7 @@ func (t *projTab) addForm(p *model.Projection) {
 			t.addItem = newItemForm()
 		}
 		t.itemFields("newitem", t.addItem, true, t.addItem.set, nil)
-		addButton(itemProblem(effective(rec, p.Name), t.addItem), func() { t.addNewItem(p.Name) })
+		formButton("Add##newitem", itemProblem(effective(rec, p.Name), t.addItem), t.addItem.untouched(), func() { t.addNewItem(p.Name) })
 		return
 	}
 
@@ -1254,11 +1254,8 @@ func (t *projTab) addForm(p *model.Projection) {
 		imgui.SetNextItemWidth(imgui.FontSize() * 16)
 		imgui.InputTextWithHint("##addend", "no end; or "+dateHint+", needs a start", &t.addEnd, 0, nil)
 	}
-	addButton(modProblem(rec, p.Name, t.addKind, t.addObj, t.addProp, t.addMode, t.addValue, t.addStart, t.addEnd), func() { t.addMod(p.Name) })
+	formButton("Add##addmod", modProblem(rec, p.Name, t.addKind, t.addObj, t.addProp, t.addMode, t.addValue, t.addStart, t.addEnd), modUntouched(t.addObj, t.addValue, t.addStart, t.addEnd), func() { t.addMod(p.Name) })
 }
-
-// addButton draws the Add button, disabled with the reason beside it while problem is not empty.
-func addButton(problem string, add func()) { actionButton("Add", problem, add) }
 
 // actionButton draws a button labelled label, disabled with the reason beside it while problem is not empty.
 func actionButton(label, problem string, do func()) { formButton(label, problem, false, do) }

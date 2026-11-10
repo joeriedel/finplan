@@ -33,3 +33,22 @@ func (f memberForm) untouched() bool {
 	}
 	return true
 }
+
+// untouched reports whether nothing has been typed or picked in the form.
+func (f acctForm) untouched() bool {
+	return allBlank(f.name, f.rate, f.opening, f.from) && f.typ == "" && f.tax == ""
+}
+
+// untouched reports whether nothing has been picked or typed in the form: no asset, no start and the default override.
+func (f settingForm) untouched() bool { return f.asset == "" && allBlank(f.start) && f.override == 0 }
+
+// untouched reports whether nothing has been typed in the form and no account picked; the kind and the recurrence always hold a value.
+func (f itemForm) untouched() bool {
+	return allBlank(f.name, f.amount, f.growth, f.date, f.day, f.month, f.end, f.day2, f.count) &&
+		f.account == "" && f.from == "" && f.to == ""
+}
+
+// modUntouched reports whether nothing has been picked or typed in the Add modification form: no object and no value or dates. The kind, property and how always hold a value.
+func modUntouched(obj, value, start, end string) bool {
+	return obj == "" && allBlank(value, start, end)
+}

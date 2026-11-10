@@ -308,7 +308,7 @@ func (t *acctTab) txForm(acct *model.Account) {
 	imgui.SetNextItemWidth(em * 16)
 	imgui.InputTextWithHint("##txmemo", "optional", &d.memo, 0, nil)
 	t.label("")
-	formButton("Add", txProblem(t.a.st, t.a.rec, acct.ID, *d), d.untouched(), func() {
+	formButton("Add##entry", txProblem(t.a.st, t.a.rec, acct.ID, *d), d.untouched(), func() {
 		date, amount, _ := d.draftValues()
 		tx := model.Transaction{Date: date, Amount: amount, Kind: d.kind, Counter: d.counter, Memo: d.memo}
 		if t.a.addEntry("record transaction", func() (*ops.Result, error) {

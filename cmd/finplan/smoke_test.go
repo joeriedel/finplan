@@ -32,6 +32,7 @@ func smokeEnv(tmp string) []string {
 	return append(os.Environ(), "SDL_VIDEO_DRIVER=offscreen", "TMPDIR="+tmp)
 }
 
+// TestScreenshotSmoke draws every tab, with selections and editors that put the forms on screen, and fails on any widget ID conflict (--check-ids).
 func TestScreenshotSmoke(t *testing.T) {
 	bin := buildBinary(t)
 	outDir := os.Getenv("FINPLAN_SMOKE_OUT")
@@ -50,6 +51,7 @@ func TestScreenshotSmoke(t *testing.T) {
 		{"accounts", "Accounts", "", ""},
 		{"budget", "Budget", "", ""},
 		{"markets", "Markets", "", ""},
+		{"projections-selected", "Projections", "Base", ""},
 		{"accounts-selected", "Accounts", "Checking", ""},
 		{"assets-selected", "Assets", "Net worth", ""},
 		{"add-line", "Graph", "", "add-line"},
@@ -60,14 +62,14 @@ func TestScreenshotSmoke(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			path := filepath.Join(outDir, c.name+".png")
 			os.Remove(path)
-			args := []string{"--demo", "--screenshot", path, "--tab", c.tab}
+			args := []string{"--demo", "--screenshot", path, "--tab", c.tab, "--check-ids"}
 			if c.sel != "" {
 				args = append(args, "--select", c.sel)
 			}
 			if c.open != "" {
 				args = append(args, "--open", c.open)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, bin, args...)
 			cmd.Env = smokeEnv(tmp)
@@ -108,6 +110,8 @@ func TestScreenshotBadArguments(t *testing.T) {
 		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Assets", "--select", "Net worth", "--open", "add-line"},
 		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Projections", "--open", "target"},
 		{"--open", "add-line"},
+		{"--check-ids"},
+		{"--demo", "--check-ids"},
 	} {
 		cmd := exec.Command(bin, args...)
 		cmd.Env = smokeEnv(t.TempDir())

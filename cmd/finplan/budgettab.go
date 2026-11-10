@@ -222,5 +222,5 @@ func (t *budgetTab) addForm() {
 	if imgui.Checkbox("rises with inflation##newitem", &indexed) {
 		t.addItem.set("indexed", boolText(indexed))
 	}
-	addButton(itemProblem(t.a.rec, t.addItem), func() { t.addNewItem() })
+	formButton("Add##newitem", itemProblem(t.a.rec, t.addItem), t.addItem.untouched(), func() { t.addNewItem() })
 }

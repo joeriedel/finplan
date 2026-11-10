@@ -274,7 +274,7 @@ func (t *projTab) addAccountForm(p *model.Projection) {
 	imgui.SameLine()
 	input("from", "opens on", dateHint, f.from, em*8)
 	t.label("")
-	addButton(acctProblem(t.a.st, t.a.rec, p.Name, *f), func() {
+	formButton("Add##projaccount", acctProblem(t.a.st, t.a.rec, p.Name, *f), f.untouched(), func() {
 		a, _ := f.account()
 		if t.a.edit("add account", func() (*ops.Result, error) {
 			return ops.AddProjAccount(t.a.st, t.a.rec, p.Name, a, ops.Options{})

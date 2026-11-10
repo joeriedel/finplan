@@ -28,6 +28,8 @@ type shotOptions struct {
 	open string
 	// openID is the id of that picker.
 	openID string
+	// checkIDs asks for the widget ID conflict scan after the screenshot is saved.
+	checkIDs bool
 }
 
 // openNames are the pickers --open can show, each with the tab it needs and the id the code that draws it asks takeOpen about.

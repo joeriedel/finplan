@@ -240,7 +240,7 @@ func (t *projTab) addSettingForm(p *model.Projection) {
 	}
 	t.label("")
 	s, problem := f.setting()
-	addButton(problem, func() {
+	formButton("Add##projsetting", problem, f.untouched(), func() {
 		if t.a.edit("add start setting", func() (*ops.Result, error) {
 			return ops.AddAssetSetting(t.a.st, t.a.rec, p.Name, s, ops.Options{})
 		}) {

@@ -377,7 +377,7 @@ func (t *acctTab) snapshots(acct *model.Account) {
 	imgui.SetNextItemWidth(em * 10)
 	imgui.InputTextWithHint("##snapbal", "negative for a debt", &t.snapBalance, 0, nil)
 	t.label("")
-	formButton("Add", snapshotProblem(t.a.st, t.a.rec, acct.ID, t.snapDate, t.snapBalance), allBlank(t.snapDate, t.snapBalance), func() {
+	formButton("Add##snapshot", snapshotProblem(t.a.st, t.a.rec, acct.ID, t.snapDate, t.snapBalance), allBlank(t.snapDate, t.snapBalance), func() {
 		d, _ := parseDate(strings.TrimSpace(t.snapDate))
 		v, _ := parseValue(model.PropAmount, model.ModeSet, t.snapBalance)
 		if t.a.addEntry("record balance", func() (*ops.Result, error) {
@@ -419,7 +419,7 @@ func (t *acctTab) defaults(acct *model.Account) {
 	imgui.SetNextItemWidth(em * 10)
 	imgui.InputTextWithHint("##ivvalue", "e.g. 25000", &t.ivValue, 0, nil)
 	t.label("")
-	formButton("Add", intervalProblem(t.a.st, t.a.rec, acct.ID, t.ivFrom, t.ivTo, t.ivValue), allBlank(t.ivFrom, t.ivTo, t.ivValue), func() {
+	formButton("Add##interval", intervalProblem(t.a.st, t.a.rec, acct.ID, t.ivFrom, t.ivTo, t.ivValue), allBlank(t.ivFrom, t.ivTo, t.ivValue), func() {
 		iv, _ := interval(t.ivFrom, t.ivTo, t.ivValue)
 		if t.a.edit("add default balance", func() (*ops.Result, error) {
 			return ops.AddDefault(t.a.st, t.a.rec, model.DefaultAssetID(acct.ID), iv, ops.Options{})

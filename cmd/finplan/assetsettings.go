@@ -80,7 +80,7 @@ func (t *assetsTab) defaults(asset *model.Asset) {
 	imgui.SetNextItemWidth(em * 8)
 	imgui.InputTextWithHint("##ivvalue", "balance", &t.ivValue, 0, nil)
 	imgui.TextDisabled("Dates are " + dateHint + ".")
-	formButton("Add", addIntervalProblem(t.a.st, t.a.rec, id, t.ivFrom, t.ivTo, t.ivValue), allBlank(t.ivFrom, t.ivTo, t.ivValue), func() {
+	formButton("Add##interval", addIntervalProblem(t.a.st, t.a.rec, id, t.ivFrom, t.ivTo, t.ivValue), allBlank(t.ivFrom, t.ivTo, t.ivValue), func() {
 		iv, _ := interval(t.ivFrom, t.ivTo, t.ivValue)
 		if t.a.edit("add default balance", func() (*ops.Result, error) {
 			return ops.AddDefault(t.a.st, t.a.rec, id, iv, ops.Options{})
