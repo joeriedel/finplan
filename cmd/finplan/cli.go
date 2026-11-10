@@ -247,7 +247,7 @@ func (c *call) dbPath() (string, error) {
 	return path, nil
 }
 
-// openWrite opens the selected database for writing, migrating it if it is older. It never creates a database.
+// openWrite opens the selected database for writing, migrating it if it is older. It never creates a database. A dry run never migrates: it refuses a database that needs it, checking the schema read-only before it opens the database for the rolled-back transactions of the entry edits.
 func (c *call) openWrite() (*store.Store, error) {
 	if c.global.demo {
 		return c.openDemoStore()
@@ -258,6 +258,16 @@ func (c *call) openWrite() (*store.Store, error) {
 	}
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return nil, failErr("no_database", "there is no database at %s", path)
+	}
+	if c.options().DryRun {
+		ro, err := store.OpenReadOnly(path)
+		if err != nil {
+			if errors.Is(err, store.ErrOldSchema) {
+				return nil, failErr("old_schema", "the database at %s was written by an older version of finplan, and a dry run does not migrate the database: run the command without --dry-run, or open the database with the app, to upgrade it first", path)
+			}
+			return nil, openErr(err, path)
+		}
+		ro.Close()
 	}
 	st, err := store.Open(path)
 	if err != nil {

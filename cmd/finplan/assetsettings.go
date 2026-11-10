@@ -79,8 +79,8 @@ func (t *assetsTab) defaults(asset *model.Asset) {
 	imgui.SameLine()
 	imgui.SetNextItemWidth(em * 8)
 	imgui.InputTextWithHint("##ivvalue", "balance", &t.ivValue, 0, nil)
-	imgui.TextDisabled("Dates are " + dateLayout + ".")
-	addButton(addIntervalProblem(t.a.st, t.a.rec, id, t.ivFrom, t.ivTo, t.ivValue), func() {
+	imgui.TextDisabled("Dates are " + dateHint + ".")
+	formButton("Add", addIntervalProblem(t.a.st, t.a.rec, id, t.ivFrom, t.ivTo, t.ivValue), allBlank(t.ivFrom, t.ivTo, t.ivValue), func() {
 		iv, _ := interval(t.ivFrom, t.ivTo, t.ivValue)
 		if t.a.edit("add default balance", func() (*ops.Result, error) {
 			return ops.AddDefault(t.a.st, t.a.rec, id, iv, ops.Options{})
@@ -135,7 +135,7 @@ func (t *assetsTab) params(asset *model.Asset) {
 		imgui.SetNextItemWidth(em * 8)
 		imgui.InputTextWithHint("##growthnew", "percent, e.g. 4", &t.growthNew, 0, nil)
 		imgui.SameLine()
-		actionButton("Set", growthConstantProblem(t.a.st, t.a.rec, id, t.growthNew), func() {
+		formButton("Set", growthConstantProblem(t.a.st, t.a.rec, id, t.growthNew), allBlank(t.growthNew), func() {
 			if t.a.edit("set growth", func() (*ops.Result, error) {
 				return setGrowthConstant(t.a.st, t.a.rec, id, t.growthNew, ops.Options{})
 			}) {

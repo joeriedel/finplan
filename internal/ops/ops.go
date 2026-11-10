@@ -164,13 +164,15 @@ func errUnknown(name string) error {
 	return refuse(ErrUnknownProjection, "there is no projection named %q", name)
 }
 
-// commit saves next and, after a rename, rewrites the presets that name the projection.
+// commit saves next (a dry run only checks that the record could be saved and restored) and, after a rename, rewrites the presets that name the projection.
 func commit(st *store.Store, next *model.Record, res Result, o Options) (*Result, error) {
 	res.Record = next
-	if !o.DryRun {
-		if err := st.Save(next); err != nil {
-			return nil, &SaveError{err}
-		}
+	save := st.Save
+	if o.DryRun {
+		save = store.CheckSave
+	}
+	if err := save(next); err != nil {
+		return nil, &SaveError{err}
 	}
 	if res.Rename != nil {
 		renamePresets(st, &res, o)

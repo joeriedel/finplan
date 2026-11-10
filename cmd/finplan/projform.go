@@ -354,7 +354,7 @@ func (f itemForm) item(today model.Date) (model.BudgetItem, error) {
 
 func needDate(s, what string) (model.Date, error) {
 	if strings.TrimSpace(s) == "" {
-		return 0, fmt.Errorf("enter %s as %s", what, dateLayout)
+		return 0, fmt.Errorf("enter %s as %s", what, dateHint)
 	}
 	return parseDate(strings.TrimSpace(s))
 }

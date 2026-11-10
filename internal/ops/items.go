@@ -74,6 +74,9 @@ func checkItemAs(rec *model.Record, it model.BudgetItem, existing *model.BudgetI
 	if start == nil && !keepAbsent && !(legacy && r.Anchor != 0) {
 		return it, refuse(ErrInvalidValue, "a budget item needs a start date")
 	}
+	if r.Kind == model.OneTime && start != nil && r.Anchor != 0 && *start != r.Anchor {
+		return it, refuse(ErrInvalidValue, "a one-time item happens on one date: its start %v and its date %v differ", *start, r.Anchor)
+	}
 	switch r.Kind {
 	case model.OneTime, model.Weekly, model.Biweekly, model.Quarterly:
 	case model.Monthly:

@@ -10,7 +10,7 @@ import (
 
 // Record is everything entered: accounts, assets, the base budget, global parameters and projections.
 // Today is the record's reference date; it stands in for a clock so the engine stays a pure function.
-// Change it through the Add methods, which keep the indexes and the member sequence consistent.
+// Change the accounts, assets and members only through the Add and Remove methods, which keep the indexes and the member sequence consistent; the budget, globals, classes and projections are plain fields. An edit changes a copy, a Clone or (for projections only) an EditableCopy, so the original stays as it was until the edit is accepted.
 type Record struct {
 	Today       Date
 	Accounts    []*Account

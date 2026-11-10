@@ -1071,3 +1071,18 @@ func TestFormat4BudgetDocumentsLoadUnchanged(t *testing.T) {
 		t.Fatal("resaved items differ")
 	}
 }
+
+func TestCheckSave(t *testing.T) {
+	rec := demodata.Family()
+	if err := CheckSave(rec); err != nil {
+		t.Fatal(err)
+	}
+	rec.Projections = append(rec.Projections, &model.Projection{Name: rec.Projections[0].Name})
+	if err := CheckSave(rec); err == nil || !strings.Contains(err.Error(), "cannot be restored") {
+		t.Errorf("a record Load cannot rebuild: %v", err)
+	}
+	s, _ := openTemp(t)
+	if err := s.Save(rec); err == nil || !strings.Contains(err.Error(), "cannot be restored") {
+		t.Errorf("Save: %v", err)
+	}
+}

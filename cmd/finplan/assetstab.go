@@ -291,7 +291,7 @@ func (t *assetsTab) newForm() {
 	imgui.SetNextItemWidth(imgui.FontSize() * 16)
 	imgui.InputTextWithHint("##newasset", "e.g. Emergency fund", &t.newName, 0, nil)
 	imgui.SameLine()
-	addButton(newAssetProblem(t.a.st, t.a.rec, t.newName), func() {
+	formButton("Add", newAssetProblem(t.a.st, t.a.rec, t.newName), allBlank(t.newName), func() {
 		var added model.AssetID
 		if t.a.edit("add asset", func() (*ops.Result, error) {
 			res, err := ops.NewAsset(t.a.st, t.a.rec, t.newName, "", ops.Options{})
@@ -460,7 +460,7 @@ func (t *assetsTab) members(asset *model.Asset, row *assetRow) {
 		imgui.TextDisabled("A rule takes in every account that matches, including accounts added later.")
 	}
 	t.label("")
-	addButton(memberProblem(t.a.st, t.a.rec, asset.ID, *f), func() {
+	formButton("Add", memberProblem(t.a.st, t.a.rec, asset.ID, *f), f.untouched(), func() {
 		m, _ := f.member()
 		if t.a.edit("add member", func() (*ops.Result, error) {
 			return ops.AddMember(t.a.st, t.a.rec, asset.ID, m, ops.Options{})

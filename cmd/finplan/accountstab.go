@@ -159,7 +159,7 @@ func describeInterval(iv model.Interval) string {
 	if iv.To != nil {
 		to = iv.To.String()
 	}
-	return fmt.Sprintf("%s to %s: %s", from, to, trimFloat(iv.Value))
+	return fmt.Sprintf("%s to %s: %s", from, to, formatDollars(iv.Value))
 }
 
 // fieldEditor keeps the typed text and the refusal of the in-place text fields of a tab, by field id.
@@ -372,12 +372,12 @@ func (t *acctTab) snapshots(acct *model.Account) {
 	}
 	t.label("Date")
 	imgui.SetNextItemWidth(em * 10)
-	imgui.InputTextWithHint("##snapdate", dateLayout, &t.snapDate, 0, nil)
+	imgui.InputTextWithHint("##snapdate", dateHint, &t.snapDate, 0, nil)
 	t.label("Balance")
 	imgui.SetNextItemWidth(em * 10)
 	imgui.InputTextWithHint("##snapbal", "negative for a debt", &t.snapBalance, 0, nil)
 	t.label("")
-	addButton(snapshotProblem(t.a.st, t.a.rec, acct.ID, t.snapDate, t.snapBalance), func() {
+	formButton("Add", snapshotProblem(t.a.st, t.a.rec, acct.ID, t.snapDate, t.snapBalance), allBlank(t.snapDate, t.snapBalance), func() {
 		d, _ := parseDate(strings.TrimSpace(t.snapDate))
 		v, _ := parseValue(model.PropAmount, model.ModeSet, t.snapBalance)
 		if t.a.addEntry("record balance", func() (*ops.Result, error) {
@@ -411,15 +411,15 @@ func (t *acctTab) defaults(acct *model.Account) {
 	}
 	t.label("From")
 	imgui.SetNextItemWidth(em * 10)
-	imgui.InputTextWithHint("##ivfrom", "always; or "+dateLayout, &t.ivFrom, 0, nil)
+	imgui.InputTextWithHint("##ivfrom", "always; or "+dateHint, &t.ivFrom, 0, nil)
 	t.label("To")
 	imgui.SetNextItemWidth(em * 10)
-	imgui.InputTextWithHint("##ivto", "no end; or "+dateLayout, &t.ivTo, 0, nil)
+	imgui.InputTextWithHint("##ivto", "no end; or "+dateHint, &t.ivTo, 0, nil)
 	t.label("Balance")
 	imgui.SetNextItemWidth(em * 10)
 	imgui.InputTextWithHint("##ivvalue", "e.g. 25000", &t.ivValue, 0, nil)
 	t.label("")
-	addButton(intervalProblem(t.a.st, t.a.rec, acct.ID, t.ivFrom, t.ivTo, t.ivValue), func() {
+	formButton("Add", intervalProblem(t.a.st, t.a.rec, acct.ID, t.ivFrom, t.ivTo, t.ivValue), allBlank(t.ivFrom, t.ivTo, t.ivValue), func() {
 		iv, _ := interval(t.ivFrom, t.ivTo, t.ivValue)
 		if t.a.edit("add default balance", func() (*ops.Result, error) {
 			return ops.AddDefault(t.a.st, t.a.rec, model.DefaultAssetID(acct.ID), iv, ops.Options{})
@@ -445,7 +445,7 @@ func (t *acctTab) lifecycle(acct *model.Account) {
 		imgui.TextWrapped("Closing keeps the history and shows the account as 0 after its close date. Only an account without record entries can be deleted; deleting it also deletes the budget items that use it.")
 		t.label("Closes on")
 		imgui.SetNextItemWidth(em * 10)
-		imgui.InputTextWithHint("##closeon", "today; or "+dateLayout, &t.closeOn, 0, nil)
+		imgui.InputTextWithHint("##closeon", "today; or "+dateHint, &t.closeOn, 0, nil)
 		t.label("")
 		actionButton("Close", closeProblem(t.a.st, t.a.rec, acct.ID, t.closeOn), func() {
 			d, _ := closeDate(t.a.rec, t.closeOn)
@@ -520,7 +520,7 @@ func (t *acctTab) addForm() {
 	input("owner", "owner", "optional", f.owner, em*10)
 	imgui.SameLine()
 	input("rate", "rate per year", "percent, e.g. 3", f.rate, em*6)
-	addButton(newAcctProblem(t.a.st, t.a.rec, *f), func() {
+	formButton("Add", newAcctProblem(t.a.st, t.a.rec, *f), f.untouched(), func() {
 		acct, _ := f.account()
 		var added model.AccountID
 		if t.a.edit("add account", func() (*ops.Result, error) {

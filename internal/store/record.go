@@ -353,18 +353,32 @@ func (s *Store) changedSinceLoad(tx *sql.Tx) ([]Entry, error) {
 	return out, nil
 }
 
+// CheckSave runs the check Save makes before it writes: the record must encode, and Load must be able to rebuild it from what Save would write. It writes nothing.
+func CheckSave(r *model.Record) error {
+	_, err := checkRestorable(r)
+	return err
+}
+
+// checkRestorable encodes the record and refuses one that Load could not rebuild.
+func checkRestorable(r *model.Record) ([]docRow, error) {
+	docs, err := encodeRecord(r)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := decodeRecord(docs, nil); err != nil {
+		return nil, fmt.Errorf("store: record cannot be restored: %w", err)
+	}
+	return docs, nil
+}
+
 // Save writes the record in one transaction. Documents are replaced; entries in the model that are
 // not stored yet are appended. Voided entries count as absent, but a model entry equal to any revision of an entry voided or corrected since the most recent Load on this Store is a stale copy and fails the same way. If a stored entry (with its corrections applied) is missing from or
 // changed in the model, or an account with stored entries is gone, Save writes nothing and returns
 // an error matching ErrRecordChanged.
 func (s *Store) Save(r *model.Record) error {
-	docs, err := encodeRecord(r)
+	docs, err := checkRestorable(r)
 	if err != nil {
 		return err
-	}
-	// Refuse to write a record that Load could not rebuild.
-	if _, err := decodeRecord(docs, nil); err != nil {
-		return fmt.Errorf("store: record cannot be restored: %w", err)
 	}
 	tx, err := s.db.Begin()
 	if err != nil {

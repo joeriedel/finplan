@@ -5,7 +5,9 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -813,4 +815,119 @@ func TestCLIDefaultBalanceScenario(t *testing.T) {
 	refusedWrite(t, path, "", 2, "usage", "mod", "add", "Defaults", "--target", "account:home", "--property", "default", "--value", "1", "--end", "2024-06-30")
 	refusedWrite(t, path, "", 2, "usage", "mod", "add", "Defaults", "--target", "account:home", "--property", "default", "--value", "1", "--from", "2024-07-01", "--end", "2024-06-30")
 	refusedWrite(t, path, "", 2, "usage", "mod", "add", "Defaults", "--target", "account:home", "--property", "default", "--end", "2024-06-30")
+}
+
+// modSchedules returns the schedules of the projection's modifications, as projection show prints them.
+func modSchedules(t *testing.T, path, projection string) []json.RawMessage {
+	t.Helper()
+	var p struct {
+		Modifications []struct {
+			Schedule json.RawMessage
+		}
+	}
+	cliJSON(t, &p, "--db", path, "projection", "show", projection)
+	var out []json.RawMessage
+	for _, m := range p.Modifications {
+		out = append(out, m.Schedule)
+	}
+	return out
+}
+
+func TestCLIScheduleFromTheBeginningRoundTrips(t *testing.T) {
+	path := seededFile(t)
+	write(t, path, "", "projection", "new", "Mods")
+	sched := `[{"from": null, "end": "2029-12-31", "value": 0.02}, {"from": "2030-01-01", "end": null, "value": 0.03}]`
+	write(t, path, sched, "mod", "add", "Mods", "--target", "global", "--property", "inflation")
+	// An absent from is the same as a null one.
+	write(t, path, `[{"end": "2029-12-31", "value": 0.02}, {"from": "2030-01-01", "value": 0.03}]`, "mod", "add", "Mods", "--target", "global", "--property", "inflation")
+	shown := modSchedules(t, path, "Mods")
+	if len(shown) != 2 || !strings.Contains(string(shown[0]), `"from":null`) && !strings.Contains(string(shown[0]), `"from": null`) {
+		t.Fatalf("the schedule shown: %s", shown)
+	}
+	var a, b any
+	if json.Unmarshal(shown[0], &a) != nil || json.Unmarshal(shown[1], &b) != nil || !reflect.DeepEqual(a, b) {
+		t.Errorf("null and absent from differ: %s %s", shown[0], shown[1])
+	}
+	// What projection show prints is accepted by mod edit and mod add, and changes nothing.
+	before := dbSnapshot(t, path)
+	w := write(t, path, string(shown[0]), "mod", "edit", "Mods", "0")
+	if w.Changed || !reflect.DeepEqual(before, dbSnapshot(t, path)) {
+		t.Errorf("feeding the shown schedule back changed it: %+v", w)
+	}
+	write(t, path, string(shown[0]), "mod", "add", "Mods", "--target", "global", "--property", "inflation")
+	if again := modSchedules(t, path, "Mods"); len(again) != 3 || !reflect.DeepEqual(again[2], shown[0]) {
+		t.Errorf("round trip: %s", again)
+	}
+}
+
+func TestCLIItemScheduleFromTheBeginningRoundTrips(t *testing.T) {
+	path := seededFile(t)
+	item := `{"id": "daycare", "name": "Daycare", "kind": "expense", "account": "checking", "start": "2027-01-01",
+		"recurrence": {"kind": "monthly", "day": 5},
+		"amount_schedule": [{"from": null, "end": "2029-07-31", "value": 1400}, {"from": "2029-08-01", "end": null, "value": 600}]}`
+	write(t, path, item, "item", "add", "New job")
+	var p struct {
+		Modifications []struct {
+			Item json.RawMessage
+		}
+	}
+	cliJSON(t, &p, "--db", path, "projection", "show", "New job")
+	shown := p.Modifications[len(p.Modifications)-1].Item
+	if !strings.Contains(string(shown), "amount_schedule") {
+		t.Fatalf("the item shown: %s", shown)
+	}
+	before := dbSnapshot(t, path)
+	if w := write(t, path, string(shown), "item", "edit", "New job", "daycare"); w.Changed || !reflect.DeepEqual(before, dbSnapshot(t, path)) {
+		t.Errorf("feeding the shown item back changed it: %+v", w)
+	}
+}
+
+func TestCLIDryRunRefusesDatabaseThatNeedsMigrating(t *testing.T) {
+	path := seededFile(t)
+	version := userVersion(t, path)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, version-1)); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"projection", "new", "Dry", "--dry-run"},
+		{"entry", "add-snapshot", "checking", "--date", "2026-11-01", "--balance", "5", "--dry-run"},
+	} {
+		code, out := wcli(t, "", append([]string{"--db", path}, args...)...)
+		var e struct {
+			Error struct{ Code, Message string }
+		}
+		if code != 1 || json.Unmarshal(out, &e) != nil || e.Error.Code != "old_schema" || !strings.Contains(e.Error.Message, "dry run does not migrate") {
+			t.Errorf("finplan %v exited %d: %s", args, code, out)
+		}
+		if got := userVersion(t, path); got != version-1 {
+			t.Errorf("finplan %v: user_version %d, want %d", args, got, version-1)
+		}
+		if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
+			t.Errorf("finplan %v changed the database", args)
+		}
+	}
+}
+
+func TestCLIOneTimeItemStartMustMatchItsDate(t *testing.T) {
+	path := seededFile(t)
+	item := `{"name": "Gift", "kind": "income", "amount": 5, "account": "checking", "start": "2027-01-01", "recurrence": {"kind": "one-time", "anchor": "2027-02-01"}}`
+	refusedWrite(t, path, item, 1, "invalid", "item", "add", "New job")
+	refusedWrite(t, path, item, 1, "invalid", "item", "add", "New job", "--dry-run")
+}
+
+func TestCLIModOfAnItemWithAWrongPropertySaysBudgetItem(t *testing.T) {
+	path := seededFile(t)
+	code, out := wcli(t, "", "--db", path, "mod", "add", "New job", "--target", "item:salary-a", "--property", "inflation", "--value", "1")
+	if code != 1 || !strings.Contains(string(out), "a modification of a budget item") || strings.Contains(string(out), "budget_item") {
+		t.Errorf("exit %d: %s", code, out)
+	}
 }

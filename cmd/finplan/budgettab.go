@@ -197,7 +197,7 @@ func (t *budgetTab) editor(id string) {
 	imgui.SameLine()
 	text := t.endOn[id]
 	imgui.SetNextItemWidth(em * 8)
-	if imgui.InputTextWithHint("##endon"+id, dateLayout, &text, 0, nil) {
+	if imgui.InputTextWithHint("##endon"+id, dateHint, &text, 0, nil) {
 		t.endOn[id] = text
 	}
 	imgui.SameLine()

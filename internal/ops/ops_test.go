@@ -7,6 +7,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/joeriedel/finplan/internal/demodata"
@@ -1308,5 +1309,56 @@ func TestLegacyItemEndBeforeAnchor(t *testing.T) {
 		if _, err := EndBudgetItem(st, next, "legacy", model.D(2027, 6, 1), Options{DryRun: true}); err != nil {
 			t.Errorf("ending a legacy %s item on its anchor: %v", r.Kind, err)
 		}
+	}
+}
+
+func TestDryRunChecksTheRecordCanBeRestored(t *testing.T) {
+	st, rec := seed(t)
+	next := rec.Clone()
+	next.Projections = append(next.Projections, &model.Projection{Name: next.Projections[0].Name})
+	for _, o := range []Options{{DryRun: true}, {}} {
+		res, err := commit(st, next, Result{}, o)
+		var se *SaveError
+		if res != nil || !errors.As(err, &se) || !strings.Contains(err.Error(), "cannot be restored") {
+			t.Errorf("dry run %v: %v %v", o.DryRun, res, err)
+		}
+	}
+	if res, err := commit(st, rec.Clone(), Result{}, Options{DryRun: true}); err != nil || res == nil {
+		t.Errorf("a record that can be restored: %v %v", res, err)
+	}
+}
+
+func TestOneTimeItemStartMustMatchItsDate(t *testing.T) {
+	st, rec := seed(t)
+	item := model.BudgetItem{Name: "Gift", Kind: model.ItemIncome, Amount: model.Constant(100), Account: demodata.Checking,
+		Recurrence: model.Recurrence{Kind: model.OneTime, Anchor: model.D(2028, 2, 1)}, Start: model.Ptr(model.D(2028, 1, 1))}
+	err := CheckItem(rec, item)
+	if !errors.Is(err, ErrInvalidValue) || !strings.Contains(err.Error(), "2028-01-01") || !strings.Contains(err.Error(), "2028-02-01") {
+		t.Errorf("start and date differ: %v", err)
+	}
+	if _, err := AddItem(st, rec, demodata.ProjBase, item, Options{DryRun: true}); !errors.Is(err, ErrInvalidValue) {
+		t.Errorf("AddItem: %v", err)
+	}
+	item.Start = model.Ptr(model.D(2028, 2, 1))
+	if err := CheckItem(rec, item); err != nil {
+		t.Errorf("start equal to the date: %v", err)
+	}
+	item.Start = nil
+	if err := CheckItem(rec, item); err != nil {
+		t.Errorf("no start: %v", err)
+	}
+	// A biweekly item counts from its anchor, whatever its start.
+	item.Recurrence.Kind, item.Start = model.Biweekly, model.Ptr(model.D(2028, 1, 1))
+	if err := CheckItem(rec, item); err != nil {
+		t.Errorf("biweekly: %v", err)
+	}
+}
+
+func TestWrongModPropertyNamesTheKindWithASpace(t *testing.T) {
+	st, rec := seed(t)
+	m := model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: "salary-a"}, Property: model.PropInflation, Values: model.Constant(1)}
+	_, err := AddMod(st, rec, demodata.ProjNewJob, m, Options{DryRun: true})
+	if !errors.Is(err, ErrInvalidValue) || !strings.Contains(err.Error(), "a modification of a budget item") || strings.Contains(err.Error(), "budget_item") {
+		t.Errorf("%v", err)
 	}
 }

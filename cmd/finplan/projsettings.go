@@ -230,7 +230,7 @@ func (t *projTab) addSettingForm(p *model.Projection) {
 	imgui.TextDisabled("starts on")
 	imgui.SameLine()
 	imgui.SetNextItemWidth(em * 8)
-	imgui.InputTextWithHint("##addsetstart", dateLayout, &f.start, 0, nil)
+	imgui.InputTextWithHint("##addsetstart", dateHint, &f.start, 0, nil)
 	imgui.SameLine()
 	imgui.AlignTextToFramePadding()
 	imgui.TextDisabled("override history")

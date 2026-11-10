@@ -23,10 +23,10 @@ import (
 
 const (
 	writeOut     = "{dry_run, changed, projection: as projection show prints it, after the edit}"
-	dryRunDesc   = "validate the edit and print what it would change, but save nothing"
+	dryRunDesc   = "validate the edit and print what it would change, but save nothing; a database that needs upgrading is refused, not upgraded"
 	jsonFileDesc = "read the JSON input from this file instead of stdin"
-	scheduleNote = "a schedule is [{\"from\": \"YYYY-MM-DD\", \"end\": \"YYYY-MM-DD\" or null, \"value\": number}, ...], sorted and not overlapping; a value holds from its from date until its end or the next segment"
-	itemJSONNote = "the item is {id (optional), name, kind (income, expense or transfer), amount (a number above zero, or a schedule of them), recurrence: {kind (one-time, weekly, biweekly, semimonthly, monthly, quarterly, annual or custom), anchor (optional date an interval item counts from, else its start; the date of a one-time item when start is omitted), month (annual), day (monthly, semimonthly and annual), day2 (semimonthly), count and unit (custom: every count days, weeks, months or years)}, start (the first date, required), end (optional), indexed, growth (optional annual raise as a fraction: 0.03 for 3%, stepping the amount up on each anniversary of the start; a number or a schedule), account (income and expense), from and to (transfer)}; amount and growth as a schedule are [{from, end, value}, ...] like a modification's, e.g. a daycare of 1400 until 2029-07-31 and 600 after; budget list prints the same shape with amount_schedule and growth_schedule, which are accepted as the schedule form too; when both forms are given they must agree on the value in effect today (an empty growth_schedule is no growth), else give one, e.g. drop amount_schedule to set a single amount"
+	scheduleNote = "a schedule is [{\"from\": \"YYYY-MM-DD\" or null for from the beginning, \"end\": \"YYYY-MM-DD\" or null, \"value\": number}, ...], sorted and not overlapping; a value holds from its from date until its end or the next segment"
+	itemJSONNote = "the item is {id (optional), name, kind (income, expense or transfer), amount (a number above zero, or a schedule of them), recurrence: {kind (one-time, weekly, biweekly, semimonthly, monthly, quarterly, annual or custom), anchor (optional date an interval item counts from, else its start; the date of a one-time item, which start, if given, must equal), month (annual), day (monthly, semimonthly and annual), day2 (semimonthly), count and unit (custom: every count days, weeks, months or years)}, start (the first date, required), end (optional), indexed, growth (optional annual raise as a fraction: 0.03 for 3%, stepping the amount up on each anniversary of the start; a number or a schedule), account (income and expense), from and to (transfer)}; amount and growth as a schedule are [{from, end, value}, ...] like a modification's, e.g. a daycare of 1400 until 2029-07-31 and 600 after; budget list prints the same shape with amount_schedule and growth_schedule, which are accepted as the schedule form too; when both forms are given they must agree on the value in effect today (an empty growth_schedule is no growth), else give one, e.g. drop amount_schedule to set a single amount"
 	modIndexNote = "the modification's index, as projection show numbers them from 0"
 )
 
@@ -624,6 +624,10 @@ type segInput struct {
 
 // scheduleOf builds the schedule of the segments of JSON input; none is the empty schedule.
 func scheduleOf(in []segInput) (model.Schedule, error) {
+	// An empty schedule is the zero Schedule, which is what a stored item without growth holds; NewSchedule would give an empty non-nil slice that reflect.DeepEqual tells apart.
+	if len(in) == 0 {
+		return model.Schedule{}, nil
+	}
 	segs := make([]model.Segment, len(in))
 	for i, s := range in {
 		if s.Value == nil {

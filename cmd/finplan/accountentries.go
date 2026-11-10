@@ -296,7 +296,7 @@ func (t *acctTab) txForm(acct *model.Account) {
 	}
 	t.label("Date")
 	imgui.SetNextItemWidth(em * 10)
-	imgui.InputTextWithHint("##txdate", dateLayout, &d.date, 0, nil)
+	imgui.InputTextWithHint("##txdate", dateHint, &d.date, 0, nil)
 	t.label("Amount")
 	imgui.SetNextItemWidth(em * 10)
 	imgui.InputTextWithHint("##txamount", "negative for an expense", &d.amount, 0, nil)
@@ -308,7 +308,7 @@ func (t *acctTab) txForm(acct *model.Account) {
 	imgui.SetNextItemWidth(em * 16)
 	imgui.InputTextWithHint("##txmemo", "optional", &d.memo, 0, nil)
 	t.label("")
-	addButton(txProblem(t.a.st, t.a.rec, acct.ID, *d), func() {
+	formButton("Add", txProblem(t.a.st, t.a.rec, acct.ID, *d), d.untouched(), func() {
 		date, amount, _ := d.draftValues()
 		tx := model.Transaction{Date: date, Amount: amount, Kind: d.kind, Counter: d.counter, Memo: d.memo}
 		if t.a.addEntry("record transaction", func() (*ops.Result, error) {
@@ -383,7 +383,7 @@ func (t *acctTab) entryTable(acct *model.Account) {
 		imgui.TableSetColumnIndex(1)
 		imgui.TextUnformatted(r.Kind)
 		imgui.TableSetColumnIndex(2)
-		imgui.TextUnformatted(trimFloat(r.Amount))
+		imgui.TextUnformatted(formatDollars(r.Amount))
 		imgui.TableSetColumnIndex(3)
 		imgui.TextUnformatted(r.Counter)
 		imgui.TableSetColumnIndex(4)
@@ -428,7 +428,7 @@ func (t *acctTab) entryPanel(acct *model.Account) {
 	} else {
 		t.label("Date")
 		imgui.SetNextItemWidth(em * 10)
-		imgui.InputTextWithHint("##entdate", dateLayout, &d.date, 0, nil)
+		imgui.InputTextWithHint("##entdate", dateHint, &d.date, 0, nil)
 		t.label("Amount")
 		imgui.SetNextItemWidth(em * 10)
 		imgui.InputTextWithHint("##entamount", "", &d.amount, 0, nil)
@@ -491,7 +491,7 @@ func (t *acctTab) history(u *entriesUI) {
 		imgui.TableSetColumnIndex(2)
 		imgui.TextUnformatted(r.Kind)
 		imgui.TableSetColumnIndex(3)
-		imgui.TextUnformatted(trimFloat(r.Amount))
+		imgui.TextUnformatted(formatDollars(r.Amount))
 		imgui.TableSetColumnIndex(4)
 		imgui.TextUnformatted(strings.TrimSpace(r.Counter + " " + r.Memo))
 		imgui.TableSetColumnIndex(5)

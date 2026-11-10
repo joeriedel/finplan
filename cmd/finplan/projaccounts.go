@@ -272,7 +272,7 @@ func (t *projTab) addAccountForm(p *model.Projection) {
 	imgui.SameLine()
 	input("opening", "opening balance", "negative for a debt", f.opening, em*9)
 	imgui.SameLine()
-	input("from", "opens on", dateLayout, f.from, em*8)
+	input("from", "opens on", dateHint, f.from, em*8)
 	t.label("")
 	addButton(acctProblem(t.a.st, t.a.rec, p.Name, *f), func() {
 		a, _ := f.account()

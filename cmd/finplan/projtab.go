@@ -23,6 +23,8 @@ import (
 
 const (
 	dateLayout = "2006-01-02"
+	// dateHint is how dates are written to the user; dateLayout is the Go layout that parses them.
+	dateHint = "YYYY-MM-DD"
 	// dragMod names the drag and drop payload of a modification row; the index of the row is in projTab.dragFrom.
 	dragMod = "projection modification"
 	// colError is the colour of messages about input that was refused.
@@ -769,7 +771,7 @@ func (t *projTab) setModStart(proj string, i int, text string) {
 		from = &d
 	}
 	if _, ends := ops.EndedOn(t.a.rec.Projection(proj).Mods[i]); ends && from == nil {
-		t.setErr("from"+strconv.Itoa(i), "enter the date it ends on as "+dateLayout)
+		t.setErr("from"+strconv.Itoa(i), "enter the date it ends on as "+dateHint)
 		return
 	}
 	v, _, _ := constantOf(t.a.rec.Projection(proj).Mods[i].Values)
@@ -1111,9 +1113,9 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 	choose("every", "repeats", recurrenceChoiceOf(f.every).name, em*8, every, labels, string(f.every))
 	switch f.every {
 	case model.OneTime:
-		input("date", "on", dateLayout, f.date, em*8)
+		input("date", "on", dateHint, f.date, em*8)
 	case model.Biweekly:
-		input("date", "from", dateLayout, f.date, em*8)
+		input("date", "from", dateHint, f.date, em*8)
 	case model.Weekly, model.Quarterly:
 		input("date", "from", "today", f.date, em*8)
 	case model.Semimonthly:
@@ -1240,17 +1242,17 @@ func (t *projTab) addForm(p *model.Projection) {
 	if t.addProp == propEndsOn {
 		t.label("Date")
 		imgui.SetNextItemWidth(imgui.FontSize() * 16)
-		imgui.InputTextWithHint("##addstart", dateLayout, &t.addStart, 0, nil)
+		imgui.InputTextWithHint("##addstart", dateHint, &t.addStart, 0, nil)
 	} else {
 		t.label("Value")
 		imgui.SetNextItemWidth(imgui.FontSize() * 16)
 		imgui.InputTextWithHint("##addvalue", valueHint(t.addProp, t.addMode), &t.addValue, 0, nil)
 		t.label("From (optional)")
 		imgui.SetNextItemWidth(imgui.FontSize() * 16)
-		imgui.InputTextWithHint("##addstart", "always; or "+dateLayout, &t.addStart, 0, nil)
+		imgui.InputTextWithHint("##addstart", "always; or "+dateHint, &t.addStart, 0, nil)
 		t.label("To (optional)")
 		imgui.SetNextItemWidth(imgui.FontSize() * 16)
-		imgui.InputTextWithHint("##addend", "no end; or "+dateLayout+", needs a start", &t.addEnd, 0, nil)
+		imgui.InputTextWithHint("##addend", "no end; or "+dateHint+", needs a start", &t.addEnd, 0, nil)
 	}
 	addButton(modProblem(rec, p.Name, t.addKind, t.addObj, t.addProp, t.addMode, t.addValue, t.addStart, t.addEnd), func() { t.addMod(p.Name) })
 }
@@ -1259,13 +1261,16 @@ func (t *projTab) addForm(p *model.Projection) {
 func addButton(problem string, add func()) { actionButton("Add", problem, add) }
 
 // actionButton draws a button labelled label, disabled with the reason beside it while problem is not empty.
-func actionButton(label, problem string, do func()) {
+func actionButton(label, problem string, do func()) { formButton(label, problem, false, do) }
+
+// formButton is actionButton for a form: while untouched the button is disabled but the reason is not shown, since nothing has been typed to be wrong.
+func formButton(label, problem string, untouched bool, do func()) {
 	imgui.BeginDisabledV(problem != "")
 	if imgui.Button(label) {
 		do()
 	}
 	imgui.EndDisabled()
-	if problem != "" {
+	if problem != "" && !untouched {
 		imgui.SameLine()
 		errorText("Not yet: " + problem)
 	}
@@ -1348,7 +1353,7 @@ func newMod(kind model.ObjectKind, obj, prop string, mode model.Mode, value, sta
 func parseDate(s string) (model.Date, error) {
 	tm, err := time.Parse(dateLayout, s)
 	if err != nil {
-		return 0, fmt.Errorf("%q is not a date; write it as %s", s, dateLayout)
+		return 0, fmt.Errorf("%q is not a date; write it as %s", s, dateHint)
 	}
 	y, m, d := tm.Date()
 	return model.D(y, m, d), nil
