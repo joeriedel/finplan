@@ -4,8 +4,10 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -51,6 +53,7 @@ type projTab struct {
 	addKind  model.ObjectKind
 	addObj   string
 	addProp  string
+	addMode  model.Mode
 	addValue string
 	addStart string
 	// addNew switches the form to a new budget item, which addItem holds.
@@ -457,12 +460,12 @@ func (t *projTab) inflation(p *model.Projection, w float32) {
 	text := ""
 	if idx >= 0 {
 		v, from, ok := constantOf(p.Mods[idx].Values)
-		if !ok || from != nil || slices.IndexFunc(p.Mods[idx+1:], isInflation) >= 0 {
+		if !ok || from != nil || slices.IndexFunc(p.Mods[idx+1:], isInflation) >= 0 || slices.ContainsFunc(p.Mods, func(m model.Modification) bool { return isInflation(m) && m.IsScale() }) {
 			imgui.AlignTextToFramePadding()
 			imgui.TextDisabled("varies; the timeline editor comes next")
 			return
 		}
-		text = formatValue(model.PropInflation, v)
+		text = formatValue(model.PropInflation, model.ModeSet, v)
 	}
 	if input, done := t.field("inflation", "inherit", text, w); done {
 		t.commit("inflation", func() { t.setInflation(p.Name, strings.TrimSpace(input)) })
@@ -475,7 +478,7 @@ func (t *projTab) setInflation(proj, text string) {
 	var v float64
 	if text != "" {
 		var err error
-		if v, err = parseValue(model.PropInflation, text); err != nil {
+		if v, err = parseValue(model.PropInflation, model.ModeSet, text); err != nil {
 			t.setErr("inflation", err.Error())
 			return
 		}
@@ -519,11 +522,12 @@ func (t *projTab) mods(p *model.Projection) {
 	}
 	imgui.TextUnformatted("Modifications, applied in this order; a later one wins where it covers the same thing.")
 	flags := imgui.TableFlagsRowBg | imgui.TableFlagsBordersInnerV | imgui.TableFlagsSizingStretchProp
-	if imgui.BeginTableV("##mods", 6, flags, imgui.NewVec2(0, 0), 0) {
+	if imgui.BeginTableV("##mods", 7, flags, imgui.NewVec2(0, 0), 0) {
 		imgui.TableSetupColumnV("#", imgui.TableColumnFlagsWidthFixed, imgui.FontSize()*2.5, 0)
 		imgui.TableSetupColumnV("From", imgui.TableColumnFlagsWidthFixed, imgui.FontSize()*9, 0)
 		imgui.TableSetupColumnV("Object", 0, 2, 0)
 		imgui.TableSetupColumnV("Property", imgui.TableColumnFlagsWidthFixed, imgui.FontSize()*6, 0)
+		imgui.TableSetupColumnV("How", imgui.TableColumnFlagsWidthFixed, imgui.FontSize()*6, 0)
 		imgui.TableSetupColumnV("Value", imgui.TableColumnFlagsWidthFixed, imgui.FontSize()*9, 0)
 		imgui.TableSetupColumnV("##remove", imgui.TableColumnFlagsWidthFixed, imgui.FontSize()*2, 0)
 		imgui.TableHeadersRow()
@@ -634,11 +638,25 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 
 	imgui.TableSetColumnIndex(4)
 	switch {
+	case adds:
+	case editable && !ends:
+		cur := cmp.Or(m.Mode, model.ModeSet)
+		if k := pick("mode", string(cur), -1, modeNames, slices.Index(modeNames, string(cur))); k >= 0 {
+			t.setModMode(p.Name, i, model.Mode(modeNames[k]))
+		}
+	default:
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted(string(cmp.Or(m.Mode, model.ModeSet)))
+	}
+	tip()
+
+	imgui.TableSetColumnIndex(5)
+	switch {
 	case editable && ends:
 		imgui.AlignTextToFramePadding()
 		imgui.TextDisabled("pays nothing")
 	case editable:
-		if text, done := t.field("value"+strconv.Itoa(i), "", formatValue(m.Property, v), -1); done {
+		if text, done := t.field("value"+strconv.Itoa(i), "", formatValue(m.Property, m.Mode, v), -1); done {
 			t.commit("value"+strconv.Itoa(i), func() { t.setModValue(p.Name, i, strings.TrimSpace(text)) })
 		}
 	case adds:
@@ -655,7 +673,7 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 		tip()
 	}
 
-	imgui.TableSetColumnIndex(5)
+	imgui.TableSetColumnIndex(6)
 	if imgui.SmallButton("x") {
 		t.a.edit("remove modification", func() (*ops.Result, error) {
 			return ops.RemoveMod(t.a.st, t.a.rec, p.Name, i, ops.Options{})
@@ -687,8 +705,8 @@ func (t *projTab) setModStart(proj string, i int, text string) {
 }
 
 func (t *projTab) setModValue(proj string, i int, text string) {
-	prop := t.a.rec.Projection(proj).Mods[i].Property
-	v, err := parseValue(prop, text)
+	m := t.a.rec.Projection(proj).Mods[i]
+	v, err := parseValue(m.Property, m.Mode, text)
 	if err != nil {
 		t.setErr("value"+strconv.Itoa(i), err.Error())
 		return
@@ -697,6 +715,67 @@ func (t *projTab) setModValue(proj string, i int, text string) {
 	t.a.edit("change modification", func() (*ops.Result, error) {
 		return ops.SetModValues(t.a.st, t.a.rec, proj, i, scheduleFrom(v, from), ops.Options{})
 	})
+}
+
+// modeNames are the modes a modification offers, in the order the pickers list them.
+var modeNames = []string{string(model.ModeSet), string(model.ModeScale)}
+
+// setModMode changes how modification i of the projection combines with what lies beneath it, and converts its values to the new mode so the result stays near what it was.
+func (t *projTab) setModMode(proj string, i int, mode model.Mode) {
+	values := modeValues(t.a.rec, proj, i, mode)
+	t.a.edit("change modification", func() (*ops.Result, error) {
+		return ops.SetModMode(t.a.st, t.a.rec, proj, i, mode, values, ops.Options{})
+	})
+}
+
+// modeValues returns the values of modification i of the projection after it changes to mode, keeping each segment's start and end, or nil if its mode does not change. Into scale each value becomes the multiplier 1; into set it becomes the target's base value at the segment's start times the multiplier.
+func modeValues(rec *model.Record, proj string, i int, mode model.Mode) *model.Schedule {
+	m := rec.Projection(proj).Mods[i]
+	if m.IsScale() == (mode == model.ModeScale) {
+		return nil
+	}
+	segs := m.Values.Segments()
+	for k := range segs {
+		if mode == model.ModeScale {
+			segs[k].Value = 1
+		} else {
+			segs[k].Value *= baseValue(rec, proj, i, segs[k].From)
+		}
+	}
+	s, err := model.NewSchedule(segs...)
+	if err != nil {
+		return nil
+	}
+	return &s
+}
+
+// baseValue is the value of the property modification i of the projection changes, as the record has it on d: an item's amount or raise rate, an account's stated rate, an asset's growth setting, or the global inflation. It is 0 where the record has none.
+func baseValue(rec *model.Record, proj string, i int, d model.Date) float64 {
+	m := rec.Projection(proj).Mods[i]
+	var v float64
+	switch m.Target.Kind {
+	case model.KindBudgetItem:
+		items, _ := ops.ItemsBefore(rec, proj, i)
+		for _, a := range items {
+			if a.Item.ID == m.Target.ID {
+				v = a.Item.Growth
+				if m.Property == model.PropAmount {
+					v = a.Item.Amount
+				}
+			}
+		}
+	case model.KindAccount:
+		if a := rec.Account(model.AccountID(m.Target.ID)); a != nil {
+			v = a.StatedRate
+		}
+	case model.KindAsset:
+		if a := rec.Asset(model.AssetID(m.Target.ID)); a != nil {
+			v, _ = a.Params[model.PropGrowth].At(d)
+		}
+	case model.KindGlobal:
+		v, _ = rec.Globals[model.PropInflation].At(d)
+	}
+	return v
 }
 
 func overwriteText(ow *model.Overwrite) string {
@@ -732,7 +811,7 @@ func propertiesFor(kind model.ObjectKind) []string {
 	case model.KindAccount, model.KindAsset:
 		return []string{model.PropGrowth}
 	case model.KindBudgetItem:
-		return []string{model.PropAmount, propEndsOn}
+		return []string{model.PropAmount, model.PropGrowth, propEndsOn}
 	case model.KindGlobal:
 		return []string{model.PropInflation}
 	}
@@ -902,6 +981,8 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 		imgui.TextDisabled(string(f.every) + " items are not edited here")
 	}
 	input("end", "until", "no end", f.end, em*8)
+	imgui.SameLine()
+	input("growth", "raise per year", "percent, e.g. 3", f.growth, em*6)
 
 	ids := []string{"", string(outsideAccount)}
 	names := []string{"choose an account", "outside the record"}
@@ -970,6 +1051,15 @@ func (t *projTab) addForm(p *model.Projection) {
 	t.label("Property")
 	t.addProp, _ = propertyCombo("addprop", t.addKind, t.addProp, imgui.FontSize()*16)
 
+	if t.addProp != propEndsOn {
+		if t.addMode == "" {
+			t.addMode = model.ModeSet
+		}
+		t.label("How")
+		if k := pick("addhow", string(t.addMode), imgui.FontSize()*16, modeNames, slices.Index(modeNames, string(t.addMode))); k >= 0 {
+			t.addMode = model.Mode(modeNames[k])
+		}
+	}
 	if t.addProp == propEndsOn {
 		t.label("Date")
 		imgui.SetNextItemWidth(imgui.FontSize() * 16)
@@ -977,12 +1067,12 @@ func (t *projTab) addForm(p *model.Projection) {
 	} else {
 		t.label("Value")
 		imgui.SetNextItemWidth(imgui.FontSize() * 16)
-		imgui.InputTextWithHint("##addvalue", valueHint(t.addProp), &t.addValue, 0, nil)
+		imgui.InputTextWithHint("##addvalue", valueHint(t.addProp, t.addMode), &t.addValue, 0, nil)
 		t.label("From (optional)")
 		imgui.SetNextItemWidth(imgui.FontSize() * 16)
 		imgui.InputTextWithHint("##addstart", "always; or "+dateLayout, &t.addStart, 0, nil)
 	}
-	addButton(modProblem(rec, p.Name, t.addKind, t.addObj, t.addProp, t.addValue, t.addStart), func() { t.addMod(p.Name) })
+	addButton(modProblem(rec, p.Name, t.addKind, t.addObj, t.addProp, t.addMode, t.addValue, t.addStart), func() { t.addMod(p.Name) })
 }
 
 // addButton draws the Add button, disabled with the reason beside it while problem is not empty.
@@ -998,7 +1088,10 @@ func addButton(problem string, add func()) {
 	}
 }
 
-func valueHint(prop string) string {
+func valueHint(prop string, mode model.Mode) string {
+	if mode == model.ModeScale {
+		return "percent change, e.g. -30"
+	}
 	if prop == model.PropAmount {
 		return "amount, e.g. 1500"
 	}
@@ -1007,10 +1100,10 @@ func valueHint(prop string) string {
 
 // addMod adds the modification the Add form describes, unless modProblem finds one. It reports whether it did.
 func (t *projTab) addMod(proj string) bool {
-	if modProblem(t.a.rec, proj, t.addKind, t.addObj, t.addProp, t.addValue, t.addStart) != "" {
+	if modProblem(t.a.rec, proj, t.addKind, t.addObj, t.addProp, t.addMode, t.addValue, t.addStart) != "" {
 		return false
 	}
-	m, _ := newMod(t.addKind, t.addObj, t.addProp, t.addValue, t.addStart)
+	m, _ := newMod(t.addKind, t.addObj, t.addProp, t.addMode, t.addValue, t.addStart)
 	if !t.a.edit("add modification", func() (*ops.Result, error) {
 		if from, ends := ops.EndedOn(m); ends && t.addProp == propEndsOn {
 			return ops.EndItem(t.a.st, t.a.rec, proj, t.addObj, from, ops.Options{})
@@ -1026,7 +1119,7 @@ func (t *projTab) addMod(proj string) bool {
 // ---- Parsing and formatting.
 
 // newMod builds the modification the Add form describes: the value from the optional start date on, or for propEndsOn what ops.EndItem stores, from the date in start. ops validates it.
-func newMod(kind model.ObjectKind, obj, prop, value, start string) (model.Modification, error) {
+func newMod(kind model.ObjectKind, obj, prop string, mode model.Mode, value, start string) (model.Modification, error) {
 	if prop == propEndsOn {
 		d, err := needDate(start, "the date it ends on")
 		if err != nil {
@@ -1037,7 +1130,7 @@ func newMod(kind model.ObjectKind, obj, prop, value, start string) (model.Modifi
 	if strings.TrimSpace(value) == "" {
 		return model.Modification{}, errors.New("enter a value")
 	}
-	v, err := parseValue(prop, strings.TrimSpace(value))
+	v, err := parseValue(prop, mode, strings.TrimSpace(value))
 	if err != nil {
 		return model.Modification{}, err
 	}
@@ -1049,7 +1142,7 @@ func newMod(kind model.ObjectKind, obj, prop, value, start string) (model.Modifi
 		}
 		from = &d
 	}
-	return model.Modification{Target: model.ObjectRef{Kind: kind, ID: obj}, Property: prop, Values: scheduleFrom(v, from)}, nil
+	return model.Modification{Target: model.ObjectRef{Kind: kind, ID: obj}, Property: prop, Mode: mode, Values: scheduleFrom(v, from)}, nil
 }
 
 // parseDate reads a date written as YYYY-MM-DD.
@@ -1062,22 +1155,28 @@ func parseDate(s string) (model.Date, error) {
 	return model.D(y, m, d), nil
 }
 
-// parseValue reads a property's value: a percentage for rates (the % sign is optional), else a number.
-func parseValue(prop, s string) (float64, error) {
+// parseValue reads a property's value: a percentage for rates (the % sign is optional), else a number. In scale mode the value is the percentage change, so -30 reads as the multiplier 0.7.
+func parseValue(prop string, mode model.Mode, s string) (float64, error) {
 	rate := prop != model.PropAmount
 	num := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "%"))
 	v, err := strconv.ParseFloat(num, 64)
 	if err != nil || v != v || v > 1e15 || v < -1e15 {
 		return 0, fmt.Errorf("%q is not a number", s)
 	}
-	if rate {
+	switch {
+	case mode == model.ModeScale:
+		v = math.Round((1+v/100)*1e9) / 1e9
+	case rate:
 		v /= 100
 	}
 	return v, nil
 }
 
 // formatValue is parseValue's inverse.
-func formatValue(prop string, v float64) string {
+func formatValue(prop string, mode model.Mode, v float64) string {
+	if mode == model.ModeScale {
+		return trimFloat((v-1)*100) + "%"
+	}
 	if prop == model.PropAmount {
 		return trimFloat(v)
 	}

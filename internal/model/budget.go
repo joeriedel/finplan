@@ -106,7 +106,9 @@ type BudgetItem struct {
 	Recurrence Recurrence
 	Start, End *Date
 	// Indexed items grow with inflation from the record's Today.
-	Indexed  bool
+	Indexed bool
+	// Growth is the annual raise as a fraction: the amount steps up by it once a year on the anniversary of the item's start (see engine raises). Zero means no raises.
+	Growth   float64
 	Account  AccountID
 	From, To AccountID
 }

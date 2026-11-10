@@ -4,6 +4,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"strconv"
@@ -67,7 +68,7 @@ var commands = []*command{
 	{
 		Name: "projection show", Summary: "show a projection's settings and modifications",
 		Args:   []argDef{{Name: "name", Description: "projection name", Required: true}},
-		Output: "{name, parent, start, override_history, asset_settings: [{asset, start, override_history}], modifications: [{index, target: {kind, id}, property, schedule: [{from, end, value}], item}]}; modifications are in the order they apply",
+		Output: "{name, parent, start, override_history, asset_settings: [{asset, start, override_history}], modifications: [{index, target: {kind, id}, property, mode (set or scale), schedule: [{from, end, value}], item}]}; modifications are in the order they apply",
 		run:    cmdProjectionShow,
 	},
 	{
@@ -111,6 +112,7 @@ type jbudgetItem struct {
 	Start      *jdate      `json:"start"`
 	End        *jdate      `json:"end"`
 	Indexed    bool        `json:"indexed"`
+	Growth     float64     `json:"growth"`
 	Account    *string     `json:"account"`
 	From       *string     `json:"from"`
 	To         *string     `json:"to"`
@@ -140,7 +142,7 @@ func budgetItemJSON(it model.BudgetItem) jbudgetItem {
 	}
 	return jbudgetItem{
 		ID: it.ID, Name: it.Name, Kind: string(it.Kind), Amount: it.Amount, Recurrence: jr,
-		Start: jdp(it.Start), End: jdp(it.End), Indexed: it.Indexed,
+		Start: jdp(it.Start), End: jdp(it.End), Indexed: it.Indexed, Growth: it.Growth,
 		Account: nullable(string(it.Account)), From: nullable(string(it.From)), To: nullable(string(it.To)),
 	}
 }
@@ -495,6 +497,7 @@ func projectionJSON(p *model.Projection) any {
 		Index    int          `json:"index"`
 		Target   jtarget      `json:"target"`
 		Property string       `json:"property"`
+		Mode     string       `json:"mode"`
 		Schedule []jsegment   `json:"schedule"`
 		Item     *jbudgetItem `json:"item"`
 	}
@@ -510,7 +513,7 @@ func projectionJSON(p *model.Projection) any {
 		out.AssetSettings = append(out.AssetSettings, jsetting{string(s.Asset), jdp(s.Start), s.OverrideHistory})
 	}
 	for i, m := range p.Mods {
-		jm := jmod{Index: i, Target: jtarget{string(m.Target.Kind), m.Target.ID}, Property: m.Property, Schedule: scheduleJSONOut(m.Values)}
+		jm := jmod{Index: i, Target: jtarget{string(m.Target.Kind), m.Target.ID}, Property: m.Property, Mode: string(cmp.Or(m.Mode, model.ModeSet)), Schedule: scheduleJSONOut(m.Values)}
 		if m.Item != nil {
 			jm.Item = model.Ptr(budgetItemJSON(*m.Item))
 		}

@@ -69,6 +69,7 @@ type wdata struct {
 	Item    *struct {
 		ID, Name, Kind string
 		Amount         float64
+		Growth         float64
 		Start, End     *string
 		Account        *string
 		Recurrence     struct {

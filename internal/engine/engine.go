@@ -157,7 +157,7 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 	override := false
 	var starts []model.Setting[model.Date]
 	var overrides []model.Setting[bool]
-	var growth []model.Setting[model.Schedule]
+	var growth []model.Setting[rateLayer]
 	// A projection setting reaches the accounts under its target, whether or not the line's asset contains the target.
 	targets := map[model.AssetID]*model.Resolution{}
 	resolveTarget := func(id model.AssetID) error {
@@ -174,6 +174,7 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 	infl := rec.Globals[model.PropInflation]
 	items := slices.Clone(rec.Budget.Items)
 	amounts := map[string]model.Schedule{}
+	growths := map[string]model.Schedule{}
 	for _, p := range chain {
 		if p.Start != nil {
 			projStart = *p.Start
@@ -196,15 +197,26 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 			skip := func(reason string) {
 				r.diag.Skipped = append(r.diag.Skipped, Skipped{Projection: p.Name, Index: i, Target: m.Target, Property: m.Property, Reason: reason})
 			}
-			itemExists := func(id string) bool {
-				return slices.ContainsFunc(items, func(it model.BudgetItem) bool { return it.ID == id })
+			itemIdx := func(id string) int {
+				return slices.IndexFunc(items, func(it model.BudgetItem) bool { return it.ID == id })
 			}
+			itemExists := func(id string) bool { return itemIdx(id) >= 0 }
 			switch m.Target.Kind {
 			case model.KindBudgetItem:
 				switch {
 				case m.Property == model.PropAmount && itemExists(m.Target.ID):
-					amounts[m.Target.ID] = amounts[m.Target.ID].Overlay(m.Values)
-				case m.Property == model.PropAmount:
+					beneath, ok := amounts[m.Target.ID]
+					if !ok {
+						beneath = model.Constant(items[itemIdx(m.Target.ID)].Amount)
+					}
+					amounts[m.Target.ID] = m.Over(beneath)
+				case m.Property == model.PropGrowth && itemExists(m.Target.ID):
+					beneath, ok := growths[m.Target.ID]
+					if !ok {
+						beneath = baseGrowth(items[itemIdx(m.Target.ID)])
+					}
+					growths[m.Target.ID] = m.Over(beneath)
+				case m.Property == model.PropAmount || m.Property == model.PropGrowth:
 					skip("budget item not found")
 				case m.Property == model.PropAddItem && m.Item == nil:
 					skip("no item to add")
@@ -229,13 +241,13 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 					if err := resolveTarget(asset); err != nil {
 						return nil, err
 					}
-					growth = append(growth, model.Setting[model.Schedule]{Asset: asset, Value: m.Values})
+					growth = append(growth, model.Setting[rateLayer]{Asset: asset, Value: rateLayer{m.Values, m.IsScale()}})
 				default:
 					skip("unsupported property")
 				}
 			case model.KindGlobal:
 				if m.Property == model.PropInflation {
-					infl = infl.Overlay(m.Values)
+					infl = m.Over(infl)
 				} else {
 					skip("unsupported property")
 				}
@@ -270,11 +282,66 @@ func prepare(rec *model.Record, projection string, target model.AssetID, horizon
 			}
 		}
 		rate, _, _ := model.Apply(model.Constant(acct.StatedRate), defs, func(model.AssetID) bool { return true }, model.Schedule.Overlay)
-		p.rate, _, _ = model.Apply(rate, growth, underTarget, model.Schedule.Overlay)
-		p.build(rec, items, amounts, infl, horizon)
+		layered, _, _ := model.Apply(rateLayer{s: rate}, growth, underTarget, rateLayer.over)
+		p.rate = layered.s
+		p.build(rec, items, amounts, growths, infl, horizon)
 		r.paths[id] = p
 	}
 	return r, nil
+}
+
+// rateLayer is a growth schedule, or a modification's values that scale one.
+type rateLayer struct {
+	s     model.Schedule
+	scale bool
+}
+
+// over applies the layer v on top of prior.
+func (prior rateLayer) over(v rateLayer) rateLayer {
+	if v.scale {
+		return rateLayer{s: prior.s.Scale(v.s)}
+	}
+	return rateLayer{s: prior.s.Overlay(v.s)}
+}
+
+// baseGrowth is the raise schedule an item has before any modification: its own annual rate, or none.
+func baseGrowth(it model.BudgetItem) model.Schedule {
+	if it.Growth == 0 {
+		return model.Schedule{}
+	}
+	return model.Constant(it.Growth)
+}
+
+// raiseFactor is the factor by which raises have lifted an item's amount on d. The item's raise anniversaries are the yearly repeats of its start (or, with none, its recurrence anchor or today); each one after both that start and today, up to d, steps the amount up by the rate g gives on that day, never below zero. A 29 February anniversary falls on 28 February in other years.
+func raiseFactor(it model.BudgetItem, today, d model.Date, g model.Schedule) float64 {
+	anchor := today
+	switch {
+	case it.Start != nil:
+		anchor = *it.Start
+	case it.Recurrence.Anchor != 0:
+		anchor = it.Recurrence.Anchor
+	}
+	from := max(anchor, today)
+	ay, month, day := anchor.YMD()
+	fy, _, _ := from.YMD()
+	dy, _, _ := d.YMD()
+	f := 1.0
+	for y := max(ay+1, fy); y <= dy; y++ {
+		a := model.D(y, month, day)
+		if _, m, _ := a.YMD(); m != month {
+			a = model.D(y, month, 28)
+		}
+		if a <= from {
+			continue
+		}
+		if a > d {
+			break
+		}
+		if v, ok := g.At(a); ok {
+			f *= max(1+v, 0)
+		}
+	}
+	return f
 }
 
 // change is one recorded change to an account's balance, with its cause.
@@ -348,7 +415,7 @@ func (p *path) growthAt(d model.Date) float64 {
 	return pt.cumGrowth + pt.bal*(p.rate.Compound(pt.date, d)-1)
 }
 
-func (p *path) build(rec *model.Record, items []model.BudgetItem, amounts map[string]model.Schedule, infl model.Schedule, horizon model.Date) {
+func (p *path) build(rec *model.Record, items []model.BudgetItem, amounts, growths map[string]model.Schedule, infl model.Schedule, horizon model.Date) {
 	p.points = []point{{date: p.start, bal: p.startVal}}
 	if horizon <= p.start {
 		return
@@ -364,12 +431,19 @@ func (p *path) build(rec *model.Record, items []model.BudgetItem, amounts map[st
 		if it.End != nil {
 			upTo = min(upTo, *it.End)
 		}
+		raises, hasRaises := growths[it.ID]
+		if !hasRaises {
+			raises, hasRaises = baseGrowth(it), it.Growth != 0
+		}
 		for _, d := range it.Recurrence.Between(after, upTo) {
 			amt := it.Amount
 			if s, ok := amounts[it.ID]; ok {
 				if v, ok := s.At(d); ok {
 					amt = v
 				}
+			}
+			if hasRaises {
+				amt *= raiseFactor(it, rec.Today, d, raises)
 			}
 			if it.Indexed {
 				amt *= infl.Compound(rec.Today, d)

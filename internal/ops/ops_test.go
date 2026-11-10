@@ -363,6 +363,38 @@ func TestSetInflation(t *testing.T) {
 	})
 }
 
+func TestSetInflationKeepsScaleMods(t *testing.T) {
+	st, rec := seed(t)
+	scale := model.Modification{Target: model.ObjectRef{Kind: model.KindGlobal}, Property: model.PropInflation, Mode: model.ModeScale, Values: model.Constant(1.2)}
+	res, err := AddMod(st, rec, demodata.ProjWithdraw, scale, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = SetInflation(st, res.Record, demodata.ProjWithdraw, model.Ptr(0.03), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mods := res.Record.Projection(demodata.ProjWithdraw).Mods
+	var got []model.Modification
+	for _, m := range mods {
+		if m.Target.Kind == model.KindGlobal && m.Property == model.PropInflation {
+			got = append(got, m)
+		}
+	}
+	if len(got) != 2 || got[0].IsScale() || got[0].Values.Segments()[0].Value != 0.03 || !got[1].IsScale() {
+		t.Fatalf("got %+v", got)
+	}
+	res, err = SetInflation(st, res.Record, demodata.ProjWithdraw, nil, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range res.Record.Projection(demodata.ProjWithdraw).Mods {
+		if m.Target.Kind == model.KindGlobal && m.Property == model.PropInflation && !m.IsScale() {
+			t.Fatalf("set modification kept: %+v", m)
+		}
+	}
+}
+
 func TestAddMod(t *testing.T) {
 	m := model.Modification{Target: model.ObjectRef{Kind: model.KindAccount, ID: string(demodata.Savings)}, Property: model.PropGrowth, Values: model.Constant(0.045)}
 	dryRunMatches(t, func(st *store.Store, rec *model.Record, o Options) (*Result, error) {
@@ -808,7 +840,7 @@ func TestSetMod(t *testing.T) {
 	noObject.Target.ID = ""
 	refuseSet(ErrNoObject, demodata.ProjNewJob, 0, noObject)
 	wrongProp := to
-	wrongProp.Property = model.PropGrowth
+	wrongProp.Property = model.PropInflation
 	refuseSet(ErrInvalidValue, demodata.ProjNewJob, 0, wrongProp)
 	unknown := to
 	unknown.Target.ID = "nope"
@@ -966,5 +998,160 @@ func TestEndModAndEndedOn(t *testing.T) {
 		if _, ok := EndedOn(x); ok {
 			t.Errorf("%s counts as an end", what)
 		}
+	}
+}
+
+func TestScaleAndGrowthMods(t *testing.T) {
+	scale := amountMod("salary-a", model.D(2030, 1, 1), 0.7)
+	scale.Mode = model.ModeScale
+	dryRunMatches(t, func(st *store.Store, rec *model.Record, o Options) (*Result, error) {
+		return AddMod(st, rec, demodata.ProjNewJob, scale, o)
+	})
+	st, rec := seed(t)
+	n := len(rec.Projection(demodata.ProjNewJob).Mods)
+	if _, err := AddMod(st, rec, demodata.ProjNewJob, scale, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := reload(t, st).Projection(demodata.ProjNewJob).Mods[n]; !reflect.DeepEqual(got, scale) {
+		t.Errorf("stored %+v", got)
+	}
+	// The default mode is stored as the empty mode, however it is written.
+	set := amountMod("salary-a", model.D(2030, 1, 1), 7000)
+	set.Mode = model.ModeSet
+	res, err := AddMod(st, rec, demodata.ProjNewJob, set, Options{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Projection.Mods[n].Mode; got != "" {
+		t.Errorf("set stored as %q", got)
+	}
+
+	growth := model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: "salary-a"}, Property: model.PropGrowth, Values: model.Constant(0.03)}
+	if _, err := AddMod(st, rec, demodata.ProjNewJob, growth, Options{DryRun: true}); err != nil {
+		t.Errorf("growth of an item: %v", err)
+	}
+	growth.Mode, growth.Values = model.ModeScale, model.Constant(1.5)
+	if _, err := AddMod(st, rec, demodata.ProjNewJob, growth, Options{DryRun: true}); err != nil {
+		t.Errorf("scaled growth of an item: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		m    model.Modification
+		want error
+	}{
+		"negative scale":     {func() model.Modification { m := scale; m.Values = model.Constant(-0.1); return m }(), ErrInvalidValue},
+		"scale not a number": {func() model.Modification { m := scale; m.Values = model.Constant(1e16); return m }(), ErrInvalidValue},
+		"unknown mode":       {func() model.Modification { m := scale; m.Mode = "mix"; return m }(), ErrInvalidValue},
+		"raise of -100%":     {model.Modification{Target: growth.Target, Property: model.PropGrowth, Values: model.Constant(-1)}, ErrInvalidValue},
+		"scale of add_item":  {model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: "x"}, Property: model.PropAddItem, Mode: model.ModeScale}, ErrInvalidValue},
+		"item inflation":     {model.Modification{Target: growth.Target, Property: model.PropInflation, Values: model.Constant(0.1)}, ErrInvalidValue},
+	} {
+		t.Run(name, func(t *testing.T) {
+			refused(t, tc.want, func(st *store.Store, rec *model.Record) (*Result, error) {
+				return AddMod(st, rec, demodata.ProjNewJob, tc.m, Options{})
+			})
+		})
+	}
+}
+
+func TestSetModModeValues(t *testing.T) {
+	st, rec := seed(t)
+	before := rec.Projection(demodata.ProjNewJob).Mods[0].Values
+	if _, err := SetModMode(st, rec, demodata.ProjNewJob, 0, model.ModeScale, nil, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	rec = reload(t, st)
+	got := rec.Projection(demodata.ProjNewJob).Mods[0]
+	if got.Mode != model.ModeScale || !reflect.DeepEqual(got.Values, before) {
+		t.Errorf("nil values: mode %q values %v, want scale and %v", got.Mode, got.Values, before)
+	}
+	v := model.Constant(1.5)
+	if _, err := SetModMode(st, rec, demodata.ProjNewJob, 0, model.ModeSet, &v, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	got = reload(t, st).Projection(demodata.ProjNewJob).Mods[0]
+	if got.Mode != "" || !reflect.DeepEqual(got.Values, v) {
+		t.Errorf("values: mode %q values %v, want set and %v", got.Mode, got.Values, v)
+	}
+}
+
+func TestSetModMode(t *testing.T) {
+	dryRunMatches(t, func(st *store.Store, rec *model.Record, o Options) (*Result, error) {
+		return SetModMode(st, rec, demodata.ProjNewJob, 0, model.ModeScale, nil, o)
+	})
+	st, rec := seed(t)
+	if _, err := SetModMode(st, rec, demodata.ProjNewJob, 0, model.ModeScale, nil, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	rec = reload(t, st)
+	if got := rec.Projection(demodata.ProjNewJob).Mods[0]; got.Mode != model.ModeScale {
+		t.Errorf("mode %q", got.Mode)
+	}
+	if _, err := SetModMode(st, rec, demodata.ProjNewJob, 0, model.ModeSet, nil, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := reload(t, st).Projection(demodata.ProjNewJob).Mods[0].Mode; got != "" {
+		t.Errorf("set stored as %q", got)
+	}
+	refused(t, ErrNoChange, func(st *store.Store, rec *model.Record) (*Result, error) {
+		return SetModMode(st, rec, demodata.ProjNewJob, 0, model.ModeSet, nil, Options{})
+	})
+	refused(t, ErrInvalidValue, func(st *store.Store, rec *model.Record) (*Result, error) {
+		return SetModMode(st, rec, demodata.ProjNewJob, 0, "mix", nil, Options{})
+	})
+	// A replacement that scales by less than zero is refused.
+	refused(t, ErrInvalidValue, func(st *store.Store, rec *model.Record) (*Result, error) {
+		return SetMod(st, rec, demodata.ProjNewJob, 0, model.Modification{
+			Target: rec.Projection(demodata.ProjNewJob).Mods[0].Target, Property: rec.Projection(demodata.ProjNewJob).Mods[0].Property,
+			Mode: model.ModeScale, Values: model.Constant(-1),
+		}, Options{})
+	})
+	for _, p := range rec.Projections {
+		for i, m := range p.Mods {
+			if m.Property == model.PropAddItem {
+				refused(t, ErrInvalidValue, func(st *store.Store, rec *model.Record) (*Result, error) {
+					return SetModMode(st, rec, p.Name, i, model.ModeScale, nil, Options{})
+				})
+				return
+			}
+		}
+	}
+	t.Error("no add_item modification to refuse")
+}
+
+func TestItemGrowth(t *testing.T) {
+	st, rec := seed(t)
+	it := goodItem()
+	it.Growth = 0.03
+	res, err := AddItem(st, rec, demodata.ProjNewJob, it, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mods := reload(t, st).Projection(demodata.ProjNewJob).Mods
+	if got := mods[len(mods)-1].Item.Growth; got != 0.03 {
+		t.Errorf("growth %v", got)
+	}
+	edited := *res.Projection.Mods[len(res.Projection.Mods)-1].Item
+	edited.Growth = 0.04
+	if _, err := EditItem(st, res.Record, demodata.ProjNewJob, edited.ID, edited, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	mods = reload(t, st).Projection(demodata.ProjNewJob).Mods
+	if got := mods[len(mods)-1].Item.Growth; got != 0.04 {
+		t.Errorf("edited growth %v", got)
+	}
+	for _, g := range []float64{-1, -2, 1e16} {
+		bad := goodItem()
+		bad.Growth = g
+		refused(t, ErrInvalidValue, func(st *store.Store, rec *model.Record) (*Result, error) {
+			return AddItem(st, rec, demodata.ProjNewJob, bad, Options{})
+		})
+	}
+	base := rec.Budget.Items[0]
+	base.Growth = 0.02
+	if _, err := EditBudgetItem(st, rec, base.ID, base, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := reload(t, st).Budget.Items[0].Growth; got != 0.02 {
+		t.Errorf("base growth %v", got)
 	}
 }

@@ -26,11 +26,13 @@ const (
 	dryRunDesc   = "validate the edit and print what it would change, but save nothing"
 	jsonFileDesc = "read the JSON input from this file instead of stdin"
 	scheduleNote = "a schedule is [{\"from\": \"YYYY-MM-DD\", \"end\": \"YYYY-MM-DD\" or null, \"value\": number}, ...], sorted and not overlapping; a value holds from its from date until its end or the next segment"
-	itemJSONNote = "the item is {id (optional), name, kind (income, expense or transfer), amount (above zero), recurrence: {kind (one-time, monthly, biweekly or annual), anchor (one-time and biweekly), month (annual), day (monthly and annual)}, start (optional), end (optional), indexed, account (income and expense), from and to (transfer)}, the shape budget list prints"
+	itemJSONNote = "the item is {id (optional), name, kind (income, expense or transfer), amount (above zero), recurrence: {kind (one-time, monthly, biweekly or annual), anchor (one-time and biweekly), month (annual), day (monthly and annual)}, start (optional), end (optional), indexed, growth (optional annual raise as a fraction: 0.03 for 3%, stepping the amount up on each anniversary of the start), account (income and expense), from and to (transfer)}, the shape budget list prints"
 	modIndexNote = "the modification's index, as projection show numbers them from 0"
 )
 
 var itemKinds = []string{string(model.ItemIncome), string(model.ItemExpense), string(model.ItemTransfer)}
+
+var modModes = []string{string(model.ModeSet), string(model.ModeScale)}
 
 var itemEvery = []string{string(model.OneTime), string(model.Monthly), string(model.Biweekly), string(model.Annual)}
 
@@ -48,6 +50,7 @@ func itemFlags(forAdd bool) []flagDef {
 		{Name: "from", Type: typeString, Description: "account id a transfer draws from"},
 		{Name: "to", Type: typeString, Description: "account id a transfer pays into"},
 		{Name: "indexed", Type: typeBool, Default: "false", Description: "the amount grows with inflation"},
+		{Name: "growth", Type: typeNumber, Description: "annual raise as a fraction, 0.03 for 3%: the amount steps up by it on each anniversary of the item's start (0 for none)"},
 	}
 	if forAdd {
 		fs = append(fs, flagDef{Name: "id", Type: typeString, Description: "the item's id; made from the name when omitted"})
@@ -107,7 +110,7 @@ var writeCommands = []*command{
 		run:    cmdProjectionSetOverrideHistory,
 	},
 	{
-		Name: "projection set-inflation", Summary: "set a projection's inflation rate to a constant, replacing its first global inflation modification",
+		Name: "projection set-inflation", Summary: "set a projection's inflation rate to a constant, replacing its first global set inflation modification; scale ones are kept and still apply",
 		Args: []argDef{
 			{Name: "name", Description: "projection to change", Required: true},
 			{Name: "rate", Description: "a fraction per year, 0.03 for 3% (put -- before a negative one); none removes the modification", Required: true},
@@ -116,12 +119,13 @@ var writeCommands = []*command{
 		run:    cmdProjectionSetInflation,
 	},
 	{
-		Name: "mod add", Summary: "add a modification of an item's amount, an account's or asset's growth, or inflation to a projection; its target must exist, for an item in the record or added earlier in the chain",
+		Name: "mod add", Summary: "add a modification of an item's amount or growth, an account's or asset's growth, or inflation to a projection; its target must exist, for an item in the record or added earlier in the chain",
 		Args: []argDef{{Name: "projection", Description: "projection to change", Required: true}},
 		Flags: []flagDef{
 			{Name: "target", Type: typeString, Required: true, Description: "what to change: item:<id or name>, account:<id or name>, asset:<id or name> or global"},
-			{Name: "property", Type: typeEnum, Required: true, Choices: []string{model.PropAmount, model.PropGrowth, model.PropInflation}, Description: "amount for an item, growth for an account or asset, inflation for global"},
-			{Name: "value", Type: typeNumber, Description: "a constant value (a rate is a fraction: 0.04 for 4%); without it the schedule is read as JSON"},
+			{Name: "property", Type: typeEnum, Required: true, Choices: []string{model.PropAmount, model.PropGrowth, model.PropInflation}, Description: "amount or growth (an annual raise) for an item, growth for an account or asset, inflation for global"},
+			{Name: "mode", Type: typeEnum, Choices: modModes, Default: string(model.ModeSet), Description: "set replaces the value beneath; scale multiplies it, so the result follows what lies beneath"},
+			{Name: "value", Type: typeNumber, Description: "a constant value (a rate is a fraction: 0.04 for 4%; with --mode scale a multiplier: 0.7 cuts by 30%); without it the schedule is read as JSON"},
 			{Name: "from", Type: typeDate, Description: "with --value, the date the value starts: " + dateNote + "; always when omitted"},
 			{Name: "at", Type: typeInt, Description: "index to insert at; at the end when omitted"},
 		},
@@ -136,10 +140,11 @@ var writeCommands = []*command{
 			{Name: "index", Description: modIndexNote, Required: true},
 		},
 		Flags: []flagDef{
-			{Name: "value", Type: typeNumber, Description: "a constant value; without it the schedule is read as JSON"},
+			{Name: "mode", Type: typeEnum, Choices: modModes, Description: "change how the modification combines with what lies beneath: set or scale; unchanged when omitted. Alone it keeps the values; with --value or --json-file it replaces them too"},
+			{Name: "value", Type: typeNumber, Description: "a constant value (a multiplier for a scale modification); without it the schedule is read as JSON"},
 			{Name: "from", Type: typeDate, Description: "with --value, the date the value starts: " + dateNote + "; always when omitted"},
 		},
-		Input:  "without --value, a schedule: " + scheduleNote,
+		Input:  "without --value (and not --mode alone), a schedule: " + scheduleNote,
 		Output: writeOut,
 		run:    cmdModEdit,
 	},
@@ -598,7 +603,7 @@ func cmdModAdd(c *call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := model.Modification{Target: target, Property: c.str("property"), Values: values}
+	m := model.Modification{Target: target, Property: c.str("property"), Mode: model.Mode(c.str("mode")), Values: values}
 	var res *ops.Result
 	if atSet {
 		res, err = ops.InsertMod(c.st, c.rec, p.Name, at, m, c.options())
@@ -620,11 +625,21 @@ func cmdModEdit(c *call) (any, error) {
 	if p.Mods[i].Property == model.PropAddItem {
 		return nil, failErr("invalid", "modification %d adds an item: change it with item edit", i)
 	}
+	if c.set["mode"] && !c.set["value"] && !c.set["from"] && !c.set["json-file"] {
+		res, err := ops.SetModMode(c.st, c.rec, p.Name, i, model.Mode(c.str("mode")), nil, c.options())
+		return c.finish(p.Name, res, err)
+	}
 	values, err := c.schedule()
 	if err != nil {
 		return nil, err
 	}
-	res, err := ops.SetModValues(c.st, c.rec, p.Name, i, values, c.options())
+	if !c.set["mode"] {
+		res, err := ops.SetModValues(c.st, c.rec, p.Name, i, values, c.options())
+		return c.finish(p.Name, res, err)
+	}
+	m := p.Mods[i]
+	m.Mode, m.Values = model.Mode(c.str("mode")), values
+	res, err := ops.SetMod(c.st, c.rec, p.Name, i, m, c.options())
 	return c.finish(p.Name, res, err)
 }
 
@@ -676,6 +691,7 @@ type itemInput struct {
 	Start   *string `json:"start"`
 	End     *string `json:"end"`
 	Indexed bool    `json:"indexed"`
+	Growth  float64 `json:"growth"`
 	Account string  `json:"account"`
 	From    string  `json:"from"`
 	To      string  `json:"to"`
@@ -687,7 +703,7 @@ func (c *call) itemJSON() (model.BudgetItem, error) {
 		return model.BudgetItem{}, err
 	}
 	it := model.BudgetItem{
-		ID: in.ID, Name: in.Name, Kind: model.ItemKind(in.Kind), Amount: in.Amount, Indexed: in.Indexed,
+		ID: in.ID, Name: in.Name, Kind: model.ItemKind(in.Kind), Amount: in.Amount, Indexed: in.Indexed, Growth: in.Growth,
 		Account: model.AccountID(in.Account), From: model.AccountID(in.From), To: model.AccountID(in.To),
 		Recurrence: model.Recurrence{Kind: model.RecurrenceKind(in.Recurrence.Kind), Month: time.Month(in.Recurrence.Month), Day: in.Recurrence.Day, Day2: in.Recurrence.Day2},
 	}
@@ -780,6 +796,11 @@ func (c *call) itemFromFlags(base *model.BudgetItem) (model.BudgetItem, error) {
 	}
 	if c.set["indexed"] {
 		it.Indexed = c.str("indexed") == "true"
+	}
+	if v, ok, err := c.number("growth"); err != nil {
+		return it, err
+	} else if ok {
+		it.Growth = v
 	}
 	if c.set["account"] {
 		it.Account = model.AccountID(c.str("account"))

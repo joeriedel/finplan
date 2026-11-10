@@ -170,6 +170,46 @@ func (s Schedule) Overlay(o Schedule) Schedule {
 	return Schedule{segs: segs}
 }
 
+// Scale returns the schedule with its value multiplied by o's on every date both cover. Where o has no value the result is s's, and where s has none the result has none.
+func (s Schedule) Scale(o Schedule) Schedule {
+	if len(o.segs) == 0 || len(s.segs) == 0 {
+		return s
+	}
+	var pts []Date
+	for _, sc := range []Schedule{s, o} {
+		for _, g := range sc.segs {
+			pts = append(pts, g.From)
+			if g.End != nil && *g.End < MaxDate {
+				pts = append(pts, *g.End+1)
+			}
+		}
+	}
+	slices.Sort(pts)
+	pts = slices.Compact(pts)
+
+	var segs []Segment
+	for i, a := range pts {
+		si, ok := s.find(a)
+		if !ok {
+			continue
+		}
+		v := s.segs[si].Value
+		if oi, ok := o.find(a); ok {
+			v *= o.segs[oi].Value
+		}
+		var end *Date
+		if i+1 < len(pts) {
+			end = Ptr(pts[i+1] - 1)
+		}
+		if n := len(segs); n > 0 && segs[n-1].End != nil && *segs[n-1].End+1 == a && segs[n-1].Value == v {
+			segs[n-1].End = end
+			continue
+		}
+		segs = append(segs, Segment{From: a, End: end, Value: v})
+	}
+	return MustSchedule(segs...)
+}
+
 // Compound returns the growth factor over the days from..to when the schedule is an annual rate,
 // compounded over exact elapsed time and split at each segment boundary. Dates with no value contribute a factor of 1.
 func (s Schedule) Compound(from, to Date) float64 {

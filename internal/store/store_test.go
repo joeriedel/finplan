@@ -53,7 +53,7 @@ func richFamily(t *testing.T) *model.Record {
 	}
 	rec.Assets[0].Params = map[string]model.Schedule{model.PropGrowth: model.Constant(0.01)}
 	item := model.BudgetItem{
-		ID: "bonus", Name: "Bonus", Kind: model.ItemIncome, Amount: 1000, Indexed: true, Account: demodata.Checking,
+		ID: "bonus", Name: "Bonus", Kind: model.ItemIncome, Amount: 1000, Indexed: true, Growth: 0.03, Account: demodata.Checking,
 		Recurrence: model.Recurrence{Kind: model.Annual, Month: time.March, Day: 1},
 		Start:      model.Ptr(model.D(2027, time.January, 1)), End: model.Ptr(model.D(2030, time.January, 1)),
 	}
@@ -66,6 +66,7 @@ func richFamily(t *testing.T) *model.Record {
 		Mods: []model.Modification{
 			{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: "bonus"}, Property: model.PropAddItem, Item: &item},
 			{Target: model.ObjectRef{Kind: model.KindGlobal, ID: model.PropInflation}, Property: model.PropInflation, Values: model.Constant(0.03)},
+			{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: "bonus"}, Property: model.PropAmount, Mode: model.ModeScale, Values: model.Constant(0.7)},
 		},
 		Shocks:     []model.Shock{{Class: "lc", Date: model.D(2028, time.June, 1), Change: -0.3}},
 		Rebalances: []model.Rebalance{{Account: demodata.Brokerage, Date: model.D(2029, time.January, 1), Allocation: []model.Weight{{Class: "lc", Share: 0.6}, {Class: "tr", Share: 0.4}}}, {Account: demodata.Roth}},
@@ -104,6 +105,27 @@ func TestRoundTrip(t *testing.T) {
 	mustSave(t, s2, plain)
 	if got := mustLoad(t, s2); !reflect.DeepEqual(got, plain) {
 		t.Fatal("loaded Family differs from the original")
+	}
+}
+
+func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
+	s, _ := openTemp(t)
+	want := demodata.Family()
+	mustSave(t, s, want)
+	var format int
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 2 {
+		t.Fatalf("format written: %d, %v", format, err)
+	}
+	// Format 1 documents have no mode and no growth.
+	var withNew int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM documents WHERE kind IN ('budget', 'projection') AND (body LIKE '%"mode":%' OR body LIKE '%"growth":%')`).Scan(&withNew); err != nil || withNew != 0 {
+		t.Fatalf("documents with a mode or growth: %d, %v", withNew, err)
+	}
+	if _, err := s.db.Exec(`UPDATE documents SET format = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoad(t, s); !reflect.DeepEqual(got, want) {
+		t.Fatal("format 1 record loads differently")
 	}
 }
 

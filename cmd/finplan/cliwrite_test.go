@@ -6,13 +6,16 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/joeriedel/finplan/internal/demodata"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/store"
 )
@@ -30,6 +33,7 @@ type written struct {
 			Index    int
 			Target   struct{ Kind, ID string }
 			Property string
+			Mode     string
 			Schedule []struct {
 				From  string
 				End   *string
@@ -38,6 +42,7 @@ type written struct {
 			Item *struct {
 				ID, Name, Kind string
 				Amount         float64
+				Growth         float64
 				Account        *string
 			}
 		}
@@ -198,6 +203,11 @@ func TestCLIWriteProjectionCommands(t *testing.T) {
 	w = write(t, path, "", "projection", "set-inflation", "Early", "none")
 	if len(w.Projection.Modifications) != 0 {
 		t.Errorf("set-inflation none: %+v", w.Projection.Modifications)
+	}
+	write(t, path, "", "mod", "add", "Early", "--target", "global", "--property", "inflation", "--mode", "scale", "--value", "1.2")
+	w = write(t, path, "", "projection", "set-inflation", "Early", "0.03")
+	if m := w.Projection.Modifications; len(m) != 2 || m[0].Mode == "scale" || m[0].Schedule[0].Value != 0.03 || m[1].Mode != "scale" {
+		t.Errorf("set-inflation beside a scale: %+v", m)
 	}
 
 	w = write(t, path, "", "projection", "delete", "Job two")
@@ -524,4 +534,214 @@ func TestCLIWriteHelp(t *testing.T) {
 	if !types["number"] || !types["int"] {
 		t.Errorf("flag types %v", types)
 	}
+}
+
+// breakdownLine is the projected amount of one cause in the breakdown of the target over (from, to], under the projection if not empty.
+func breakdownLine(t *testing.T, path, target, projection, from, to, cause string) float64 {
+	t.Helper()
+	args := []string{"--db", path, "breakdown", target, "--from", from, "--to", to}
+	if projection != "" {
+		args = append(args, "--projection", projection)
+	}
+	var bd struct {
+		Lines []struct {
+			Cause     string
+			Projected float64
+		}
+	}
+	cliJSON(t, &bd, args...)
+	for _, l := range bd.Lines {
+		if l.Cause == cause {
+			return l.Projected
+		}
+	}
+	return 0
+}
+
+func closeTo(got, want float64) bool { return math.Abs(got-want) <= 1e-6*math.Max(1, math.Abs(want)) }
+
+// TestCLICutDiningScenario cuts dining by 30% from 2026 with a scale of 0.7, then changes the base amount, and the projected amount follows it.
+func TestCLICutDiningScenario(t *testing.T) {
+	path := seededFile(t)
+	write(t, path, "", "projection", "new", "Cut dining")
+	// Dining is 900 on the 6th, indexed at 2.5% from the demo's today; the card's expenses over Jan..Jun 2027 are dining and others.
+	from, to := "2026-12-31", "2027-06-30"
+	dining := func(amount float64) float64 {
+		sum := 0.0
+		for m := time.January; m <= time.June; m++ {
+			sum += amount * math.Pow(1.025, float64(model.D(2027, m, 6)-demodata.FamilyToday)/model.DaysPerYear)
+		}
+		return sum
+	}
+	cut := func() float64 {
+		return breakdownLine(t, path, "card", "Cut dining", from, to, "expense") - breakdownLine(t, path, "card", "", from, to, "expense")
+	}
+	if got := cut(); got != 0 {
+		t.Fatalf("an empty projection changes the card's expenses by %v", got)
+	}
+
+	args := []string{"mod", "add", "Cut dining", "--target", "item:dining", "--property", "amount", "--mode", "scale", "--value", "0.7", "--from", "2026-01-01"}
+	dry := write(t, path, "", append(args, "--dry-run")...)
+	if !dry.DryRun || len(dry.Projection.Modifications) != 1 || cut() != 0 {
+		t.Fatalf("dry run: %+v", dry)
+	}
+	w := write(t, path, "", args...)
+	m := w.Projection.Modifications[0]
+	if m.Mode != "scale" || m.Property != "amount" || m.Target.ID != "dining" || m.Schedule[0].Value != 0.7 || m.Schedule[0].From != "2026-01-01" {
+		t.Errorf("stored %+v", m)
+	}
+	// Projected expenses are negative: the card pays 30% less of dining.
+	if got, want := cut(), 0.3*dining(900); !closeTo(got, want) {
+		t.Errorf("30%% less dining over six months: got %v, want %v", got, want)
+	}
+
+	data(t, path, "", "budget", "edit", "dining", "--amount", "1200")
+	if got, want := cut(), 0.3*dining(1200); !closeTo(got, want) {
+		t.Errorf("after the base changes to 1200: got %v, want %v", got, want)
+	}
+
+	// The mode is shown, and edits.
+	var show struct {
+		Modifications []struct{ Mode string }
+	}
+	cliJSON(t, &show, "--db", path, "projection", "show", "Cut dining")
+	if show.Modifications[0].Mode != "scale" {
+		t.Errorf("projection show: %+v", show)
+	}
+	w = write(t, path, "", "mod", "edit", "Cut dining", "0", "--mode", "set")
+	if !w.Changed || w.Projection.Modifications[0].Mode != "set" || w.Projection.Modifications[0].Schedule[0].Value != 0.7 {
+		t.Errorf("mod edit --mode set: %+v", w)
+	}
+	if w := write(t, path, "", "mod", "edit", "Cut dining", "0", "--mode", "set"); w.Changed {
+		t.Error("the same mode changed")
+	}
+	// As a set, 0.7 is a dining of 0.70 a month.
+	if got, want := cut(), dining(1200)-dining(0.7); !closeTo(got, want) {
+		t.Errorf("as a set: got %v, want %v", got, want)
+	}
+	w = write(t, path, "", "mod", "edit", "Cut dining", "0", "--mode", "scale", "--value", "0.5")
+	if m := w.Projection.Modifications[0]; m.Mode != "scale" || m.Schedule[0].Value != 0.5 {
+		t.Errorf("mod edit --mode scale --value: %+v", m)
+	}
+	refusedWrite(t, path, "", 1, "invalid", "mod", "add", "Cut dining", "--target", "item:dining", "--property", "amount", "--mode", "scale", "--value", "-0.5")
+	refusedWrite(t, path, "", 2, "usage", "mod", "add", "Cut dining", "--target", "item:dining", "--property", "amount", "--mode", "mix", "--value", "0.5")
+}
+
+// TestCLIRaisesScenario adds a salary with 3% yearly raises to a new job.
+func TestCLIRaisesScenario(t *testing.T) {
+	path := seededFile(t)
+	write(t, path, "", "projection", "new", "Job B")
+	args := []string{"item", "add", "Job B", "--kind", "income", "--name", "Salary B", "--amount", "5000", "--every", "monthly", "--on", "2027-03-01", "--account", "checking", "--growth", "0.03"}
+	dry := write(t, path, "", append(args, "--dry-run")...)
+	if !dry.DryRun || dry.Projection.Modifications[0].Item.Growth != 0.03 {
+		t.Fatalf("dry run: %+v", dry)
+	}
+	var shown struct{ Modifications []any }
+	cliJSON(t, &shown, "--db", path, "projection", "show", "Job B")
+	if len(shown.Modifications) != 0 {
+		t.Fatal("a dry run saved the item")
+	}
+	w := write(t, path, "", args...)
+	if got := w.Projection.Modifications[0].Item.Growth; got != 0.03 {
+		t.Errorf("stored growth %v", got)
+	}
+
+	// Salary B is paid on the 1st from 2027-03-01 and steps up 3% on 2028-03-01 and 2029-03-01, not continuously.
+	gross := func(from, to string) float64 {
+		return breakdownLine(t, path, "checking", "Job B", from, to, "income") - breakdownLine(t, path, "checking", "", from, to, "income")
+	}
+	for _, tc := range []struct {
+		from, to string
+		want     float64
+	}{
+		{"2027-02-28", "2027-03-01", 5000},
+		{"2027-02-28", "2028-02-29", 12 * 5000},
+		{"2028-01-31", "2028-02-29", 5000},
+		{"2028-02-29", "2028-03-01", 5150},
+		{"2028-02-29", "2029-02-28", 12 * 5150},
+		{"2029-02-28", "2030-02-28", 12 * 5304.5},
+	} {
+		if got := gross(tc.from, tc.to); !closeTo(got, tc.want) {
+			t.Errorf("salary over (%s, %s]: got %v, want %v", tc.from, tc.to, got, tc.want)
+		}
+	}
+
+	// Indexed, the raises multiply with inflation (2.5% a year from the demo's today).
+	w = write(t, path, "", "item", "edit", "Job B", "salary-b-2", "--indexed")
+	if !w.Changed {
+		t.Fatal("item edit --indexed changed nothing")
+	}
+	indexed := func(from, to model.Date) float64 {
+		sum := 0.0
+		for d := from; d <= to; d++ {
+			if _, _, day := d.YMD(); day != 1 || d < model.D(2027, time.March, 1) {
+				continue
+			}
+			raises := 0
+			for y := 2028; y <= 2029; y++ {
+				if d >= model.D(y, time.March, 1) {
+					raises++
+				}
+			}
+			sum += 5000 * math.Pow(1.03, float64(raises)) * math.Pow(1.025, float64(d-demodata.FamilyToday)/model.DaysPerYear)
+		}
+		return sum
+	}
+	if got, want := gross("2028-02-29", "2029-02-28"), indexed(model.D(2028, time.March, 1), model.D(2029, time.February, 28)); !closeTo(got, want) {
+		t.Errorf("raises with inflation: got %v, want %v", got, want)
+	}
+
+	// A growth modification of the item, in either mode.
+	write(t, path, "", "mod", "add", "Job B", "--target", "item:salary-b-2", "--property", "growth", "--value", "0.1", "--from", "2029-01-01")
+	if got, want := gross("2028-02-29", "2029-02-28"), indexed(model.D(2028, time.March, 1), model.D(2029, time.February, 28)); !closeTo(got, want) {
+		t.Errorf("a later rate leaves earlier steps: got %v, want %v", got, want)
+	}
+	if got := gross("2029-02-28", "2029-03-01"); !closeTo(got, 5000*1.03*1.1*math.Pow(1.025, float64(model.D(2029, time.March, 1)-demodata.FamilyToday)/model.DaysPerYear)) {
+		t.Errorf("the 2029 step at the modification's rate: got %v", got)
+	}
+	w = write(t, path, "", "mod", "add", "Job B", "--target", "item:salary-b-2", "--property", "growth", "--mode", "scale", "--value", "0", "--from", "2029-01-01")
+	if m := w.Projection.Modifications[2]; m.Mode != "scale" || m.Property != "growth" {
+		t.Errorf("scaled growth modification: %+v", m)
+	}
+	if got := gross("2029-02-28", "2029-03-01"); !closeTo(got, 5000*1.03*math.Pow(1.025, float64(model.D(2029, time.March, 1)-demodata.FamilyToday)/model.DaysPerYear)) {
+		t.Errorf("a scale of zero ends the raises: got %v", got)
+	}
+	refusedWrite(t, path, "", 1, "invalid", "mod", "add", "Job B", "--target", "item:salary-b-2", "--property", "growth", "--value", "-1")
+	refusedWrite(t, path, "", 1, "invalid", "item", "edit", "Job B", "salary-b-2", "--growth", "-1.5")
+}
+
+func TestCLIBudgetGrowth(t *testing.T) {
+	path := seededFile(t)
+	w := data(t, path, "", "budget", "add", "--kind", "income", "--name", "Tutoring", "--amount", "400", "--every", "monthly", "--on", "2027-01-15", "--account", "checking", "--growth", "0.04")
+	if w.Item.Growth != 0.04 {
+		t.Errorf("add: %+v", w.Item)
+	}
+	var list []struct {
+		ID     string
+		Growth float64
+	}
+	cliJSON(t, &list, "--db", path, "budget", "list")
+	if got := list[len(list)-1]; got.ID != "tutoring" || got.Growth != 0.04 {
+		t.Errorf("budget list: %+v", got)
+	}
+	if got := list[0].Growth; got != 0 {
+		t.Errorf("an item without raises lists growth %v", got)
+	}
+	w = data(t, path, "", "budget", "edit", "tutoring", "--growth", "0.05")
+	if w.Item.Growth != 0.05 {
+		t.Errorf("edit: %+v", w.Item)
+	}
+	w = data(t, path, "", "budget", "edit", "tutoring", "--amount", "450")
+	if w.Item.Growth != 0.05 {
+		t.Errorf("an edit of the amount drops the growth: %+v", w.Item)
+	}
+	w = data(t, path, `{"name":"Gift","kind":"income","amount":500,"growth":0.02,"account":"checking","recurrence":{"kind":"one-time","anchor":"2027-03-01"}}`, "budget", "add")
+	if w.Item.Growth != 0.02 {
+		t.Errorf("add JSON: %+v", w.Item)
+	}
+	w = data(t, path, "", "budget", "edit", "tutoring", "--growth", "0")
+	if w.Item.Growth != 0 {
+		t.Errorf("edit --growth 0: %+v", w.Item)
+	}
+	refusedWrite(t, path, "", 1, "invalid", "budget", "edit", "tutoring", "--growth", "-1")
 }

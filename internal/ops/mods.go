@@ -21,19 +21,41 @@ func checkSchedule(s model.Schedule) error {
 	return nil
 }
 
-// checkMod refuses a modification that needs an object and names none, or whose values are out of range.
-func checkMod(m model.Modification) error {
+// checkMod refuses a modification that needs an object and names none, whose mode is unknown or does not suit its property, or whose values are out of range. It returns the modification with the default mode, set, written as the empty mode.
+func checkMod(m model.Modification) (model.Modification, error) {
 	if m.Target.Kind != model.KindGlobal && m.Target.ID == "" {
-		return refuse(ErrNoObject, "a modification of kind %q needs an object", m.Target.Kind)
+		return m, refuse(ErrNoObject, "a modification of kind %q needs an object", m.Target.Kind)
 	}
-	return checkSchedule(m.Values)
+	switch m.Mode {
+	case model.ModeSet:
+		m.Mode = ""
+	case "":
+	case model.ModeScale:
+		if m.Property == model.PropAddItem {
+			return m, refuse(ErrInvalidValue, "a modification that adds a budget item cannot scale")
+		}
+	default:
+		return m, refuse(ErrInvalidValue, "the mode %q must be set or scale", m.Mode)
+	}
+	if err := checkSchedule(m.Values); err != nil {
+		return m, err
+	}
+	for _, seg := range m.Values.Segments() {
+		switch {
+		case m.IsScale() && seg.Value < 0:
+			return m, refuse(ErrInvalidValue, "a scale of %v must not be negative", seg.Value)
+		case !m.IsScale() && m.Target.Kind == model.KindBudgetItem && m.Property == model.PropGrowth && seg.Value <= -1:
+			return m, refuse(ErrInvalidValue, "a raise of %v must be above -1", seg.Value)
+		}
+	}
+	return m, nil
 }
 
-// SetInflation sets the projection's one global inflation modification to a constant v, adding the modification if there is none; nil removes it. If there are several, the first is the one set or removed.
+// SetInflation sets the projection's global set-mode inflation modification to a constant v, adding it if there is none; nil removes it. If there are several, the first is the one set or removed. Scale modifications are kept and still apply on top: an added modification goes before the projection's first scale inflation modification.
 func SetInflation(st *store.Store, rec *model.Record, name string, v *float64, o Options) (*Result, error) {
 	return editProjection(st, rec, o, name, func(p *model.Projection) error {
 		idx := slices.IndexFunc(p.Mods, func(m model.Modification) bool {
-			return m.Target.Kind == model.KindGlobal && m.Property == model.PropInflation
+			return m.Target.Kind == model.KindGlobal && m.Property == model.PropInflation && !m.IsScale()
 		})
 		switch {
 		case v == nil && idx >= 0:
@@ -47,14 +69,20 @@ func SetInflation(st *store.Store, rec *model.Record, name string, v *float64, o
 		}
 		if idx >= 0 {
 			p.Mods[idx].Values = s
-		} else {
-			p.Mods = append(p.Mods, model.Modification{Target: model.ObjectRef{Kind: model.KindGlobal}, Property: model.PropInflation, Values: s})
+			return nil
 		}
+		at := slices.IndexFunc(p.Mods, func(m model.Modification) bool {
+			return m.Target.Kind == model.KindGlobal && m.Property == model.PropInflation && m.IsScale()
+		})
+		if at < 0 {
+			at = len(p.Mods)
+		}
+		p.Mods = slices.Insert(p.Mods, at, model.Modification{Target: model.ObjectRef{Kind: model.KindGlobal}, Property: model.PropInflation, Values: s})
 		return nil
 	})
 }
 
-// AddMod appends the modification to the projection's. It refuses a non-global modification that names no object, a value that is not a number within range, and a target that does not resolve at the end of the list (ErrUnknownTarget). A budget item is added with AddItem, not here.
+// AddMod appends the modification to the projection's. It refuses a non-global modification that names no object, a value that is not a number within range (a scale also not below zero, a raise not at or below -1), a mode that is not set or scale, and a target that does not resolve at the end of the list (ErrUnknownTarget). A budget item is added with AddItem, not here.
 func AddMod(st *store.Store, rec *model.Record, name string, m model.Modification, o Options) (*Result, error) {
 	return editProjection(st, rec, o, name, func(p *model.Projection) error { return insertMod(rec, p, len(p.Mods), m) })
 }
@@ -65,7 +93,8 @@ func InsertMod(st *store.Store, rec *model.Record, name string, index int, m mod
 }
 
 func insertMod(rec *model.Record, p *model.Projection, index int, m model.Modification) error {
-	if err := checkMod(m); err != nil {
+	m, err := checkMod(m)
+	if err != nil {
 		return err
 	}
 	if err := p.InsertMod(index, m); err != nil {
@@ -81,6 +110,9 @@ func checkTarget(rec *model.Record, p *model.Projection, index int) error {
 	switch m.Target.Kind {
 	case model.KindBudgetItem:
 		want = model.PropAmount
+		if m.Property == model.PropGrowth {
+			want = model.PropGrowth
+		}
 	case model.KindAccount, model.KindAsset:
 		want = model.PropGrowth
 	case model.KindGlobal:
@@ -89,6 +121,9 @@ func checkTarget(rec *model.Record, p *model.Projection, index int) error {
 		return refuse(ErrInvalidValue, "unknown object kind %q", m.Target.Kind)
 	}
 	if m.Property != want {
+		if m.Target.Kind == model.KindBudgetItem {
+			return refuse(ErrInvalidValue, "a modification of a budget item changes its amount or growth, not %q", m.Property)
+		}
 		return refuse(ErrInvalidValue, "a modification of a %s changes its %s, not %q", m.Target.Kind, want, m.Property)
 	}
 	switch m.Target.Kind {
@@ -175,7 +210,7 @@ func addedItems(ids map[string]bool, mods []model.Modification) {
 	}
 }
 
-// danglingMods counts, per projection, target and property, the amount modifications of budget items that do not resolve.
+// danglingMods counts, per projection, target and property, the amount and growth modifications of budget items that do not resolve.
 func danglingMods(rec *model.Record) map[[3]string]int {
 	out := map[[3]string]int{}
 	for _, p := range rec.Projections {
@@ -191,7 +226,7 @@ func danglingMods(rec *model.Record) map[[3]string]int {
 			addedItems(ids, q.Mods)
 		}
 		for i, m := range p.Mods {
-			if m.Target.Kind == model.KindBudgetItem && m.Property == model.PropAmount && !ids[m.Target.ID] {
+			if m.Target.Kind == model.KindBudgetItem && (m.Property == model.PropAmount || m.Property == model.PropGrowth) && !ids[m.Target.ID] {
 				out[[3]string{p.Name, m.Target.ID, m.Property}]++
 			}
 			addedItems(ids, p.Mods[i:i+1])
@@ -236,11 +271,32 @@ func SetMod(st *store.Store, rec *model.Record, name string, index int, m model.
 		if p.Mods[index].Property == model.PropAddItem || m.Property == model.PropAddItem {
 			return refuse(ErrInvalidValue, "a modification that adds a budget item is edited with EditItem, not replaced")
 		}
-		if err := checkMod(m); err != nil {
+		m, err := checkMod(m)
+		if err != nil {
 			return err
 		}
 		p.Mods[index] = m
 		return checkTarget(rec, p, index)
+	})
+}
+
+// SetModMode changes how the projection's modification at index combines with what lies beneath it: model.ModeSet or model.ModeScale. Its values are kept as they are, or replaced by values if that is not nil, since the new mode may read them differently. A modification that adds a budget item has no mode.
+func SetModMode(st *store.Store, rec *model.Record, name string, index int, mode model.Mode, values *model.Schedule, o Options) (*Result, error) {
+	return editProjection(st, rec, o, name, func(p *model.Projection) error {
+		if index < 0 || index >= len(p.Mods) {
+			return fmt.Errorf("projection %q: modification index %d out of range", name, index)
+		}
+		m := p.Mods[index]
+		m.Mode = mode
+		if values != nil {
+			m.Values = *values
+		}
+		m, err := checkMod(m)
+		if err != nil {
+			return err
+		}
+		p.Mods[index] = m
+		return nil
 	})
 }
 
@@ -250,10 +306,13 @@ func SetModValues(st *store.Store, rec *model.Record, name string, index int, va
 		if index < 0 || index >= len(p.Mods) {
 			return fmt.Errorf("projection %q: modification index %d out of range", name, index)
 		}
-		if err := checkSchedule(values); err != nil {
+		m := p.Mods[index]
+		m.Values = values
+		m, err := checkMod(m)
+		if err != nil {
 			return err
 		}
-		p.Mods[index].Values = values
+		p.Mods[index] = m
 		return nil
 	})
 }

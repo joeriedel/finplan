@@ -89,7 +89,7 @@ func TestScenarioNewJobInTheGUI(t *testing.T) {
 	base := balanceOn(t, a, demodata.Checking, demodata.ProjBase, endOfYear)
 
 	pt.addKind, pt.addObj, pt.addProp, pt.addStart = model.KindBudgetItem, "salary-a", propEndsOn, ""
-	if got := modProblem(a.rec, name, pt.addKind, pt.addObj, pt.addProp, pt.addValue, pt.addStart); !strings.Contains(got, "date") {
+	if got := modProblem(a.rec, name, pt.addKind, pt.addObj, pt.addProp, pt.addMode, pt.addValue, pt.addStart); !strings.Contains(got, "date") {
 		t.Errorf("no end date: %q", got)
 	}
 	pt.addStart = "2027-03-01"
@@ -310,10 +310,17 @@ func TestScenarioIncompleteModification(t *testing.T) {
 		{"property of another kind", model.KindAccount, "savings", model.PropAmount, "5", "", "growth"},
 		{"fine", model.KindAccount, "savings", model.PropGrowth, "4", "", ""},
 	} {
-		got := modProblem(rec, job, c.kind, c.obj, c.prop, c.value, c.start)
+		got := modProblem(rec, job, c.kind, c.obj, c.prop, "", c.value, c.start)
 		if c.want == "" && got != "" || !strings.Contains(got, c.want) {
 			t.Errorf("%s: %q, want %q", c.what, got, c.want)
 		}
+	}
+
+	if got := modProblem(rec, job, model.KindBudgetItem, "salary-a", model.PropGrowth, model.ModeScale, "-5", ""); got != "" {
+		t.Errorf("a scale of a budget item's growth: %q", got)
+	}
+	if got := modProblem(rec, job, model.KindBudgetItem, "salary-a", model.PropAmount, model.ModeScale, "-150", ""); !strings.Contains(got, "negative") {
+		t.Errorf("a scale below zero: %q", got)
 	}
 
 	pt := a.proj
@@ -361,5 +368,75 @@ func TestReasonOf(t *testing.T) {
 	}
 	if got := reasonOf(ops.ErrNoObject); got != "pick an object" {
 		t.Errorf("no object: %q", got)
+	}
+}
+
+// Scenario 6: cut dining by 30% as a scale, then flip the mode, and give an item raises, in the GUI.
+func TestScenarioScaleAndRaisesInTheGUI(t *testing.T) {
+	a := demoApp(t)
+	pt := a.proj
+	name := newChild(t, a, demodata.ProjBase)
+	base := balanceOn(t, a, demodata.Card, demodata.ProjBase, endOfYear)
+
+	pt.addKind, pt.addObj, pt.addProp, pt.addMode, pt.addValue, pt.addStart = model.KindBudgetItem, "dining", model.PropAmount, model.ModeScale, "-30", "2026-01-01"
+	if !pt.addMod(name) {
+		t.Fatalf("the scale was not added: %v", a.notices)
+	}
+	m := a.rec.Projection(name).Mods[0]
+	if v, _, ok := constantOf(m.Values); !ok || v != 0.7 || m.Mode != model.ModeScale {
+		t.Fatalf("scale mod %+v", m)
+	}
+	if got := balanceOn(t, a, demodata.Card, name, endOfYear); !(got > base) {
+		t.Errorf("the card is %v with less dining, %v without", got, base)
+	}
+	if got := formatValue(m.Property, m.Mode, 0.7); got != "-30%" {
+		t.Errorf("the value shows as %q", got)
+	}
+
+	pt.setModValue(name, 0, "-50")
+	if v, _, _ := constantOf(a.rec.Projection(name).Mods[0].Values); v != 0.5 {
+		t.Errorf("a scale of -50 is %v", v)
+	}
+	pt.setModValue(name, 0, "-150")
+	if v, _, _ := constantOf(a.rec.Projection(name).Mods[0].Values); v != 0.5 || len(a.notices) == 0 {
+		t.Errorf("a scale below zero was accepted: %v", v)
+	}
+	pt.setModMode(name, 0, model.ModeSet)
+	if m := a.rec.Projection(name).Mods[0]; m.IsScale() {
+		t.Errorf("mode %q", m.Mode)
+	}
+
+	// An item the projection adds, with raises.
+	pt.addNew = true
+	pt.addItem = newItemForm()
+	fillItem(&pt.addItem, "kind", "income", "name", "Salary B", "amount", "5000", "every", "monthly", "date", "2027-03-01", "day", "1", "account", "checking", "growth", "3")
+	if !pt.addNewItem(name) {
+		t.Fatalf("the item was not added: %v", a.notices)
+	}
+	mods := a.rec.Projection(name).Mods
+	item := *mods[len(mods)-1].Item
+	if item.Growth != 0.03 {
+		t.Errorf("growth %v", item.Growth)
+	}
+	if f := formOf(item); f.growth != "3%" {
+		t.Errorf("the form shows %q", f.growth)
+	}
+	pt.setItemField(name, len(mods)-1, "growth", "4")
+	if got := a.rec.Projection(name).Mods[len(mods)-1].Item.Growth; got != 0.04 {
+		t.Errorf("edited growth %v", got)
+	}
+	pt.setItemField(name, len(mods)-1, "growth", "")
+	if got := a.rec.Projection(name).Mods[len(mods)-1].Item.Growth; got != 0 {
+		t.Errorf("cleared growth %v", got)
+	}
+	f := newItemForm()
+	fillItem(&f, "growth", "lots")
+	if _, err := f.item(); err == nil {
+		t.Error("a growth that is not a number was accepted")
+	}
+
+	// Raises are a property of a budget item to modify.
+	if !slices.Contains(propertiesFor(model.KindBudgetItem), model.PropGrowth) {
+		t.Error("no growth among the properties of a budget item")
 	}
 }

@@ -13,8 +13,10 @@ import (
 
 // formatCurrent is the document format version this build writes. Every document row carries its own
 // version, and decodeDoc dispatches on it, so a later format adds a case that reads the old shape and
-// converts it.
-const formatCurrent = 1
+// converts it. Format 2 added the modification mode and the budget item growth to format 1's shape; a
+// format 1 document has neither and reads as set and zero, and the bump makes an older build refuse a
+// document whose scale modifications it would otherwise silently ignore.
+const formatCurrent = 2
 
 // Document kinds.
 const (
@@ -27,7 +29,7 @@ const (
 	kindProjection = "projection"
 )
 
-// The DTOs below are the stored shape of format 1. They are separate from the model types so that
+// The DTOs below are the stored shape of formats 1 and 2. They are separate from the model types so that
 // renaming a model field cannot change what is on disk.
 
 type recordDoc struct {
@@ -93,6 +95,7 @@ type budgetItemDoc struct {
 	Start      *model.Date     `json:"start"`
 	End        *model.Date     `json:"end"`
 	Indexed    bool            `json:"indexed"`
+	Growth     float64         `json:"growth,omitempty"`
 	Account    model.AccountID `json:"account"`
 	From       model.AccountID `json:"from"`
 	To         model.AccountID `json:"to"`
@@ -116,6 +119,7 @@ type objectRefDoc struct {
 type modDoc struct {
 	Target   objectRefDoc   `json:"target"`
 	Property string         `json:"property"`
+	Mode     model.Mode     `json:"mode,omitempty"`
 	Values   []segDoc       `json:"values"`
 	Item     *budgetItemDoc `json:"item"`
 }
@@ -164,7 +168,7 @@ type docRow struct {
 // decodeDoc decodes a document body of the given format version into v, the current shape.
 func decodeDoc(row docRow, v any) error {
 	switch row.format {
-	case 1:
+	case 1, 2:
 		if err := json.Unmarshal(row.body, v); err != nil {
 			return fmt.Errorf("store: %s %q: %w", row.kind, row.key, err)
 		}
@@ -236,14 +240,14 @@ func docDefault(d []intervalDoc) model.DefaultBalance {
 func itemDoc(b model.BudgetItem) budgetItemDoc {
 	r := b.Recurrence
 	return budgetItemDoc{b.ID, b.Name, b.Kind, b.Amount, recurrenceDoc{r.Kind, r.Anchor, int(r.Month), r.Day, r.Day2},
-		b.Start, b.End, b.Indexed, b.Account, b.From, b.To}
+		b.Start, b.End, b.Indexed, b.Growth, b.Account, b.From, b.To}
 }
 
 func docItem(d budgetItemDoc) model.BudgetItem {
 	r := d.Recurrence
 	return model.BudgetItem{ID: d.ID, Name: d.Name, Kind: d.Kind, Amount: d.Amount,
 		Recurrence: model.Recurrence{Kind: r.Kind, Anchor: r.Anchor, Month: time.Month(r.Month), Day: r.Day, Day2: r.Day2},
-		Start:      d.Start, End: d.End, Indexed: d.Indexed, Account: d.Account, From: d.From, To: d.To}
+		Start:      d.Start, End: d.End, Indexed: d.Indexed, Growth: d.Growth, Account: d.Account, From: d.From, To: d.To}
 }
 
 func memberToDoc(m model.Member) memberDoc {
@@ -269,7 +273,7 @@ func projectionToDoc(p *model.Projection) projectionDoc {
 			return assetSettingDoc{a.Asset, a.Start, a.OverrideHistory}
 		}),
 		Mods: mapSlice(p.Mods, func(m model.Modification) modDoc {
-			d := modDoc{Target: objectRefDoc{m.Target.Kind, m.Target.ID}, Property: m.Property, Values: scheduleDoc(m.Values)}
+			d := modDoc{Target: objectRefDoc{m.Target.Kind, m.Target.ID}, Property: m.Property, Mode: m.Mode, Values: scheduleDoc(m.Values)}
 			if m.Item != nil {
 				it := itemDoc(*m.Item)
 				d.Item = &it
@@ -293,7 +297,10 @@ func docProjection(d projectionDoc) (*model.Projection, error) {
 		p.Mods = make([]model.Modification, len(d.Mods))
 	}
 	for i, m := range d.Mods {
-		mod := model.Modification{Target: model.ObjectRef{Kind: m.Target.Kind, ID: m.Target.ID}, Property: m.Property}
+		mod := model.Modification{Target: model.ObjectRef{Kind: m.Target.Kind, ID: m.Target.ID}, Property: m.Property, Mode: m.Mode}
+		if m.Mode != "" && m.Mode != model.ModeSet && m.Mode != model.ModeScale {
+			return nil, fmt.Errorf("projection %q mod %d: unknown mode %q", d.Name, i, m.Mode)
+		}
 		if mod.Values, err = docSchedule(m.Values); err != nil {
 			return nil, fmt.Errorf("projection %q mod %d: %w", d.Name, i, err)
 		}

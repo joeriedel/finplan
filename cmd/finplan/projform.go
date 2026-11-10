@@ -40,14 +40,14 @@ func reasonOf(err error) string {
 }
 
 // modProblem says why the modification the Add form describes cannot be added to the projection, or "" if it can. What the form cannot parse comes first; the rest is what ops.AddMod and ops.EndItem refuse.
-func modProblem(rec *model.Record, proj string, kind model.ObjectKind, obj, prop, value, start string) string {
+func modProblem(rec *model.Record, proj string, kind model.ObjectKind, obj, prop string, mode model.Mode, value, start string) string {
 	if kind != model.KindGlobal && obj == "" {
 		return "pick an object"
 	}
 	if prop == "" {
 		return "pick a property"
 	}
-	m, err := newMod(kind, obj, prop, value, start)
+	m, err := newMod(kind, obj, prop, mode, value, start)
 	if err != nil {
 		return err.Error()
 	}
@@ -58,6 +58,7 @@ func modProblem(rec *model.Record, proj string, kind model.ObjectKind, obj, prop
 type itemForm struct {
 	kind                  model.ItemKind
 	name, amount          string
+	growth                string
 	every                 model.RecurrenceKind
 	date, day, month, end string
 	account, from, to     model.AccountID
@@ -77,6 +78,9 @@ func formOf(it model.BudgetItem) itemForm {
 	case it.Start != nil:
 		f.date = it.Start.String()
 	}
+	if it.Growth != 0 {
+		f.growth = formatValue(model.PropGrowth, model.ModeSet, it.Growth)
+	}
 	if r.Day != 0 {
 		f.day = strconv.Itoa(r.Day)
 	}
@@ -89,7 +93,7 @@ func formOf(it model.BudgetItem) itemForm {
 	return f
 }
 
-// set changes one field: kind, name, amount, every, date, day, month, end, account, from or to.
+// set changes one field: kind, name, amount, growth, every, date, day, month, end, account, from or to.
 func (f *itemForm) set(field, text string) {
 	switch field {
 	case "kind":
@@ -98,6 +102,8 @@ func (f *itemForm) set(field, text string) {
 		f.name = text
 	case "amount":
 		f.amount = text
+	case "growth":
+		f.growth = text
 	case "every":
 		f.every = model.RecurrenceKind(text)
 		f.seed()
@@ -168,11 +174,16 @@ func (f itemForm) item() (model.BudgetItem, error) {
 	if strings.TrimSpace(f.amount) == "" {
 		return it, errors.New("enter an amount")
 	}
-	amount, err := parseValue(model.PropAmount, f.amount)
+	amount, err := parseValue(model.PropAmount, model.ModeSet, f.amount)
 	if err != nil {
 		return it, err
 	}
 	it.Amount = amount
+	if strings.TrimSpace(f.growth) != "" {
+		if it.Growth, err = parseValue(model.PropGrowth, model.ModeSet, f.growth); err != nil {
+			return it, err
+		}
+	}
 	switch f.kind {
 	case model.ItemIncome, model.ItemExpense:
 		if f.account == "" {

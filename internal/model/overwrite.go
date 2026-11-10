@@ -100,7 +100,7 @@ func (r *Record) OverwrittenMods(name string) ([]*Overwrite, error) {
 				continue
 			}
 			for _, late := range order[k+1:] {
-				if late.mod.Target == early.mod.Target && late.mod.Property == early.mod.Property && late.mod.Values.Covers(early.mod.Values) {
+				if !late.mod.IsScale() && late.mod.Target == early.mod.Target && late.mod.Property == early.mod.Property && late.mod.Values.Covers(early.mod.Values) {
 					ow = &Overwrite{Projection: late.proj, Index: late.index}
 				}
 			}
@@ -111,7 +111,7 @@ func (r *Record) OverwrittenMods(name string) ([]*Overwrite, error) {
 				var by *modRef
 				for j := k + 1; j < len(order); j++ {
 					late := order[j]
-					if late.mod.Property != early.mod.Property || late.mod.Target.Kind == KindBudgetItem || late.mod.Target.Kind == KindGlobal || !late.mod.Values.Covers(early.mod.Values) {
+					if late.mod.IsScale() || late.mod.Property != early.mod.Property || late.mod.Target.Kind == KindBudgetItem || late.mod.Target.Kind == KindGlobal || !late.mod.Values.Covers(early.mod.Values) {
 						continue
 					}
 					for _, a := range accounts(late.mod) {

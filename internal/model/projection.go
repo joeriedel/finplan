@@ -20,13 +20,36 @@ type ObjectRef struct {
 	ID   string
 }
 
+// Mode says how a modification's values combine with what lies beneath them.
+type Mode string
+
+// Modification modes. The empty mode means ModeSet.
+const (
+	// ModeSet replaces the value beneath with the modification's.
+	ModeSet Mode = "set"
+	// ModeScale multiplies the value beneath by the modification's, so it follows whatever lies beneath.
+	ModeScale Mode = "scale"
+)
+
 // Modification changes a property of an object on a timetable: the schedule of values says what the
-// property is on each date. PropAddItem instead adds Item to the budget, with Target naming the item.
+// property is on each date, or by how much to multiply it when Mode is ModeScale. PropAddItem instead adds Item to the budget, with Target naming the item.
 type Modification struct {
 	Target   ObjectRef
 	Property string
+	Mode     Mode
 	Values   Schedule
 	Item     *BudgetItem
+}
+
+// IsScale reports whether the modification multiplies the value beneath it.
+func (m Modification) IsScale() bool { return m.Mode == ModeScale }
+
+// Over returns s with the modification's values applied: written over it, or multiplied into it.
+func (m Modification) Over(s Schedule) Schedule {
+	if m.IsScale() {
+		return s.Scale(m.Values)
+	}
+	return s.Overlay(m.Values)
 }
 
 // AssetSetting gives the accounts under one asset their own projection start date and override_history setting.

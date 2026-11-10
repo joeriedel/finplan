@@ -28,6 +28,9 @@ func checkItemAs(rec *model.Record, it model.BudgetItem, existing *model.BudgetI
 	if a := it.Amount; a != a || a <= 0 || a > maxValue {
 		return it, refuse(ErrInvalidValue, "the amount %v must be above zero and within range", it.Amount)
 	}
+	if g := it.Growth; g != g || g <= -1 || g > maxValue {
+		return it, refuse(ErrInvalidValue, "the growth %v must be above -1 and within range", it.Growth)
+	}
 	switch it.Kind {
 	case model.ItemIncome, model.ItemExpense:
 		if rec.Account(it.Account) == nil {
@@ -184,7 +187,7 @@ func EndMod(itemID string, from model.Date) model.Modification {
 // EndedOn reports whether m is exactly what EndItem stores, and the date it ends the item from.
 func EndedOn(m model.Modification) (model.Date, bool) {
 	segs := m.Values.Segments()
-	if m.Target.Kind != model.KindBudgetItem || m.Property != model.PropAmount || len(segs) != 1 || segs[0].Value != 0 || segs[0].End != nil || segs[0].From == model.MinDate {
+	if m.IsScale() || m.Target.Kind != model.KindBudgetItem || m.Property != model.PropAmount || len(segs) != 1 || segs[0].Value != 0 || segs[0].End != nil || segs[0].From == model.MinDate {
 		return 0, false
 	}
 	return segs[0].From, true

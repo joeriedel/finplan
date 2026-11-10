@@ -4,6 +4,7 @@
 package main
 
 import (
+	"cmp"
 	"strings"
 	"testing"
 
@@ -26,31 +27,36 @@ func TestParseDate(t *testing.T) {
 func TestParseAndFormatValue(t *testing.T) {
 	for _, tc := range []struct {
 		prop, in string
+		mode     model.Mode
 		want     float64
 		ok       bool
 		out      string
 	}{
-		{model.PropGrowth, "4", 0.04, true, "4%"},
-		{model.PropInflation, " 2.5% ", 0.025, true, "2.5%"},
-		{model.PropGrowth, "-1.25", -0.0125, true, "-1.25%"},
-		{model.PropAmount, "1500", 1500, true, "1500"},
-		{model.PropAmount, "12.5", 12.5, true, "12.5"},
-		{model.PropGrowth, "", 0, false, ""},
-		{model.PropAmount, "ten", 0, false, ""},
-		{model.PropAmount, "NaN", 0, false, ""},
+		{model.PropGrowth, "4", "", 0.04, true, "4%"},
+		{model.PropInflation, " 2.5% ", "", 0.025, true, "2.5%"},
+		{model.PropGrowth, "-1.25", "", -0.0125, true, "-1.25%"},
+		{model.PropAmount, "1500", "", 1500, true, "1500"},
+		{model.PropAmount, "12.5", "", 12.5, true, "12.5"},
+		{model.PropGrowth, "", "", 0, false, ""},
+		{model.PropAmount, "ten", "", 0, false, ""},
+		{model.PropAmount, "NaN", "", 0, false, ""},
+		{model.PropAmount, "-30", model.ModeScale, 0.7, true, "-30%"},
+		{model.PropGrowth, "10%", model.ModeScale, 1.1, true, "10%"},
+		{model.PropAmount, "-100", model.ModeScale, 0, true, "-100%"},
+		{model.PropAmount, "x", model.ModeScale, 0, false, ""},
 	} {
-		got, err := parseValue(tc.prop, tc.in)
+		got, err := parseValue(tc.prop, tc.mode, tc.in)
 		if (err == nil) != tc.ok || (tc.ok && (got < tc.want-1e-12 || got > tc.want+1e-12)) {
 			t.Errorf("parseValue(%s, %q) = %v, %v", tc.prop, tc.in, got, err)
 			continue
 		}
 		if tc.ok {
-			if s := formatValue(tc.prop, got); s != tc.out {
+			if s := formatValue(tc.prop, tc.mode, got); s != tc.out {
 				t.Errorf("formatValue(%s, %v) = %q, want %q", tc.prop, got, s, tc.out)
 			}
 		}
 	}
-	if s := formatValue(model.PropGrowth, 0.07); s != "7%" {
+	if s := formatValue(model.PropGrowth, model.ModeSet, 0.07); s != "7%" {
 		t.Errorf("0.07 formats as %q", s)
 	}
 }
@@ -85,12 +91,22 @@ func TestConstantOfAndDescribe(t *testing.T) {
 }
 
 func TestNewMod(t *testing.T) {
-	m, err := newMod(model.KindGlobal, "", model.PropInflation, "3", "")
+	m, err := newMod(model.KindGlobal, "", model.PropInflation, "", "3", "")
 	if err != nil || m.Target.Kind != model.KindGlobal || m.Property != model.PropInflation || m.Values.Segments()[0].Value != 0.03 {
 		t.Errorf("global: %+v %v", m, err)
 	}
-	if _, err := newMod(model.KindAccount, "x", model.PropGrowth, "3", "never"); err == nil {
+	if _, err := newMod(model.KindAccount, "x", model.PropGrowth, "", "3", "never"); err == nil {
 		t.Error("bad date accepted")
+	}
+}
+
+func TestNewScaleMod(t *testing.T) {
+	m, err := newMod(model.KindBudgetItem, "dining", model.PropAmount, model.ModeScale, "-30", "2026-01-01")
+	if err != nil || m.Mode != model.ModeScale || m.Property != model.PropAmount {
+		t.Fatalf("scale: %+v %v", m, err)
+	}
+	if segs := m.Values.Segments(); len(segs) != 1 || segs[0].Value != 0.7 || segs[0].From != model.D(2026, 1, 1) {
+		t.Errorf("values: %+v", segs)
 	}
 }
 
@@ -144,5 +160,44 @@ func TestFieldErrorsArePerField(t *testing.T) {
 	pt.dropBuf("start")
 	if len(pt.errs) != 0 || len(pt.bufs) != 0 {
 		t.Errorf("dropping the buffer left %v %v", pt.errs, pt.bufs)
+	}
+}
+
+func TestModeValuesConvertOnAFlip(t *testing.T) {
+	rec := demodata.Family()
+	item := rec.Budget.Items[0]
+	end := model.D(2030, 1, 1)
+	for _, tc := range []struct {
+		mod  model.Modification
+		mode model.Mode
+		want float64
+	}{
+		{model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: item.ID}, Property: model.PropAmount, Values: model.Constant(900)}, model.ModeScale, 1},
+		{model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: item.ID}, Property: model.PropAmount, Mode: model.ModeScale, Values: model.Constant(0.5)}, model.ModeSet, item.Amount * 0.5},
+		{model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: item.ID}, Property: model.PropGrowth, Mode: model.ModeScale, Values: model.Constant(2)}, model.ModeSet, item.Growth * 2},
+		{model.Modification{Target: model.ObjectRef{Kind: model.KindAccount, ID: string(rec.Accounts[0].ID)}, Property: model.PropGrowth, Mode: model.ModeScale, Values: model.Constant(2)}, model.ModeSet, rec.Accounts[0].StatedRate * 2},
+	} {
+		r := rec.Clone()
+		if err := r.AddProjection(&model.Projection{Name: "p", Mods: []model.Modification{tc.mod}}); err != nil {
+			t.Fatal(err)
+		}
+		got := modeValues(r, "p", 0, tc.mode)
+		if got == nil || len(got.Segments()) != 1 || got.Segments()[0].Value != tc.want {
+			t.Errorf("%+v to %s: %+v, want %v", tc.mod, tc.mode, got, tc.want)
+		}
+		if same := modeValues(r, "p", 0, cmp.Or(tc.mod.Mode, model.ModeSet)); same != nil {
+			t.Errorf("an unchanged mode converted: %+v", same)
+		}
+	}
+
+	// Segment starts and ends survive.
+	m := model.Modification{Target: model.ObjectRef{Kind: model.KindGlobal}, Property: model.PropInflation, Values: model.MustSchedule(model.Segment{From: model.D(2028, 1, 1), End: &end, Value: 0.05})}
+	r := rec.Clone()
+	if err := r.AddProjection(&model.Projection{Name: "p", Mods: []model.Modification{m}}); err != nil {
+		t.Fatal(err)
+	}
+	segs := modeValues(r, "p", 0, model.ModeScale).Segments()
+	if len(segs) != 1 || segs[0].From != model.D(2028, 1, 1) || segs[0].End == nil || *segs[0].End != end || segs[0].Value != 1 {
+		t.Errorf("segments %+v", segs)
 	}
 }
