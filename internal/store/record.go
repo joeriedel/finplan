@@ -111,7 +111,16 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 	}
 
 	rec := model.NewRecord(today)
-	rec.Budget.Items = mapSlice(budget.Items, docItem)
+	if budget.Items != nil {
+		rec.Budget.Items = make([]model.BudgetItem, 0, len(budget.Items))
+	}
+	for _, d := range budget.Items {
+		it, err := docItem(d)
+		if err != nil {
+			return nil, fmt.Errorf("store: %w", err)
+		}
+		rec.Budget.Items = append(rec.Budget.Items, it)
+	}
 	for _, c := range classes {
 		rec.Classes = append(rec.Classes, model.MarketClass{ID: c.ID, Name: c.Name, Return: c.Return})
 	}

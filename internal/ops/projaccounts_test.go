@@ -165,7 +165,7 @@ func TestRemoveProjAccountInUse(t *testing.T) {
 			return NewProjection(st, rec, "House", demodata.ProjNewJob, Options{})
 		},
 		func(rec *model.Record) (*Result, error) {
-			it := model.BudgetItem{Kind: model.ItemTransfer, Name: "Rent house", Amount: 100, Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, From: demodata.Checking, To: "house"}
+			it := model.BudgetItem{Kind: model.ItemTransfer, Name: "Rent house", Amount: model.Constant(100), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, Start: model.Ptr(model.D(2027, 1, 1)), From: demodata.Checking, To: "house"}
 			return AddItem(st, rec, "House", it, Options{})
 		},
 	}
@@ -241,11 +241,11 @@ func TestProjectionAccountsAreTargets(t *testing.T) {
 		t.Errorf("default asset: %v", err)
 	}
 	// Items in the projection and its children may use it; a transfer needs one account of the record.
-	item := model.BudgetItem{Kind: model.ItemTransfer, Name: "Rent house", Amount: 100, Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, From: demodata.Checking, To: "house"}
+	item := model.BudgetItem{Kind: model.ItemTransfer, Name: "Rent house", Amount: model.Constant(100), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, Start: model.Ptr(model.D(2027, 1, 1)), From: demodata.Checking, To: "house"}
 	if _, err := AddItem(st, rec, "House", item, Options{DryRun: true}); err != nil {
 		t.Errorf("item in the child: %v", err)
 	}
-	income := model.BudgetItem{Kind: model.ItemIncome, Name: "Rent out", Amount: 100, Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, Account: "house"}
+	income := model.BudgetItem{Kind: model.ItemIncome, Name: "Rent out", Amount: model.Constant(100), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, Start: model.Ptr(model.D(2027, 1, 1)), Account: "house"}
 	if _, err := AddItem(st, rec, "House", income, Options{DryRun: true}); err != nil {
 		t.Errorf("income in the child: %v", err)
 	}

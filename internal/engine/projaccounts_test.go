@@ -16,7 +16,7 @@ func villaRecord(t *testing.T) *model.Record {
 	t.Helper()
 	rec := fixture(t)
 	must(t, rec.AddAsset(&model.Asset{ID: "everything", Members: []model.Member{model.RuleMember(model.Rule{})}}))
-	fund := model.BudgetItem{ID: "fund", Kind: model.ItemTransfer, Amount: 100, Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, From: "chk", To: "villa"}
+	fund := model.BudgetItem{ID: "fund", Kind: model.ItemTransfer, Amount: model.Constant(100), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, From: "chk", To: "villa"}
 	must(t, rec.AddProjection(&model.Projection{
 		Name:     "villa",
 		Accounts: []model.ProjAccount{{ID: "villa", Name: "Villa", Type: model.TypeProperty, Tax: model.Taxable, StatedRate: 0.12, Opening: 1000, From: d(2026, time.March, 1)}},
@@ -184,7 +184,7 @@ func TestProjectionAccountBreakdownAcrossOpening(t *testing.T) {
 func TestProjectionAccountSharedCutoff(t *testing.T) {
 	rec := fixture(t)
 	must(t, rec.AddAsset(&model.Asset{ID: "everything", Members: []model.Member{model.RuleMember(model.Rule{})}}))
-	pay := model.BudgetItem{ID: "pay", Kind: model.ItemTransfer, Amount: 100, Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, From: "late", To: "early"}
+	pay := model.BudgetItem{ID: "pay", Kind: model.ItemTransfer, Amount: model.Constant(100), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, From: "late", To: "early"}
 	must(t, rec.AddProjection(&model.Projection{
 		Name:     "early",
 		Accounts: []model.ProjAccount{{ID: "early", Name: "Early", Type: model.TypeSavings, Tax: model.Taxable, Opening: 1000, From: d(2025, time.July, 1)}},

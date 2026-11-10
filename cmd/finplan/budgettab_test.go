@@ -45,7 +45,7 @@ func TestBudgetTabGroupsRowsAndTotals(t *testing.T) {
 			byID[r.ID] = r
 		}
 	}
-	if r := byID["vacation"]; r.Schedule != "yearly on June 15" || r.Monthly != "$500 a month" {
+	if r := byID["vacation"]; r.Schedule != "annually on June 15" || r.Monthly != "$500 a month" {
 		t.Errorf("vacation row %+v", r)
 	}
 	if r := byID["salary-b"]; r.Schedule != "every 2 weeks from 2024-11-08" || r.Monthly != "$8,017 a month" {
@@ -56,7 +56,7 @@ func TestBudgetTabGroupsRowsAndTotals(t *testing.T) {
 	}
 
 	it := baseItemOf(t, a, "groceries")
-	it.Growth, it.Start, it.End = 0.03, model.Ptr(model.D(2026, 1, 5)), model.Ptr(model.D(2030, 12, 31))
+	it.Growth, it.Start, it.End = model.Constant(0.03), model.Ptr(model.D(2026, 1, 5)), model.Ptr(model.D(2030, 12, 31))
 	if r := budgetRowOf(a.rec, it); r.Growth != "3% raise" || r.Start != "2026-01-05" || r.End != "2030-12-31" {
 		t.Errorf("groceries row %+v", r)
 	}
@@ -92,7 +92,7 @@ func TestBudgetTabAddWithUndoAndRedo(t *testing.T) {
 		t.Fatalf("not added: %v", a.notices)
 	}
 	gym := a.rec.Budget.Items[count]
-	if gym.ID != "gym" || gym.Amount != 60 || gym.Kind != model.ItemExpense || !gym.Indexed || gym.Recurrence.Day != 10 || gym.Account != demodata.Checking {
+	if gym.ID != "gym" || valueNow(gym.Amount, 0) != 60 || gym.Kind != model.ItemExpense || !gym.Indexed || gym.Recurrence.Day != 10 || gym.Account != demodata.Checking {
 		t.Errorf("added %+v", gym)
 	}
 	if bt.addItem.name != "" || bt.addItem.kind != model.ItemExpense {
@@ -127,7 +127,7 @@ func TestBudgetTabEditInPlace(t *testing.T) {
 		}
 	}
 	g := baseItemOf(t, a, "groceries")
-	if g.Name != "Food" || g.Amount != 1900 || g.Growth != 0.03 || g.Indexed || g.Recurrence.Day != 9 || g.Account != demodata.Checking || g.End == nil || *g.End != model.D(2030, 12, 31) {
+	if g.Name != "Food" || valueNow(g.Amount, 0) != 1900 || valueNow(g.Growth, 0) != 0.03 || g.Indexed || g.Recurrence.Day != 9 || g.Account != demodata.Checking || g.End == nil || *g.End != model.D(2030, 12, 31) {
 		t.Errorf("groceries %+v", g)
 	}
 	if !bt.setField("groceries", "indexed", "true") || !baseItemOf(t, a, "groceries").Indexed {
@@ -138,14 +138,14 @@ func TestBudgetTabEditInPlace(t *testing.T) {
 	if !bt.setField("salary-a", "amount", "5100") {
 		t.Fatalf("salary: %v", a.notices)
 	}
-	if s := baseItemOf(t, a, "salary-a"); s.Amount != 5100 || s.Recurrence != (model.Recurrence{Kind: model.Semimonthly, Day: 15, Day2: 31}) {
+	if s := baseItemOf(t, a, "salary-a"); valueNow(s.Amount, 0) != 5100 || s.Recurrence != (model.Recurrence{Kind: model.Semimonthly, Day: 15, Day2: 31}) {
 		t.Errorf("salary-a %+v", s)
 	}
 	// A biweekly item keeps its anchor.
 	if !bt.setField("salary-b", "amount", "3800") {
 		t.Fatalf("salary-b: %v", a.notices)
 	}
-	if s := baseItemOf(t, a, "salary-b"); s.Amount != 3800 || s.Recurrence.Anchor != model.D(2024, 11, 8) {
+	if s := baseItemOf(t, a, "salary-b"); valueNow(s.Amount, 0) != 3800 || s.Recurrence.Anchor != model.D(2024, 11, 8) {
 		t.Errorf("salary-b %+v", s)
 	}
 

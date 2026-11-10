@@ -705,7 +705,7 @@ func snapshotCount(t *testing.T, st *store.Store, acct model.AccountID) int {
 
 func baseItem1() model.BudgetItem {
 	return model.BudgetItem{
-		Name: "Side Gig", Kind: model.ItemIncome, Amount: 800, Account: demodata.Checking,
+		Name: "Side Gig", Kind: model.ItemIncome, Amount: model.Constant(800), Account: demodata.Checking,
 		Recurrence: model.Recurrence{Kind: model.Monthly, Day: 15}, Start: model.Ptr(model.D(2027, 1, 1)),
 	}
 }
@@ -716,7 +716,7 @@ func TestAddBudgetItem(t *testing.T) {
 	})
 	rec := reload(t, st)
 	it, ok := rec.Budget.Item("side-gig")
-	if !ok || it.Amount != 800 || res.Item.ID != "side-gig" {
+	if !ok || !sameSchedule(it.Amount, model.Constant(800)) || res.Item.ID != "side-gig" {
 		t.Errorf("item %+v, %v", it, ok)
 	}
 	if res, err := AddBudgetItem(st, rec, baseItem1(), Options{}); err != nil || res.Item.ID != "side-gig-2" {
@@ -727,12 +727,12 @@ func TestAddBudgetItem(t *testing.T) {
 		want   error
 	}{
 		{func(it *model.BudgetItem) { it.Name = " " }, ErrInvalidValue},
-		{func(it *model.BudgetItem) { it.Amount = 0 }, ErrInvalidValue},
+		{func(it *model.BudgetItem) { it.Amount = model.Constant(0) }, ErrInvalidValue},
 		{func(it *model.BudgetItem) { it.Account = "nope" }, ErrUnknownTarget},
 		{func(it *model.BudgetItem) { it.ID = "salary-a" }, ErrNameTaken},
 		{func(it *model.BudgetItem) { it.ID = "early-401k-withdrawal" }, ErrNameTaken},
 		{func(it *model.BudgetItem) {
-			it.Recurrence = model.Recurrence{Kind: model.Semimonthly, Day: 1, Day2: 15}
+			it.Recurrence = model.Recurrence{Kind: model.Semimonthly, Day: 15, Day2: 15}
 		}, ErrInvalidValue},
 		{func(it *model.BudgetItem) { it.End = model.Ptr(model.D(2026, 1, 1)) }, ErrInvalidValue},
 	} {
@@ -747,11 +747,11 @@ func TestAddBudgetItem(t *testing.T) {
 func TestEditBudgetItem(t *testing.T) {
 	_, rec := seed(t)
 	groceries, _ := rec.Budget.Item("groceries")
-	groceries.Amount = 1900
+	groceries.Amount = model.Constant(1900)
 	st, res := dataDryRun(t, func(st *store.Store, rec *model.Record, o Options) (*Result, error) {
 		return EditBudgetItem(st, rec, "groceries", groceries, o)
 	})
-	if it, _ := reload(t, st).Budget.Item("groceries"); it.Amount != 1900 || res.Item.Amount != 1900 {
+	if it, _ := reload(t, st).Budget.Item("groceries"); !sameSchedule(it.Amount, model.Constant(1900)) || !sameSchedule(res.Item.Amount, model.Constant(1900)) {
 		t.Errorf("item %+v", it)
 	}
 	// Order and the other items stay.
@@ -761,14 +761,14 @@ func TestEditBudgetItem(t *testing.T) {
 	if _, err := EditBudgetItem(st, reload(t, st), "groceries", groceries, Options{}); !errors.Is(err, ErrNoChange) {
 		t.Errorf("same item: %v", err)
 	}
-	// A semimonthly item keeps its recurrence, though none can be given one.
+	// A semimonthly item can be edited, and an item without a start keeps it so.
 	salary, _ := rec.Budget.Item("salary-a")
-	salary.Amount = 5100
+	salary.Amount = model.Constant(5100)
 	if _, err := EditBudgetItem(st, reload(t, st), "salary-a", salary, Options{}); err != nil {
 		t.Errorf("semimonthly item: %v", err)
 	}
-	salary.Recurrence.Day2 = 28
-	groceries.Recurrence = model.Recurrence{Kind: model.Semimonthly, Day: 1, Day2: 15}
+	salary.Recurrence.Day2 = 15
+	groceries.Recurrence = model.Recurrence{Kind: model.Semimonthly, Day: 1, Day2: 1}
 	other := groceries
 	other.ID = "dining"
 	for _, c := range []struct {

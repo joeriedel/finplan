@@ -174,8 +174,8 @@ func TestModeValuesConvertOnAFlip(t *testing.T) {
 		want float64
 	}{
 		{model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: item.ID}, Property: model.PropAmount, Values: model.Constant(900)}, model.ModeScale, 1},
-		{model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: item.ID}, Property: model.PropAmount, Mode: model.ModeScale, Values: model.Constant(0.5)}, model.ModeSet, item.Amount * 0.5},
-		{model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: item.ID}, Property: model.PropGrowth, Mode: model.ModeScale, Values: model.Constant(2)}, model.ModeSet, item.Growth * 2},
+		{model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: item.ID}, Property: model.PropAmount, Mode: model.ModeScale, Values: model.Constant(0.5)}, model.ModeSet, valueNow(item.Amount, 0) * 0.5},
+		{model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: item.ID}, Property: model.PropGrowth, Mode: model.ModeScale, Values: model.Constant(2)}, model.ModeSet, valueNow(item.Growth, 0) * 2},
 		{model.Modification{Target: model.ObjectRef{Kind: model.KindAccount, ID: string(rec.Accounts[0].ID)}, Property: model.PropGrowth, Mode: model.ModeScale, Values: model.Constant(2)}, model.ModeSet, rec.Accounts[0].StatedRate * 2},
 	} {
 		r := rec.Clone()

@@ -96,7 +96,7 @@ func TestDeleteAccountCascade(t *testing.T) {
 	}
 	baseID := res.Item.ID
 	transfer := model.BudgetItem{
-		Name: "Sweep", Kind: model.ItemTransfer, Amount: 50, From: demodata.Checking, To: scratch,
+		Name: "Sweep", Kind: model.ItemTransfer, Amount: model.Constant(50), From: demodata.Checking, To: scratch,
 		Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, Start: model.Ptr(model.D(2027, 1, 1)),
 	}
 	mustOp(t, func() (*Result, error) { return AddBudgetItem(st, reload(t, st), transfer, Options{}) })

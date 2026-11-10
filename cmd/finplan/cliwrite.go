@@ -26,7 +26,7 @@ const (
 	dryRunDesc   = "validate the edit and print what it would change, but save nothing"
 	jsonFileDesc = "read the JSON input from this file instead of stdin"
 	scheduleNote = "a schedule is [{\"from\": \"YYYY-MM-DD\", \"end\": \"YYYY-MM-DD\" or null, \"value\": number}, ...], sorted and not overlapping; a value holds from its from date until its end or the next segment"
-	itemJSONNote = "the item is {id (optional), name, kind (income, expense or transfer), amount (above zero), recurrence: {kind (one-time, monthly, biweekly or annual), anchor (one-time and biweekly), month (annual), day (monthly and annual)}, start (optional), end (optional), indexed, growth (optional annual raise as a fraction: 0.03 for 3%, stepping the amount up on each anniversary of the start), account (income and expense), from and to (transfer)}, the shape budget list prints"
+	itemJSONNote = "the item is {id (optional), name, kind (income, expense or transfer), amount (a number above zero, or a schedule of them), recurrence: {kind (one-time, weekly, biweekly, semimonthly, monthly, quarterly, annual or custom), anchor (optional date an interval item counts from, else its start; the date of a one-time item when start is omitted), month (annual), day (monthly, semimonthly and annual), day2 (semimonthly), count and unit (custom: every count days, weeks, months or years)}, start (the first date, required), end (optional), indexed, growth (optional annual raise as a fraction: 0.03 for 3%, stepping the amount up on each anniversary of the start; a number or a schedule), account (income and expense), from and to (transfer)}; amount and growth as a schedule are [{from, end, value}, ...] like a modification's, e.g. a daycare of 1400 until 2029-07-31 and 600 after; budget list prints the same shape with amount_schedule and growth_schedule, which are accepted as the schedule form too; when both forms are given they must agree on the value in effect today (an empty growth_schedule is no growth), else give one, e.g. drop amount_schedule to set a single amount"
 	modIndexNote = "the modification's index, as projection show numbers them from 0"
 )
 
@@ -34,23 +34,30 @@ var itemKinds = []string{string(model.ItemIncome), string(model.ItemExpense), st
 
 var modModes = []string{string(model.ModeSet), string(model.ModeScale)}
 
-var itemEvery = []string{string(model.OneTime), string(model.Monthly), string(model.Biweekly), string(model.Annual)}
+// itemEvery are the --every names; annual is the same as annually.
+var itemEvery = []string{string(model.OneTime), string(model.Weekly), string(model.Biweekly), string(model.Semimonthly), string(model.Monthly), string(model.Quarterly), "annually", string(model.Annual), string(model.Custom)}
+
+var itemUnits = []string{string(model.UnitDays), string(model.UnitWeeks), string(model.UnitMonths), string(model.UnitYears)}
 
 // itemFlags are the flags that describe a budget item; none is required, so that the item can come as JSON instead.
 func itemFlags(forAdd bool) []flagDef {
 	fs := []flagDef{
 		{Name: "kind", Type: typeEnum, Choices: itemKinds, Description: "income, expense or transfer"},
 		{Name: "name", Type: typeString, Description: "the item's name"},
-		{Name: "amount", Type: typeNumber, Description: "the amount, above zero, per occurrence"},
-		{Name: "every", Type: typeEnum, Choices: itemEvery, Description: "how often the item happens"},
-		{Name: "on", Type: typeDate, Description: "the date of a one-time item, or the first date of a recurring one: " + dateNote},
-		{Name: "day", Type: typeInt, Description: "day of the month of a monthly item; the day of --on when omitted"},
+		{Name: "amount", Type: typeNumber, Description: "the amount, above zero, per occurrence; a schedule of amounts comes as JSON input"},
+		{Name: "every", Type: typeEnum, Choices: itemEvery, Description: "how often the item happens; custom needs --count and --unit, semimonthly needs --day2"},
+		{Name: "start", Type: typeDate, Description: "the date of a one-time item, or the first date of a recurring one, which also sets the phase of weekly, biweekly, quarterly and custom items: " + dateNote},
+		{Name: "on", Type: typeDate, Description: "the same as --start"},
+		{Name: "day", Type: typeInt, Description: "day of the month of a monthly or semimonthly item; the day of --start when omitted for a monthly one"},
+		{Name: "day2", Type: typeInt, Description: "second day of the month of a semimonthly item"},
+		{Name: "count", Type: typeInt, Description: "N of a custom frequency, every N days, weeks, months or years"},
+		{Name: "unit", Type: typeEnum, Choices: itemUnits, Description: "the unit of a custom frequency"},
 		{Name: "end", Type: typeDate, Description: "last date the item happens: " + dateNote + "; none removes it"},
 		{Name: "account", Type: typeString, Description: "account id of an income or expense item"},
 		{Name: "from", Type: typeString, Description: "account id a transfer draws from"},
 		{Name: "to", Type: typeString, Description: "account id a transfer pays into"},
 		{Name: "indexed", Type: typeBool, Default: "false", Description: "the amount grows with inflation"},
-		{Name: "growth", Type: typeNumber, Description: "annual raise as a fraction, 0.03 for 3%: the amount steps up by it on each anniversary of the item's start (0 for none)"},
+		{Name: "growth", Type: typeNumber, Description: "annual raise as a fraction, 0.03 for 3%: the amount steps up by it on each anniversary of the item's start (0 for none); a schedule of raises comes as JSON input"},
 	}
 	if forAdd {
 		fs = append(fs, flagDef{Name: "id", Type: typeString, Description: "the item's id; made from the name when omitted"})
@@ -608,23 +615,27 @@ func (c *call) schedule() (model.Schedule, error) {
 	return sched, nil
 }
 
-func (c *call) scheduleJSON() (model.Schedule, error) {
-	var in []struct {
-		From  *string  `json:"from"`
-		End   *string  `json:"end"`
-		Value *float64 `json:"value"`
-	}
-	if err := c.readJSON(&in); err != nil {
-		return model.Schedule{}, err
-	}
+// segInput is one segment of a schedule as JSON input.
+type segInput struct {
+	From  *string  `json:"from"`
+	End   *string  `json:"end"`
+	Value *float64 `json:"value"`
+}
+
+// scheduleOf builds the schedule of the segments of JSON input; none is the empty schedule.
+func scheduleOf(in []segInput) (model.Schedule, error) {
 	segs := make([]model.Segment, len(in))
 	for i, s := range in {
-		if s.From == nil || s.Value == nil {
-			return model.Schedule{}, usageErr("the JSON input: segment %d needs a from and a value", i)
+		if s.Value == nil {
+			return model.Schedule{}, usageErr("the JSON input: segment %d needs a value", i)
 		}
-		from, err := dateField("from", *s.From)
-		if err != nil {
-			return model.Schedule{}, err
+		// A null from is how the list shows a segment that has no start.
+		from := model.MinDate
+		if s.From != nil {
+			var err error
+			if from, err = dateField("from", *s.From); err != nil {
+				return model.Schedule{}, err
+			}
 		}
 		segs[i] = model.Segment{From: from, Value: *s.Value}
 		if s.End != nil {
@@ -639,7 +650,19 @@ func (c *call) scheduleJSON() (model.Schedule, error) {
 	if err != nil {
 		return model.Schedule{}, usageErr("the JSON input: %v", err)
 	}
-	if len(segs) == 0 {
+	return sched, nil
+}
+
+func (c *call) scheduleJSON() (model.Schedule, error) {
+	var in []segInput
+	if err := c.readJSON(&in); err != nil {
+		return model.Schedule{}, err
+	}
+	sched, err := scheduleOf(in)
+	if err != nil {
+		return model.Schedule{}, err
+	}
+	if len(in) == 0 {
 		return model.Schedule{}, usageErr("the JSON input: a schedule needs at least one segment")
 	}
 	return sched, nil
@@ -828,24 +851,58 @@ func cmdModRemove(c *call) (any, error) {
 
 // itemInput is a budget item as JSON input; it has the shape budget list prints.
 type itemInput struct {
-	ID         string  `json:"id"`
-	Name       string  `json:"name"`
-	Kind       string  `json:"kind"`
-	Amount     float64 `json:"amount"`
+	ID         string        `json:"id"`
+	Name       string        `json:"name"`
+	Kind       string        `json:"kind"`
+	Amount     numOrSegments `json:"amount"`
 	Recurrence struct {
 		Kind   string  `json:"kind"`
 		Anchor *string `json:"anchor"`
 		Month  int     `json:"month"`
 		Day    int     `json:"day"`
 		Day2   int     `json:"day2"`
+		Count  int     `json:"count"`
+		Unit   string  `json:"unit"`
 	} `json:"recurrence"`
-	Start   *string `json:"start"`
-	End     *string `json:"end"`
-	Indexed bool    `json:"indexed"`
-	Growth  float64 `json:"growth"`
-	Account string  `json:"account"`
-	From    string  `json:"from"`
-	To      string  `json:"to"`
+	Start   *string       `json:"start"`
+	End     *string       `json:"end"`
+	Indexed bool          `json:"indexed"`
+	Growth  numOrSegments `json:"growth"`
+	Account string        `json:"account"`
+	From    string        `json:"from"`
+	To      string        `json:"to"`
+
+	// A schedule, when present, is used; an Amount or Growth given with it must agree with it. An empty GrowthSchedule is no growth.
+	AmountSchedule []segInput `json:"amount_schedule"`
+	GrowthSchedule []segInput `json:"growth_schedule"`
+}
+
+// numOrSegments is a number or a schedule's segments in JSON input; a number is a one-segment schedule.
+type numOrSegments struct {
+	num  *float64
+	segs []segInput
+}
+
+func (n *numOrSegments) UnmarshalJSON(b []byte) error {
+	var v float64
+	if err := json.Unmarshal(b, &v); err == nil {
+		n.num = &v
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	return dec.Decode(&n.segs)
+}
+
+// schedule returns the schedule the input gives. A growth of the number 0 is no growth.
+func (n numOrSegments) schedule(growth bool) (model.Schedule, error) {
+	switch {
+	case n.num == nil:
+		return scheduleOf(n.segs)
+	case growth && *n.num == 0:
+		return model.Schedule{}, nil
+	}
+	return model.Constant(*n.num), nil
 }
 
 func (c *call) itemJSON() (model.BudgetItem, error) {
@@ -853,10 +910,37 @@ func (c *call) itemJSON() (model.BudgetItem, error) {
 	if err := c.readJSON(&in); err != nil {
 		return model.BudgetItem{}, err
 	}
+	r := in.Recurrence
 	it := model.BudgetItem{
-		ID: in.ID, Name: in.Name, Kind: model.ItemKind(in.Kind), Amount: in.Amount, Indexed: in.Indexed, Growth: in.Growth,
+		ID: in.ID, Name: in.Name, Kind: model.ItemKind(in.Kind), Indexed: in.Indexed,
 		Account: model.AccountID(in.Account), From: model.AccountID(in.From), To: model.AccountID(in.To),
-		Recurrence: model.Recurrence{Kind: model.RecurrenceKind(in.Recurrence.Kind), Month: time.Month(in.Recurrence.Month), Day: in.Recurrence.Day, Day2: in.Recurrence.Day2},
+		Recurrence: model.Recurrence{Kind: model.RecurrenceKind(r.Kind), Month: time.Month(r.Month), Day: r.Day, Day2: r.Day2, Count: r.Count, Unit: model.RecurrenceUnit(r.Unit)},
+	}
+	_, rec, err := c.open()
+	if err != nil {
+		return it, err
+	}
+	if in.AmountSchedule != nil {
+		it.Amount, err = scheduleOf(in.AmountSchedule)
+		if err == nil && in.Amount.num != nil && *in.Amount.num != valueListed(it.Amount, rec.Today) {
+			err = usageErr("the JSON input: amount and amount_schedule differ; edit one form, e.g. drop amount_schedule to set a single amount")
+		}
+	} else {
+		it.Amount, err = in.Amount.schedule(false)
+	}
+	if err != nil {
+		return it, err
+	}
+	if in.GrowthSchedule != nil {
+		it.Growth, err = scheduleOf(in.GrowthSchedule)
+		if err == nil && in.Growth.num != nil && *in.Growth.num != valueListed(it.Growth, rec.Today) {
+			err = usageErr("the JSON input: growth and growth_schedule differ; edit one form, e.g. drop growth_schedule to set a single growth")
+		}
+	} else {
+		it.Growth, err = in.Growth.schedule(true)
+	}
+	if err != nil {
+		return it, err
 	}
 	for _, f := range []struct {
 		name string
@@ -891,30 +975,53 @@ func (c *call) itemFlagsSet() bool {
 	return false
 }
 
-// recurrenceFor builds the recurrence and start date an item with the flags --every, --on and --day has. A one-time item has no start; the others start on --on.
-func recurrenceFor(every string, on model.Date, day *int) (model.Recurrence, *model.Date, error) {
+// recurrenceArgs are the flags --day, --day2, --count and --unit of an item, nil or empty where not given.
+type recurrenceArgs struct {
+	day, day2, count *int
+	unit             string
+}
+
+// recurrenceFor builds the recurrence and start date of an item from the --every flag and the date on, which is the --start flag. A one-time, biweekly and annual item's date is also kept in the recurrence; weekly, quarterly and custom items take their phase from the start.
+func recurrenceFor(every string, on model.Date, a recurrenceArgs) (model.Recurrence, *model.Date, error) {
 	_, m, d := on.YMD()
-	switch model.RecurrenceKind(every) {
-	case model.OneTime:
-		if day != nil {
-			return model.Recurrence{}, nil, usageErr("--day is for monthly items")
-		}
-		return model.Recurrence{Kind: model.OneTime, Anchor: on}, nil, nil
-	case model.Biweekly:
-		if day != nil {
-			return model.Recurrence{}, nil, usageErr("--day is for monthly items")
-		}
-		return model.Recurrence{Kind: model.Biweekly, Anchor: on}, &on, nil
+	if every == "annually" {
+		every = string(model.Annual)
+	}
+	kind := model.RecurrenceKind(every)
+	if a.day != nil && kind != model.Monthly && kind != model.Semimonthly {
+		return model.Recurrence{}, nil, usageErr("--day is for monthly and semimonthly items")
+	}
+	if a.day2 != nil && kind != model.Semimonthly {
+		return model.Recurrence{}, nil, usageErr("--day2 is for semimonthly items")
+	}
+	if (a.count != nil || a.unit != "") && kind != model.Custom {
+		return model.Recurrence{}, nil, usageErr("--count and --unit are for custom items")
+	}
+	switch kind {
+	case model.OneTime, model.Biweekly:
+		return model.Recurrence{Kind: kind, Anchor: on}, &on, nil
+	case model.Weekly, model.Quarterly:
+		return model.Recurrence{Kind: kind}, &on, nil
 	case model.Annual:
-		if day != nil {
-			return model.Recurrence{}, nil, usageErr("--day is for monthly items")
-		}
-		return model.Recurrence{Kind: model.Annual, Month: m, Day: d}, &on, nil
+		return model.Recurrence{Kind: kind, Month: m, Day: d}, &on, nil
 	case model.Monthly:
-		if day == nil {
-			day = &d
+		if a.day == nil {
+			a.day = &d
 		}
-		return model.Recurrence{Kind: model.Monthly, Day: *day}, &on, nil
+		return model.Recurrence{Kind: kind, Day: *a.day}, &on, nil
+	case model.Semimonthly:
+		if a.day == nil {
+			a.day = &d
+		}
+		if a.day2 == nil {
+			return model.Recurrence{}, nil, usageErr("a semimonthly item needs --day2")
+		}
+		return model.Recurrence{Kind: kind, Day: *a.day, Day2: *a.day2}, &on, nil
+	case model.Custom:
+		if a.count == nil || a.unit == "" {
+			return model.Recurrence{}, nil, usageErr("a custom item needs --count and --unit")
+		}
+		return model.Recurrence{Kind: kind, Count: *a.count, Unit: model.RecurrenceUnit(a.unit)}, &on, nil
 	}
 	return model.Recurrence{}, nil, usageErr("--every %q is not one of %s", every, strings.Join(itemEvery, ", "))
 }
@@ -925,11 +1032,17 @@ func (c *call) itemFromFlags(base *model.BudgetItem) (model.BudgetItem, error) {
 	if base != nil {
 		it = *base
 	} else {
-		for _, f := range []string{"kind", "name", "amount", "every", "on"} {
+		for _, f := range []string{"kind", "name", "amount", "every"} {
 			if !c.set[f] {
 				return it, usageErr("item: missing flag --%s, or give the item as JSON", f)
 			}
 		}
+		if !c.set["start"] && !c.set["on"] {
+			return it, usageErr("item: missing flag --start, or give the item as JSON")
+		}
+	}
+	if c.set["start"] && c.set["on"] {
+		return it, usageErr("--start and --on are the same flag; give one")
 	}
 	if c.set["kind"] {
 		it.Kind = model.ItemKind(c.str("kind"))
@@ -943,7 +1056,7 @@ func (c *call) itemFromFlags(base *model.BudgetItem) (model.BudgetItem, error) {
 	if v, ok, err := c.number("amount"); err != nil {
 		return it, err
 	} else if ok {
-		it.Amount = v
+		it.Amount = model.Constant(v)
 	}
 	if c.set["indexed"] {
 		it.Indexed = c.str("indexed") == "true"
@@ -951,7 +1064,10 @@ func (c *call) itemFromFlags(base *model.BudgetItem) (model.BudgetItem, error) {
 	if v, ok, err := c.number("growth"); err != nil {
 		return it, err
 	} else if ok {
-		it.Growth = v
+		it.Growth = model.Schedule{}
+		if v != 0 {
+			it.Growth = model.Constant(v)
+		}
 	}
 	if c.set["account"] {
 		it.Account = model.AccountID(c.str("account"))
@@ -969,36 +1085,73 @@ func (c *call) itemFromFlags(base *model.BudgetItem) (model.BudgetItem, error) {
 	} else if ok {
 		it.End = &d
 	}
-	if base == nil || c.set["every"] || c.set["on"] || c.set["day"] {
-		every, on, day := string(it.Recurrence.Kind), model.Date(0), (*int)(nil)
-		switch it.Recurrence.Kind {
-		case model.OneTime, model.Biweekly:
-			on = it.Recurrence.Anchor
-		default:
-			if it.Start != nil {
-				on = *it.Start
-			}
-		}
+	dateFlag := "start"
+	if c.set["on"] {
+		dateFlag = "on"
+	}
+	if base == nil || c.set["every"] || c.set["start"] || c.set["on"] || c.set["day"] || c.set["day2"] || c.set["count"] || c.set["unit"] {
+		cur := it.Recurrence
+		every := string(cur.Kind)
 		if c.set["every"] {
 			every = c.str("every")
-		} else if it.Recurrence.Kind == model.Monthly && !c.set["on"] {
-			day = &it.Recurrence.Day
+			if every == "annually" {
+				every = string(model.Annual)
+			}
 		}
-		if d, ok, err := c.date("on"); err != nil {
+		same := base != nil && every == string(cur.Kind)
+		var on model.Date
+		switch {
+		case cur.Anchor != 0:
+			on = cur.Anchor
+		case it.Start != nil:
+			on = *it.Start
+		}
+		var args recurrenceArgs
+		if same {
+			// What the item has stays unless a flag changes it; a monthly item's day follows a new --start.
+			if cur.Kind == model.Semimonthly || (cur.Kind == model.Monthly && !c.set[dateFlag]) {
+				args.day = &cur.Day
+			}
+			if cur.Kind == model.Semimonthly {
+				args.day2 = &cur.Day2
+			}
+			if cur.Kind == model.Custom {
+				args.count, args.unit = &cur.Count, string(cur.Unit)
+			}
+		}
+		if d, ok, err := c.date(dateFlag); err != nil {
 			return it, err
 		} else if ok {
 			on = d
-		} else if base != nil && every != string(it.Recurrence.Kind) {
-			return it, usageErr("item: changing --every needs --on")
+		} else if base != nil && !same {
+			return it, usageErr("item: changing --every needs --start")
 		}
-		if v, ok, err := c.integer("day"); err != nil {
-			return it, err
-		} else if ok {
-			day = &v
+		for _, f := range []struct {
+			name string
+			out  **int
+		}{{"day", &args.day}, {"day2", &args.day2}, {"count", &args.count}} {
+			if v, ok, err := c.integer(f.name); err != nil {
+				return it, err
+			} else if ok {
+				*f.out = &v
+			}
+		}
+		if c.set["unit"] {
+			args.unit = c.str("unit")
 		}
 		var err error
-		if it.Recurrence, it.Start, err = recurrenceFor(every, on, day); err != nil {
+		if it.Recurrence, it.Start, err = recurrenceFor(every, on, args); err != nil {
 			return it, err
+		}
+		if same && !c.set[dateFlag] {
+			// Without a date flag the item keeps its start and the anchor it counts from.
+			it.Start = base.Start
+			switch cur.Kind {
+			case model.OneTime, model.Biweekly, model.Weekly, model.Quarterly, model.Custom:
+				it.Recurrence.Anchor = cur.Anchor
+			case model.Annual:
+				it.Recurrence.Month, it.Recurrence.Day = cur.Month, cur.Day
+			}
 		}
 	}
 	return it, nil

@@ -344,7 +344,7 @@ func TestCLIWriteItemCommands(t *testing.T) {
 	if w.Projection.Modifications[0].Item.Amount != 350 {
 		t.Errorf("item edit recurrence: %+v", w.Projection.Modifications[0])
 	}
-	w = write(t, path, `{"name":"Boat Slip","kind":"expense","amount":20,"recurrence":{"kind":"monthly","day":2},"account":"checking"}`, "item", "edit", "Items", "boat-slip")
+	w = write(t, path, `{"name":"Boat Slip","kind":"expense","amount":20,"recurrence":{"kind":"monthly","day":2},"start":"2028-01-15","account":"checking"}`, "item", "edit", "Items", "boat-slip")
 	if w.Projection.Modifications[0].Item.Amount != 20 {
 		t.Errorf("item edit JSON: %+v", w.Projection.Modifications[0])
 	}

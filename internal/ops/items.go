@@ -19,17 +19,24 @@ func checkItem(rec *model.Record, it model.BudgetItem) (model.BudgetItem, error)
 	return checkItemAs(rec, it, nil)
 }
 
-// checkItemAs is checkItem for an item that replaces existing, if not nil. The recurrence existing has is kept as it is, even a semimonthly one, which no item can be given.
+// checkItemAs is checkItem for an item that replaces existing, if not nil. An item whose existing start is absent, as in a legacy item, may keep it absent.
 func checkItemAs(rec *model.Record, it model.BudgetItem, existing *model.BudgetItem) (model.BudgetItem, error) {
 	it.Name = strings.TrimSpace(it.Name)
 	if it.Name == "" {
 		return it, refuse(ErrInvalidValue, "a budget item needs a name")
 	}
-	if a := it.Amount; a != a || a <= 0 || a > maxValue {
-		return it, refuse(ErrInvalidValue, "the amount %v must be above zero and within range", it.Amount)
+	if len(it.Amount.Segments()) == 0 {
+		return it, refuse(ErrInvalidValue, "a budget item needs an amount")
 	}
-	if g := it.Growth; g != g || g <= -1 || g > maxValue {
-		return it, refuse(ErrInvalidValue, "the growth %v must be above -1 and within range", it.Growth)
+	for _, g := range it.Amount.Segments() {
+		if a := g.Value; a != a || a <= 0 || a > maxValue {
+			return it, refuse(ErrInvalidValue, "the amount %v must be above zero and within range", a)
+		}
+	}
+	for _, s := range it.Growth.Segments() {
+		if g := s.Value; g != g || g <= -1 || g > maxValue {
+			return it, refuse(ErrInvalidValue, "the growth %v must be above -1 and within range", g)
+		}
 	}
 	switch it.Kind {
 	case model.ItemIncome, model.ItemExpense:
@@ -50,30 +57,55 @@ func checkItemAs(rec *model.Record, it model.BudgetItem, existing *model.BudgetI
 		return it, refuse(ErrInvalidValue, "unknown item kind %q", it.Kind)
 	}
 	r := it.Recurrence
+	// A legacy item may stay without a start if its recurrence is unchanged or needs no phase; otherwise an anchor phases it.
+	legacy := existing != nil && existing.Start == nil
+	keepAbsent := legacy
+	if legacy && r != existing.Recurrence {
+		switch r.Kind {
+		case model.Monthly, model.Semimonthly, model.Annual:
+		default:
+			keepAbsent = false
+		}
+	}
 	start := it.Start
-	switch {
-	case existing != nil && r == existing.Recurrence && r.Kind == model.Semimonthly:
-	case r.Kind == model.OneTime || r.Kind == model.Biweekly:
-		if r.Anchor == 0 {
-			return it, refuse(ErrInvalidValue, "a %s item needs a date", r.Kind)
-		}
-		if start == nil {
-			start = &r.Anchor
-		}
-	case r.Kind == model.Monthly:
+	if start == nil && !keepAbsent && r.Anchor != 0 && (r.Kind == model.OneTime || r.Kind == model.Biweekly) {
+		start = &r.Anchor
+	}
+	if start == nil && !keepAbsent && !(legacy && r.Anchor != 0) {
+		return it, refuse(ErrInvalidValue, "a budget item needs a start date")
+	}
+	switch r.Kind {
+	case model.OneTime, model.Weekly, model.Biweekly, model.Quarterly:
+	case model.Monthly:
 		if r.Day < 1 || r.Day > 31 {
 			return it, refuse(ErrInvalidValue, "the day of the month %d must be from 1 to 31", r.Day)
 		}
-	case r.Kind == model.Annual:
+	case model.Semimonthly:
+		if r.Day < 1 || r.Day > 31 || r.Day2 < 1 || r.Day2 > 31 || r.Day == r.Day2 {
+			return it, refuse(ErrInvalidValue, "a semimonthly item needs two different days of the month, each from 1 to 31")
+		}
+	case model.Annual:
 		if r.Month < 1 || r.Month > 12 || r.Day < 1 || r.Day > time.Date(2024, time.Month(r.Month)+1, 0, 0, 0, 0, 0, time.UTC).Day() {
 			return it, refuse(ErrInvalidValue, "an annual item needs a month from 1 to 12 and a day in that month")
 		}
+	case model.Custom:
+		if r.Count < 1 || !r.Unit.Valid() {
+			return it, refuse(ErrInvalidValue, "a custom recurrence needs a count of at least 1 and a unit of days, weeks, months or years")
+		}
 	default:
-		return it, refuse(ErrInvalidValue, "the recurrence %q must be one-time, monthly, biweekly or annual", r.Kind)
+		return it, refuse(ErrInvalidValue, "the recurrence %q must be one-time, weekly, biweekly, semimonthly, monthly, quarterly, annual or custom", r.Kind)
 	}
-	if it.End != nil && start != nil && *it.End < *start {
-		return it, refuse(ErrInvalidValue, "the end %v is before the start %v", *it.End, *start)
+	if r.Kind != model.Custom {
+		it.Recurrence.Count, it.Recurrence.Unit = 0, ""
 	}
+	effective := start
+	if effective == nil && r.Anchor != 0 {
+		effective = &r.Anchor
+	}
+	if it.End != nil && effective != nil && *it.End < *effective {
+		return it, refuse(ErrInvalidValue, "the end %v is before the start %v", *it.End, *effective)
+	}
+	it.Start = start
 	it.Start, it.End = copyPtr(it.Start), copyPtr(it.End)
 	return it, nil
 }
@@ -133,7 +165,7 @@ func assignItemID(it *model.BudgetItem, ids map[string]bool) error {
 	return nil
 }
 
-// AddItem adds a new budget item to the projection, as an add_item modification at the end of its list. An empty ID is generated from the name; an ID that another budget item or added item has is ErrNameTaken. The item must be complete: a name, an amount above zero, an account for income and expense, from and to for a transfer, and a one-time, monthly, biweekly or annual recurrence.
+// AddItem adds a new budget item to the projection, as an add_item modification at the end of its list. An empty ID is generated from the name; an ID that another budget item or added item has is ErrNameTaken. The item must be complete: a name, an amount above zero in every segment, a start date, an account for income and expense, from and to for a transfer, and a recurrence with what it needs.
 func AddItem(st *store.Store, rec *model.Record, name string, item model.BudgetItem, o Options) (*Result, error) {
 	return editProjection(st, rec, o, name, func(p *model.Projection) error {
 		view, err := viewOf(rec, p)
@@ -168,7 +200,7 @@ func EditItem(st *store.Store, rec *model.Record, name, itemID string, item mode
 		if err != nil {
 			return err
 		}
-		it, err := checkItem(view, item)
+		it, err := checkItemAs(view, item, p.Mods[i].Item)
 		if err != nil {
 			return err
 		}

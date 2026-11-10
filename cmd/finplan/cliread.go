@@ -65,12 +65,12 @@ var commands = []*command{
 	},
 	{
 		Name: "budget list", Summary: "list the budget items",
-		Output: "[{id, name, kind, amount, recurrence: {kind, anchor, month, day, day2}, start, end, indexed, growth, account, from, to}]; recurrence fields that its kind does not use are null, and growth is the annual raise as a fraction (0.03 for 3%, 0 for none)",
+		Output: "[{id, name, kind, amount, amount_schedule: [{from, end, value}], recurrence: {kind, anchor, month, day, day2, count, unit}, start, end, indexed, growth, growth_schedule: [{from, end, value}], account, from, to}]; amount and growth are the values in effect on the record's today (growth 0 for none), and the schedules hold every segment, growth_schedule being empty for no growth; recurrence kind is one-time, weekly, biweekly, semimonthly, monthly, quarterly, annual (shown as Annually) or custom, and the recurrence fields its kind does not use are null: anchor is the date a one-time item happens or an interval item counts from (null when the start is used), month and day are for annual, day for monthly, day and day2 for semimonthly, count and unit (days, weeks, months or years) for custom; growth is the annual raise as a fraction (0.03 for 3%)",
 		run:    cmdBudgetList,
 	},
 	{
 		Name: "budget totals", Summary: "show the monthly income and expenses of the budget items active on the record's today",
-		Output: "{as_of, monthly_income, monthly_expenses, monthly_net}; amounts are in today's dollars, rounded to cents, with no raises or inflation applied: a monthly item counts once a month, a semimonthly one twice, a biweekly one 26/12 times, an annual one a twelfth, a one-time one not at all; transfers are in neither total; an item counts when its start is empty or not after as_of and its end is empty or not before it, and a biweekly item's first date (its recurrence anchor) is not after as_of",
+		Output: "{as_of, monthly_income, monthly_expenses, monthly_net}; amounts are in today's dollars, rounded to cents, with no raises or inflation applied: the amount in effect on as_of counts, a monthly item once a month, a semimonthly one twice, a biweekly one 26/12 times, a weekly one 4.348 times, a quarterly one a third, an annual one a twelfth, a one-time one not at all, and a custom frequency by its average: every N days 30.4375/N times a month, every N weeks 4.348/N, every N months 1/N, every N years 1/(12N); transfers are in neither total; an item counts when its start is empty or not after as_of and its end is empty or not before it, and a biweekly item's first date (its recurrence anchor) is not after as_of",
 		run:    cmdBudgetTotals,
 	},
 	{
@@ -121,30 +121,40 @@ type jbudgetItem struct {
 	Name       string      `json:"name"`
 	Kind       string      `json:"kind"`
 	Amount     float64     `json:"amount"`
+	AmountSch  []jsegment  `json:"amount_schedule"`
 	Recurrence jrecurrence `json:"recurrence"`
 	Start      *jdate      `json:"start"`
 	End        *jdate      `json:"end"`
 	Indexed    bool        `json:"indexed"`
 	Growth     float64     `json:"growth"`
+	GrowthSch  []jsegment  `json:"growth_schedule"`
 	Account    *string     `json:"account"`
 	From       *string     `json:"from"`
 	To         *string     `json:"to"`
 }
 
 type jrecurrence struct {
-	Kind   string `json:"kind"`
-	Anchor *jdate `json:"anchor"`
-	Month  *int   `json:"month"`
-	Day    *int   `json:"day"`
-	Day2   *int   `json:"day2"`
+	Kind   string  `json:"kind"`
+	Anchor *jdate  `json:"anchor"`
+	Month  *int    `json:"month"`
+	Day    *int    `json:"day"`
+	Day2   *int    `json:"day2"`
+	Count  *int    `json:"count"`
+	Unit   *string `json:"unit"`
 }
 
-func budgetItemJSON(it model.BudgetItem) jbudgetItem {
+// budgetItemJSON is the JSON shape of a budget item. Its amount and growth are the values in effect on today, 0 where there is none, and the schedules hold the rest.
+func budgetItemJSON(it model.BudgetItem, today model.Date) jbudgetItem {
 	r := it.Recurrence
 	jr := jrecurrence{Kind: string(r.Kind)}
 	switch r.Kind {
-	case model.Biweekly, model.OneTime:
-		jr.Anchor = model.Ptr(jd(r.Anchor))
+	case model.Biweekly, model.OneTime, model.Weekly, model.Quarterly, model.Custom:
+		if r.Anchor != 0 || r.Kind == model.Biweekly || r.Kind == model.OneTime {
+			jr.Anchor = model.Ptr(jd(r.Anchor))
+		}
+		if r.Kind == model.Custom {
+			jr.Count, jr.Unit = &r.Count, model.Ptr(string(r.Unit))
+		}
 	case model.Monthly:
 		jr.Day = &r.Day
 	case model.Semimonthly:
@@ -153,11 +163,18 @@ func budgetItemJSON(it model.BudgetItem) jbudgetItem {
 		m := int(r.Month)
 		jr.Month, jr.Day = &m, &r.Day
 	}
+	amount, growth := valueListed(it.Amount, today), valueListed(it.Growth, today)
 	return jbudgetItem{
-		ID: it.ID, Name: it.Name, Kind: string(it.Kind), Amount: it.Amount, Recurrence: jr,
-		Start: jdp(it.Start), End: jdp(it.End), Indexed: it.Indexed, Growth: it.Growth,
+		ID: it.ID, Name: it.Name, Kind: string(it.Kind), Amount: amount, AmountSch: scheduleJSONOut(it.Amount), Recurrence: jr,
+		Start: jdp(it.Start), End: jdp(it.End), Indexed: it.Indexed, Growth: growth, GrowthSch: scheduleJSONOut(it.Growth),
 		Account: nullable(string(it.Account)), From: nullable(string(it.From)), To: nullable(string(it.To)),
 	}
+}
+
+// valueListed is the number budget list prints for a schedule: its value today, 0 when no segment covers today.
+func valueListed(s model.Schedule, today model.Date) float64 {
+	v, _ := s.At(today)
+	return v
 }
 
 // candidate is an object a target name can mean.
@@ -545,7 +562,7 @@ func cmdBudgetList(c *call) (any, error) {
 	}
 	out := []jbudgetItem{}
 	for _, it := range rec.Budget.Items {
-		out = append(out, budgetItemJSON(it))
+		out = append(out, budgetItemJSON(it, rec.Today))
 	}
 	return out, nil
 }
@@ -646,7 +663,7 @@ func projectionJSON(rec *model.Record, p *model.Projection) any {
 	for i, m := range p.Mods {
 		jm := jmod{Index: i, Target: jtarget{string(m.Target.Kind), m.Target.ID}, Property: m.Property, Mode: string(cmp.Or(m.Mode, model.ModeSet)), Schedule: scheduleJSONOut(m.Values)}
 		if m.Item != nil {
-			jm.Item = model.Ptr(budgetItemJSON(*m.Item))
+			jm.Item = model.Ptr(budgetItemJSON(*m.Item, rec.Today))
 		}
 		if i < len(missing) && missing[i] != "" {
 			jm.Missing, jm.MissingTarget = true, missing[i]

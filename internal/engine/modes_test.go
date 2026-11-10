@@ -53,7 +53,7 @@ func TestScaleModificationsOfAnItemAmount(t *testing.T) {
 
 func TestScaleFollowsTheBase(t *testing.T) {
 	rec := fixture(t)
-	rec.Budget.Items[1].Amount = 400 // rent
+	rec.Budget.Items[1].Amount = model.Constant(400) // rent
 	// Halved from Mar 1, 400 becomes 200 on Mar 20 and Apr 20.
 	if got := rentDiff(t, rec, rentMod(model.ModeScale, d(2026, time.March, 1), 0.5)); !near(got, 400) {
 		t.Errorf("scale of the changed base: got %v, want 400", got)
@@ -110,9 +110,12 @@ func gymRecord(t *testing.T, start model.Date, growth float64, indexed bool) *mo
 		rec.Globals[model.PropInflation] = model.Constant(0.02)
 	}
 	rec.Budget.Items = []model.BudgetItem{{
-		ID: "gym", Kind: model.ItemExpense, Amount: 100, Recurrence: model.Recurrence{Kind: model.Monthly, Day: 10},
-		Start: &start, Account: "chk", Indexed: indexed, Growth: growth,
+		ID: "gym", Kind: model.ItemExpense, Amount: model.Constant(100), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 10},
+		Start: &start, Account: "chk", Indexed: indexed,
 	}}
+	if growth != 0 {
+		rec.Budget.Items[0].Growth = model.Constant(growth)
+	}
 	return rec
 }
 
@@ -126,7 +129,7 @@ func gymBalance(rec *model.Record, annivs []model.Date, rate func(a model.Date) 
 			return bal
 		}
 		if occ >= *it.Start {
-			amt := it.Amount
+			amt, _ := it.Amount.At(occ)
 			for _, a := range annivs {
 				if a <= occ {
 					amt *= 1 + rate(a)

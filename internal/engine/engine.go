@@ -213,13 +213,13 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 				case m.Property == model.PropAmount && itemExists(m.Target.ID):
 					beneath, ok := amounts[m.Target.ID]
 					if !ok {
-						beneath = model.Constant(items[itemIdx(m.Target.ID)].Amount)
+						beneath = items[itemIdx(m.Target.ID)].Amount
 					}
 					amounts[m.Target.ID] = m.Over(beneath)
 				case m.Property == model.PropGrowth && itemExists(m.Target.ID):
 					beneath, ok := growths[m.Target.ID]
 					if !ok {
-						beneath = baseGrowth(items[itemIdx(m.Target.ID)])
+						beneath = items[itemIdx(m.Target.ID)].Growth
 					}
 					growths[m.Target.ID] = m.Over(beneath)
 				case m.Property == model.PropAmount || m.Property == model.PropGrowth:
@@ -363,14 +363,6 @@ func (prior rateLayer) over(v rateLayer) rateLayer {
 	return rateLayer{s: prior.s.Overlay(v.s)}
 }
 
-// baseGrowth is the raise schedule an item has before any modification: its own annual rate, or none.
-func baseGrowth(it model.BudgetItem) model.Schedule {
-	if it.Growth == 0 {
-		return model.Schedule{}
-	}
-	return model.Constant(it.Growth)
-}
-
 // raiseFactor is the factor by which raises have lifted an item's amount on d. The item's raise anniversaries are the yearly repeats of its start (or, with none, its recurrence anchor or today); each one after both that start and today, up to d, steps the amount up by the rate g gives on that day, never below zero. A 29 February anniversary falls on 28 February in other years.
 func raiseFactor(it model.BudgetItem, today, d model.Date, g model.Schedule) float64 {
 	anchor := today
@@ -507,20 +499,20 @@ func (p *path) build(rec *model.Record, items []model.BudgetItem, cutoffs map[st
 				upTo = min(upTo, *a.Closed)
 			}
 		}
-		raises, hasRaises := growths[it.ID]
-		if !hasRaises {
-			raises, hasRaises = baseGrowth(it), it.Growth != 0
+		raises, ok := growths[it.ID]
+		if !ok {
+			raises = it.Growth
 		}
-		for _, d := range it.Recurrence.Between(after, upTo) {
-			amt := it.Amount
-			if s, ok := amounts[it.ID]; ok {
-				if v, ok := s.At(d); ok {
-					amt = v
-				}
+		pays, ok := amounts[it.ID]
+		if !ok {
+			pays = it.Amount
+		}
+		for _, d := range it.Dates(after, upTo) {
+			amt, ok := pays.At(d)
+			if !ok {
+				continue
 			}
-			if hasRaises {
-				amt *= raiseFactor(it, rec.Today, d, raises)
-			}
+			amt *= raiseFactor(it, rec.Today, d, raises)
 			if it.Indexed {
 				amt *= infl.Compound(rec.Today, d)
 			}

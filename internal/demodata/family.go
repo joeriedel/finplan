@@ -89,13 +89,13 @@ func monthly(day int) model.Recurrence {
 
 func familyBudget() model.Budget {
 	income := func(id, name string, amount float64, rec model.Recurrence) model.BudgetItem {
-		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemIncome, Amount: amount, Recurrence: rec, Indexed: true, Account: Checking}
+		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemIncome, Amount: model.Constant(amount), Recurrence: rec, Indexed: true, Account: Checking}
 	}
 	expense := func(id, name string, from model.AccountID, amount float64, rec model.Recurrence) model.BudgetItem {
-		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemExpense, Amount: amount, Recurrence: rec, Indexed: true, Account: from}
+		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemExpense, Amount: model.Constant(amount), Recurrence: rec, Indexed: true, Account: from}
 	}
 	transfer := func(id, name string, from, to model.AccountID, amount float64, day int) model.BudgetItem {
-		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemTransfer, Amount: amount, Recurrence: monthly(day), From: from, To: to}
+		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemTransfer, Amount: model.Constant(amount), Recurrence: monthly(day), From: from, To: to}
 	}
 	return model.Budget{Items: []model.BudgetItem{
 		income("salary-a", "Salary (Parent A)", 5000, model.Recurrence{Kind: model.Semimonthly, Day: 15, Day2: 31}),
@@ -177,7 +177,7 @@ func Family() *model.Record {
 		},
 	}}))
 	withdrawal := model.BudgetItem{
-		ID: "early-401k-withdrawal", Name: "Early 401k withdrawal", Kind: model.ItemTransfer, Amount: 100000,
+		ID: "early-401k-withdrawal", Name: "Early 401k withdrawal", Kind: model.ItemTransfer, Amount: model.Constant(100000),
 		Recurrence: model.Recurrence{Kind: model.OneTime, Anchor: model.D(2027, time.June, 1)}, From: K401, To: Checking,
 	}
 	must(rec.AddProjection(&model.Projection{Name: ProjWithdraw, Parent: ProjBase, Mods: []model.Modification{
@@ -198,17 +198,21 @@ func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
 		if !it.Touches(a.ID) {
 			continue
 		}
-		for _, d := range it.Recurrence.Between(historyOpen, end) {
+		for _, d := range it.Dates(historyOpen, end) {
+			amount, ok := it.Amount.At(d)
+			if !ok {
+				continue
+			}
 			t := model.Transaction{Date: d, Memo: it.Name}
 			switch {
 			case it.Kind == model.ItemIncome:
-				t.Kind, t.Amount = model.TxIncome, it.Amount*netPay
+				t.Kind, t.Amount = model.TxIncome, amount*netPay
 			case it.Kind == model.ItemExpense:
-				t.Kind, t.Amount = model.TxExpense, -it.Amount
+				t.Kind, t.Amount = model.TxExpense, -amount
 			case it.From == a.ID:
-				t.Kind, t.Amount, t.Counter = model.TxTransfer, -it.Amount, it.To
+				t.Kind, t.Amount, t.Counter = model.TxTransfer, -amount, it.To
 			default:
-				t.Kind, t.Amount, t.Counter = model.TxTransfer, it.Amount, it.From
+				t.Kind, t.Amount, t.Counter = model.TxTransfer, amount, it.From
 			}
 			must(a.AddTransaction(t))
 		}

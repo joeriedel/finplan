@@ -108,10 +108,10 @@ func TestScaleNeverOverwrites(t *testing.T) {
 func TestCloneKeepsModeAndGrowth(t *testing.T) {
 	p := &Projection{Name: "P", Mods: []Modification{
 		{Target: ObjectRef{Kind: KindBudgetItem, ID: "x"}, Property: PropAmount, Mode: ModeScale, Values: Constant(0.7)},
-		{Target: ObjectRef{Kind: KindBudgetItem, ID: "y"}, Property: PropAddItem, Item: &BudgetItem{ID: "y", Growth: 0.03}},
+		{Target: ObjectRef{Kind: KindBudgetItem, ID: "y"}, Property: PropAddItem, Item: &BudgetItem{ID: "y", Growth: Constant(0.03)}},
 	}}
 	c := p.Clone()
-	if c.Mods[0].Mode != ModeScale || c.Mods[1].Item.Growth != 0.03 {
+	if c.Mods[0].Mode != ModeScale || c.Mods[1].Item.Growth.Segments()[0].Value != 0.03 {
 		t.Errorf("clone: %+v", c.Mods)
 	}
 }

@@ -54,7 +54,7 @@ func richFamily(t *testing.T) *model.Record {
 	}
 	rec.Assets[0].Params = map[string]model.Schedule{model.PropGrowth: model.Constant(0.01)}
 	item := model.BudgetItem{
-		ID: "bonus", Name: "Bonus", Kind: model.ItemIncome, Amount: 1000, Indexed: true, Growth: 0.03, Account: demodata.Checking,
+		ID: "bonus", Name: "Bonus", Kind: model.ItemIncome, Amount: model.Constant(1000), Indexed: true, Growth: model.Constant(0.03), Account: demodata.Checking,
 		Recurrence: model.Recurrence{Kind: model.Annual, Month: time.March, Day: 1},
 		Start:      model.Ptr(model.D(2027, time.January, 1)), End: model.Ptr(model.D(2030, time.January, 1)),
 	}
@@ -114,10 +114,10 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	want := demodata.Family()
 	mustSave(t, s, want)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 4 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 5 {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
-	// Format 1 documents have no mode and no growth.
+	// Format 1 documents have no mode and no growth; a schedule of no growth is not stored.
 	var withNew int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM documents WHERE kind IN ('budget', 'projection') AND (body LIKE '%"mode":%' OR body LIKE '%"growth":%')`).Scan(&withNew); err != nil || withNew != 0 {
 		t.Fatalf("documents with a mode or growth: %d, %v", withNew, err)
@@ -1004,5 +1004,70 @@ func TestClosedAccountRoundTrips(t *testing.T) {
 	var body string
 	if err := s.db.QueryRow(`SELECT body FROM documents WHERE kind = 'account' AND ordinal = 1`).Scan(&body); err != nil || strings.Contains(body, "closed") {
 		t.Errorf("open account stores a close date: %s, %v", body, err)
+	}
+}
+
+// TestFormat4BudgetDocumentsLoadUnchanged loads a hand-written format 4 database: budget items whose amount and growth are numbers, one of every legacy recurrence, an item with no start, and a projection that adds an item.
+func TestFormat4BudgetDocumentsLoadUnchanged(t *testing.T) {
+	s, _ := openTemp(t)
+	mustSave(t, s, demodata.Family())
+	n := func(y int, m time.Month, d int) int { return int(model.D(y, m, d)) }
+	budget := fmt.Sprintf(`{"items": [
+		{"id": "rent", "name": "Rent", "kind": "expense", "amount": 1500, "recurrence": {"kind": "monthly", "anchor": 0, "month": 0, "day": 31, "day2": 0}, "start": %d, "end": %d, "indexed": true, "growth": 0.03, "account": "checking", "from": "", "to": ""},
+		{"id": "pay-a", "name": "Pay A", "kind": "income", "amount": 2000, "recurrence": {"kind": "semimonthly", "anchor": 0, "month": 0, "day": 15, "day2": 31}, "start": null, "end": null, "indexed": false, "account": "checking", "from": "", "to": ""},
+		{"id": "pay-b", "name": "Pay B", "kind": "income", "amount": 1800, "recurrence": {"kind": "biweekly", "anchor": %d, "month": 0, "day": 0, "day2": 0}, "start": null, "end": null, "indexed": false, "growth": 0, "account": "checking", "from": "", "to": ""},
+		{"id": "trip", "name": "Trip", "kind": "expense", "amount": 3000, "recurrence": {"kind": "annual", "anchor": 0, "month": 6, "day": 15, "day2": 0}, "start": null, "end": null, "indexed": false, "account": "checking", "from": "", "to": ""},
+		{"id": "gift", "name": "Gift", "kind": "transfer", "amount": 250, "recurrence": {"kind": "one-time", "anchor": %d, "month": 0, "day": 0, "day2": 0}, "start": %d, "end": null, "indexed": false, "account": "", "from": "checking", "to": "outside"}
+	]}`, n(2025, 1, 1), n(2030, 12, 31), n(2024, 11, 8), n(2027, 6, 1), n(2027, 6, 1))
+	proj := fmt.Sprintf(`{"name": "New job", "parent": "", "start": null, "override_history": null, "asset_settings": [], "mods": [
+		{"target": {"kind": "budget item", "id": "side"}, "property": "add_item", "values": null, "item": {"id": "side", "name": "Side", "kind": "income", "amount": 400, "recurrence": {"kind": "biweekly", "anchor": %d, "month": 0, "day": 0, "day2": 0}, "start": %d, "end": null, "indexed": false, "growth": 0.02, "account": "checking", "from": "", "to": ""}}
+	], "shocks": [], "rebalances": []}`, n(2027, 1, 8), n(2027, 1, 8))
+	for kind, body := range map[string]string{kindBudget: budget, kindProjection: proj} {
+		if _, err := s.db.Exec(`UPDATE documents SET format = 4, body = ? WHERE kind = ? AND key = ?`, body, kind, map[string]string{kindBudget: "", kindProjection: "New job"}[kind]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := mustLoad(t, s)
+	at := func(y int, m time.Month, d int) *model.Date { return model.Ptr(model.D(y, m, d)) }
+	want := []model.BudgetItem{
+		{ID: "rent", Name: "Rent", Kind: model.ItemExpense, Amount: model.Constant(1500), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 31}, Start: at(2025, 1, 1), End: at(2030, 12, 31), Indexed: true, Growth: model.Constant(0.03), Account: "checking"},
+		{ID: "pay-a", Name: "Pay A", Kind: model.ItemIncome, Amount: model.Constant(2000), Recurrence: model.Recurrence{Kind: model.Semimonthly, Day: 15, Day2: 31}, Account: "checking"},
+		{ID: "pay-b", Name: "Pay B", Kind: model.ItemIncome, Amount: model.Constant(1800), Recurrence: model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2024, 11, 8)}, Account: "checking"},
+		{ID: "trip", Name: "Trip", Kind: model.ItemExpense, Amount: model.Constant(3000), Recurrence: model.Recurrence{Kind: model.Annual, Month: time.June, Day: 15}, Account: "checking"},
+		{ID: "gift", Name: "Gift", Kind: model.ItemTransfer, Amount: model.Constant(250), Recurrence: model.Recurrence{Kind: model.OneTime, Anchor: model.D(2027, 6, 1)}, Start: at(2027, 6, 1), From: "checking", To: "outside"},
+	}
+	if !reflect.DeepEqual(got.Budget.Items, want) {
+		t.Fatalf("budget items load as %+v, want %+v", got.Budget.Items, want)
+	}
+	added := got.Projection("New job").Mods[0].Item
+	wantAdded := model.BudgetItem{ID: "side", Name: "Side", Kind: model.ItemIncome, Amount: model.Constant(400), Recurrence: model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2027, 1, 8)}, Start: at(2027, 1, 8), Growth: model.Constant(0.02), Account: "checking"}
+	if added == nil || !reflect.DeepEqual(*added, wantAdded) {
+		t.Fatalf("added item loads as %+v, want %+v", added, wantAdded)
+	}
+	// The dates are the ones the legacy recurrences gave, items without a start included.
+	after, upTo := model.D(2026, time.November, 9), model.D(2027, time.December, 31)
+	if d := got.Budget.Items[2].Dates(after, upTo); d[0] != model.D(2026, time.November, 20) || len(d) != 30 {
+		t.Errorf("biweekly: %d dates from %v", len(d), d[0])
+	}
+	if d := got.Budget.Items[1].Dates(after, upTo); len(d) != 28 || d[0] != model.D(2026, time.November, 15) || d[1] != model.D(2026, time.November, 30) {
+		t.Errorf("semimonthly: %d dates, %v", len(d), d)
+	}
+	if d := got.Budget.Items[0].Dates(after, upTo); len(d) != 14 || d[0] != model.D(2026, time.November, 30) || d[3] != model.D(2027, time.February, 28) {
+		t.Errorf("monthly on the 31st: %d dates, %v", len(d), d)
+	}
+	if d := got.Budget.Items[3].Dates(after, upTo); len(d) != 1 || d[0] != model.D(2027, time.June, 15) {
+		t.Errorf("annual: %v", d)
+	}
+	if d := got.Budget.Items[4].Dates(after, upTo); len(d) != 1 || d[0] != model.D(2027, time.June, 1) {
+		t.Errorf("one-time: %v", d)
+	}
+	// Saved again, it is a format 5 document that loads the same.
+	mustSave(t, s, got)
+	var format int
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != 5 {
+		t.Fatalf("format written: %d, %v", format, err)
+	}
+	if again := mustLoad(t, s); !reflect.DeepEqual(again.Budget.Items, want) {
+		t.Fatal("resaved items differ")
 	}
 }

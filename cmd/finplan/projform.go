@@ -69,18 +69,29 @@ func newItemForm() itemForm {
 	return itemForm{kind: model.ItemExpense, every: model.OneTime}
 }
 
-// formOf returns the form that shows the item.
-func formOf(it model.BudgetItem) itemForm {
+// valueNow is the value the schedule has on today, or its first value if it has none then; 0 for an empty schedule. The forms show it for an item whose amount or growth changes over time.
+func valueNow(s model.Schedule, today model.Date) float64 {
+	if v, ok := s.At(today); ok {
+		return v
+	}
+	if segs := s.Segments(); len(segs) > 0 {
+		return segs[0].Value
+	}
+	return 0
+}
+
+// formOf returns the form that shows the item as it is on today.
+func formOf(it model.BudgetItem, today model.Date) itemForm {
 	r := it.Recurrence
-	f := itemForm{kind: it.Kind, name: it.Name, amount: trimFloat(it.Amount), every: r.Kind, account: it.Account, from: it.From, to: it.To, indexed: it.Indexed}
+	f := itemForm{kind: it.Kind, name: it.Name, amount: trimFloat(valueNow(it.Amount, today)), every: r.Kind, account: it.Account, from: it.From, to: it.To, indexed: it.Indexed}
 	switch {
 	case r.Kind == model.OneTime || r.Kind == model.Biweekly:
 		f.date = r.Anchor.String()
 	case it.Start != nil:
 		f.date = it.Start.String()
 	}
-	if it.Growth != 0 {
-		f.growth = formatValue(model.PropGrowth, model.ModeSet, it.Growth)
+	if g := valueNow(it.Growth, today); g != 0 {
+		f.growth = formatValue(model.PropGrowth, model.ModeSet, g)
 	}
 	if r.Day != 0 {
 		f.day = strconv.Itoa(r.Day)
@@ -171,8 +182,8 @@ func (f *itemForm) seed() {
 	}
 }
 
-// item builds the budget item the form describes. It fails on what it cannot read and on a missing account; ops checks the rest.
-func (f itemForm) item() (model.BudgetItem, error) {
+// item builds the budget item the form describes; a monthly or annual item with no date starts today. It fails on what it cannot read and on a missing account; ops checks the rest.
+func (f itemForm) item(today model.Date) (model.BudgetItem, error) {
 	it := model.BudgetItem{Name: f.name, Kind: f.kind, Account: f.account, From: f.from, To: f.to, Indexed: f.indexed}
 	if strings.TrimSpace(f.amount) == "" {
 		return it, errors.New("enter an amount")
@@ -181,10 +192,14 @@ func (f itemForm) item() (model.BudgetItem, error) {
 	if err != nil {
 		return it, err
 	}
-	it.Amount = amount
+	it.Amount = model.Constant(amount)
 	if strings.TrimSpace(f.growth) != "" {
-		if it.Growth, err = parseValue(model.PropGrowth, model.ModeSet, f.growth); err != nil {
+		g, err := parseValue(model.PropGrowth, model.ModeSet, f.growth)
+		if err != nil {
 			return it, err
+		}
+		if g != 0 {
+			it.Growth = model.Constant(g)
 		}
 	}
 	switch f.kind {
@@ -218,10 +233,12 @@ func (f itemForm) item() (model.BudgetItem, error) {
 		}
 	}
 	it.Recurrence = r
-	if (f.every == model.Monthly || f.every == model.Annual) && strings.TrimSpace(f.date) != "" {
-		d, err := parseDate(strings.TrimSpace(f.date))
-		if err != nil {
-			return it, err
+	if f.every == model.Monthly || f.every == model.Annual {
+		d := today
+		if strings.TrimSpace(f.date) != "" {
+			if d, err = parseDate(strings.TrimSpace(f.date)); err != nil {
+				return it, err
+			}
 		}
 		it.Start = &d
 	}
@@ -252,11 +269,29 @@ func needInt(s, what string) (int, error) {
 
 // itemProblem says why the budget item the form describes cannot be added, or "" if it can.
 func itemProblem(rec *model.Record, f itemForm) string {
-	it, err := f.item()
+	it, err := f.item(rec.Today)
 	if err != nil {
 		return err.Error()
 	}
 	return reasonOf(ops.CheckItem(rec, it))
+}
+
+// keepUnedited makes it, built from the form f after editing field, keep what the form cannot show of the item old: an amount or growth that changes over time, a recurrence the form has no choice for (weekly, quarterly, semimonthly or custom), a start that is absent, and the later start of a biweekly item. Editing the date of a biweekly item moves its anchor and start.
+func keepUnedited(it *model.BudgetItem, old model.BudgetItem, f itemForm, field string) {
+	if field != "amount" {
+		it.Amount = old.Amount
+	}
+	if field != "growth" {
+		it.Growth = old.Growth
+	}
+	switch {
+	case field != "every" && !slices.Contains(formRecurrences, old.Recurrence.Kind):
+		it.Recurrence, it.Start = old.Recurrence, old.Start
+	case old.Recurrence.Kind == model.Biweekly && f.every == model.Biweekly && field != "date":
+		it.Start = old.Start
+	case old.Start == nil && strings.TrimSpace(f.date) == "":
+		it.Start = nil
+	}
 }
 
 // itemFieldID is the id of a text field of the budget item added by modification i.
@@ -266,21 +301,18 @@ func itemFieldID(i int, field string) string { return "item" + strconv.Itoa(i) +
 func (t *projTab) setItemField(proj string, i int, field, text string) {
 	id := itemFieldID(i, field)
 	old := t.a.rec.Projection(proj).Mods[i].Item
-	f := formOf(*old)
+	f := formOf(*old, t.a.rec.Today)
 	f.set(field, text)
 	if field == "every" && (f.every == model.OneTime || f.every == model.Biweekly) && strings.TrimSpace(f.date) == "" {
 		f.date = t.a.rec.Today.String()
 	}
-	it, err := f.item()
+	it, err := f.item(t.a.rec.Today)
 	if err != nil {
 		t.setErr(id, err.Error())
 		return
 	}
 	it.Indexed = old.Indexed
-	// A biweekly item may start later than its anchor, which the form does not show; editing another field keeps that start, while editing the date (the anchor) moves it. A one-time item's start follows its date.
-	if old.Recurrence.Kind == model.Biweekly && f.every == model.Biweekly && field != "date" {
-		it.Start = old.Start
-	}
+	keepUnedited(&it, *old, f, field)
 	t.a.edit("change budget item", func() (*ops.Result, error) {
 		return ops.EditItem(t.a.st, t.a.rec, proj, old.ID, it, ops.Options{})
 	})
@@ -291,7 +323,7 @@ func (t *projTab) addNewItem(proj string) bool {
 	if itemProblem(effective(t.a.rec, proj), t.addItem) != "" {
 		return false
 	}
-	it, _ := t.addItem.item()
+	it, _ := t.addItem.item(t.a.rec.Today)
 	if !t.a.edit("add budget item", func() (*ops.Result, error) {
 		return ops.AddItem(t.a.st, t.a.rec, proj, it, ops.Options{})
 	}) {

@@ -496,7 +496,7 @@ func TestCLIBudgetCommands(t *testing.T) {
 	refusedWrite(t, path, "", 1, "name_taken", "budget", "add", "--id", "early-401k-withdrawal", "--kind", "income", "--name", "X", "--amount", "1", "--every", "monthly", "--on", "2027-01-15", "--account", "checking")
 	refusedWrite(t, path, "", 1, "unknown_target", "budget", "add", "--kind", "income", "--name", "X", "--amount", "1", "--every", "monthly", "--on", "2027-01-15", "--account", "nope")
 	refusedWrite(t, path, "", 1, "invalid", "budget", "add", "--kind", "income", "--name", "X", "--amount", "0", "--every", "monthly", "--on", "2027-01-15", "--account", "checking")
-	refusedWrite(t, path, `{"name":"Pay","kind":"income","amount":5,"account":"checking","recurrence":{"kind":"semimonthly","day":1,"day2":15}}`, 1, "invalid", "budget", "add")
+	refusedWrite(t, path, `{"name":"Pay","kind":"income","amount":5,"account":"checking","start":"2027-01-01","recurrence":{"kind":"semimonthly","day":1,"day2":1}}`, 1, "invalid", "budget", "add")
 	refusedWrite(t, path, "", 2, "usage", "budget", "add", "--name", "X")
 }
 

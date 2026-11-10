@@ -319,7 +319,7 @@ func (c *call) itemResult(res *ops.Result, err error, id string) (any, error) {
 	} else {
 		it, _ = c.rec.Budget.Item(id)
 	}
-	out["item"] = budgetItemJSON(it)
+	out["item"] = budgetItemJSON(it, c.rec.Today)
 	return out, nil
 }
 
@@ -879,6 +879,6 @@ func cmdBudgetDelete(c *call) (any, error) {
 		return nil, err
 	}
 	out["removed"] = res.Removed
-	out["item"] = budgetItemJSON(*res.Item)
+	out["item"] = budgetItemJSON(*res.Item, c.rec.Today)
 	return out, nil
 }

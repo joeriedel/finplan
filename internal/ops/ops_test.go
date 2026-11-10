@@ -586,7 +586,7 @@ func TestModTargets(t *testing.T) {
 
 func TestModTargetAddedLaterIsRefused(t *testing.T) {
 	st, rec := seed(t)
-	item := model.BudgetItem{Name: "Gift", Kind: model.ItemIncome, Amount: 100, Account: demodata.Checking, Recurrence: model.Recurrence{Kind: model.OneTime, Anchor: model.D(2028, 1, 1)}}
+	item := model.BudgetItem{Name: "Gift", Kind: model.ItemIncome, Amount: model.Constant(100), Account: demodata.Checking, Recurrence: model.Recurrence{Kind: model.OneTime, Anchor: model.D(2028, 1, 1)}}
 	res, err := AddItem(st, rec, demodata.ProjNewJob, item, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -647,7 +647,7 @@ func TestNoNewDangling(t *testing.T) {
 		t.Errorf("clone a child of a dangling projection: %v", err)
 	}
 	// Moving an amount mod before its add_item in the same projection is refused.
-	res, err := AddItem(st, rec, "Child", model.BudgetItem{Name: "Gift", Kind: model.ItemIncome, Amount: 1, Account: demodata.Checking, Recurrence: model.Recurrence{Kind: model.OneTime, Anchor: model.D(2028, 1, 1)}}, Options{})
+	res, err := AddItem(st, rec, "Child", model.BudgetItem{Name: "Gift", Kind: model.ItemIncome, Amount: model.Constant(1), Account: demodata.Checking, Recurrence: model.Recurrence{Kind: model.OneTime, Anchor: model.D(2028, 1, 1)}}, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -661,9 +661,12 @@ func TestNoNewDangling(t *testing.T) {
 	}
 }
 
+// sameSchedule reports whether the schedules have the same segments.
+func sameSchedule(a, b model.Schedule) bool { return reflect.DeepEqual(a.Segments(), b.Segments()) }
+
 func goodItem() model.BudgetItem {
 	return model.BudgetItem{
-		Name: "Side Gig #1!", Kind: model.ItemIncome, Amount: 800, Account: demodata.Checking,
+		Name: "Side Gig #1!", Kind: model.ItemIncome, Amount: model.Constant(800), Account: demodata.Checking,
 		Recurrence: model.Recurrence{Kind: model.Monthly, Day: 15}, Start: model.Ptr(model.D(2027, 1, 1)),
 	}
 }
@@ -679,7 +682,7 @@ func TestAddItem(t *testing.T) {
 	}
 	mods := reload(t, st).Projection(demodata.ProjNewJob).Mods
 	m := mods[len(mods)-1]
-	if m.Property != model.PropAddItem || m.Target != (model.ObjectRef{Kind: model.KindBudgetItem, ID: "side-gig-1"}) || m.Item == nil || m.Item.ID != "side-gig-1" || m.Item.Amount != 800 {
+	if m.Property != model.PropAddItem || m.Target != (model.ObjectRef{Kind: model.KindBudgetItem, ID: "side-gig-1"}) || m.Item == nil || m.Item.ID != "side-gig-1" || !sameSchedule(m.Item.Amount, model.Constant(800)) {
 		t.Errorf("added %+v", m)
 	}
 	// The same name gets the next free id.
@@ -691,7 +694,7 @@ func TestAddItem(t *testing.T) {
 		t.Errorf("id %q", got)
 	}
 	// A transfer with one outside account.
-	tr := model.BudgetItem{ID: "to-friend", Name: "Gift", Kind: model.ItemTransfer, Amount: 50, From: demodata.Checking, To: "outside", Recurrence: model.Recurrence{Kind: model.Annual, Month: 12, Day: 25}}
+	tr := model.BudgetItem{ID: "to-friend", Name: "Gift", Kind: model.ItemTransfer, Amount: model.Constant(50), From: demodata.Checking, To: "outside", Recurrence: model.Recurrence{Kind: model.Annual, Month: 12, Day: 25}, Start: model.Ptr(model.D(2027, 1, 1))}
 	if _, err := AddItem(st, rec, demodata.ProjNewJob, tr, Options{DryRun: true}); err != nil {
 		t.Errorf("transfer to outside: %v", err)
 	}
@@ -705,23 +708,23 @@ func TestAddItem(t *testing.T) {
 		})
 	}
 	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.Name = " " })
-	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.Amount = 0 })
-	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.Amount = 1e16 })
+	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.Amount = model.Constant(0) })
+	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.Amount = model.Constant(1e16) })
 	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.Kind = "gift" })
 	refuseItem(ErrUnknownTarget, func(it *model.BudgetItem) { it.Account = "nope" })
 	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.Recurrence.Day = 32 })
 	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.Recurrence = model.Recurrence{Kind: model.Annual, Month: 13, Day: 1} })
 	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) {
-		it.Recurrence = model.Recurrence{Kind: model.Semimonthly, Day: 1, Day2: 15}
+		it.Recurrence = model.Recurrence{Kind: model.Semimonthly, Day: 1, Day2: 1}
 	})
 	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) { it.End = model.Ptr(model.D(2026, 1, 1)) })
 	refuseItem(ErrNameTaken, func(it *model.BudgetItem) { it.ID = "salary-a" })
 	refuseItem(ErrNameTaken, func(it *model.BudgetItem) { it.ID = "early-401k-withdrawal" })
 	refuseItem(ErrInvalidValue, func(it *model.BudgetItem) {
-		*it = model.BudgetItem{Name: "x", Kind: model.ItemTransfer, Amount: 1, From: demodata.Checking, To: demodata.Checking, Recurrence: it.Recurrence}
+		*it = model.BudgetItem{Name: "x", Kind: model.ItemTransfer, Amount: model.Constant(1), From: demodata.Checking, To: demodata.Checking, Recurrence: it.Recurrence, Start: it.Start}
 	})
 	refuseItem(ErrUnknownTarget, func(it *model.BudgetItem) {
-		*it = model.BudgetItem{Name: "x", Kind: model.ItemTransfer, Amount: 1, From: "a", To: "b", Recurrence: it.Recurrence}
+		*it = model.BudgetItem{Name: "x", Kind: model.ItemTransfer, Amount: model.Constant(1), From: "a", To: "b", Recurrence: it.Recurrence, Start: it.Start}
 	})
 	refused(t, ErrUnknownProjection, func(st *store.Store, rec *model.Record) (*Result, error) {
 		return AddItem(st, rec, "Nowhere", goodItem(), Options{})
@@ -731,7 +734,7 @@ func TestAddItem(t *testing.T) {
 func TestEditItem(t *testing.T) {
 	op := func(st *store.Store, rec *model.Record, o Options) (*Result, error) {
 		it := *rec.Projection(demodata.ProjWithdraw).Mods[0].Item
-		it.Amount = 90000
+		it.Amount = model.Constant(90000)
 		return EditItem(st, rec, demodata.ProjWithdraw, "early-401k-withdrawal", it, o)
 	}
 	dryRunMatches(t, op)
@@ -740,7 +743,7 @@ func TestEditItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := reload(t, st).Projection(demodata.ProjWithdraw).Mods[0]
-	if m.Item.Amount != 90000 || m.Item.ID != "early-401k-withdrawal" || m.Target.ID != "early-401k-withdrawal" {
+	if !sameSchedule(m.Item.Amount, model.Constant(90000)) || m.Item.ID != "early-401k-withdrawal" || m.Target.ID != "early-401k-withdrawal" {
 		t.Errorf("edited %+v", m.Item)
 	}
 	refused(t, ErrUnknownTarget, func(st *store.Store, rec *model.Record) (*Result, error) {
@@ -753,7 +756,7 @@ func TestEditItem(t *testing.T) {
 	})
 	refused(t, ErrInvalidValue, func(st *store.Store, rec *model.Record) (*Result, error) {
 		it := goodItem()
-		it.Amount = -1
+		it.Amount = model.Constant(-1)
 		return EditItem(st, rec, demodata.ProjWithdraw, "early-401k-withdrawal", it, Options{})
 	})
 	refused(t, ErrNoChange, func(st *store.Store, rec *model.Record) (*Result, error) {
@@ -790,10 +793,8 @@ func TestEndItem(t *testing.T) {
 
 func TestCheckItemNeedsDateAndValidDay(t *testing.T) {
 	st, rec := seed(t)
-	base := model.BudgetItem{Name: "Gift", Kind: model.ItemIncome, Amount: 1, Account: demodata.Checking}
+	base := model.BudgetItem{Name: "Gift", Kind: model.ItemIncome, Amount: model.Constant(1), Account: demodata.Checking, Start: model.Ptr(model.D(2027, 1, 1))}
 	for _, r := range []model.Recurrence{
-		{Kind: model.OneTime},
-		{Kind: model.Biweekly},
 		{Kind: model.Annual, Month: 13, Day: 1},
 		{Kind: model.Annual, Month: 2, Day: 30},
 		{Kind: model.Monthly, Day: 32},
@@ -802,6 +803,14 @@ func TestCheckItemNeedsDateAndValidDay(t *testing.T) {
 		it.Recurrence = r
 		if _, err := AddItem(st, rec, demodata.ProjBase, it, Options{DryRun: true}); !errors.Is(err, ErrInvalidValue) {
 			t.Errorf("recurrence %+v: %v", r, err)
+		}
+	}
+	// An item with no start and no anchor is refused.
+	for _, r := range []model.Recurrence{{Kind: model.OneTime}, {Kind: model.Biweekly}, {Kind: model.Monthly, Day: 1}} {
+		it := base
+		it.Start, it.Recurrence = nil, r
+		if _, err := AddItem(st, rec, demodata.ProjBase, it, Options{DryRun: true}); !errors.Is(err, ErrInvalidValue) {
+			t.Errorf("no start, recurrence %+v: %v", r, err)
 		}
 	}
 }
@@ -1121,37 +1130,37 @@ func TestSetModMode(t *testing.T) {
 func TestItemGrowth(t *testing.T) {
 	st, rec := seed(t)
 	it := goodItem()
-	it.Growth = 0.03
+	it.Growth = model.Constant(0.03)
 	res, err := AddItem(st, rec, demodata.ProjNewJob, it, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	mods := reload(t, st).Projection(demodata.ProjNewJob).Mods
-	if got := mods[len(mods)-1].Item.Growth; got != 0.03 {
+	if got := mods[len(mods)-1].Item.Growth.Segments(); len(got) != 1 || got[0].Value != 0.03 {
 		t.Errorf("growth %v", got)
 	}
 	edited := *res.Projection.Mods[len(res.Projection.Mods)-1].Item
-	edited.Growth = 0.04
+	edited.Growth = model.Constant(0.04)
 	if _, err := EditItem(st, res.Record, demodata.ProjNewJob, edited.ID, edited, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	mods = reload(t, st).Projection(demodata.ProjNewJob).Mods
-	if got := mods[len(mods)-1].Item.Growth; got != 0.04 {
+	if got := mods[len(mods)-1].Item.Growth.Segments(); len(got) != 1 || got[0].Value != 0.04 {
 		t.Errorf("edited growth %v", got)
 	}
 	for _, g := range []float64{-1, -2, 1e16} {
 		bad := goodItem()
-		bad.Growth = g
+		bad.Growth = model.Constant(g)
 		refused(t, ErrInvalidValue, func(st *store.Store, rec *model.Record) (*Result, error) {
 			return AddItem(st, rec, demodata.ProjNewJob, bad, Options{})
 		})
 	}
 	base := rec.Budget.Items[0]
-	base.Growth = 0.02
+	base.Growth = model.Constant(0.02)
 	if _, err := EditBudgetItem(st, rec, base.ID, base, Options{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := reload(t, st).Budget.Items[0].Growth; got != 0.02 {
+	if got := reload(t, st).Budget.Items[0].Growth.Segments(); len(got) != 1 || got[0].Value != 0.02 {
 		t.Errorf("base growth %v", got)
 	}
 }
@@ -1186,4 +1195,118 @@ func TestAddModDefaultBalanceTargets(t *testing.T) {
 	refused(t, ErrUnknownTarget, func(st *store.Store, rec *model.Record) (*Result, error) {
 		return AddMod(st, rec, demodata.ProjNewJob, mod(model.KindAccount, "nope", model.PropDefault, "", ranged), Options{})
 	})
+}
+
+func TestItemRecurrenceAndScheduleRules(t *testing.T) {
+	st, rec := seed(t)
+	check := func(name string, change func(it *model.BudgetItem), want error) {
+		t.Helper()
+		it := goodItem()
+		change(&it)
+		_, err := AddItem(st, rec, demodata.ProjNewJob, it, Options{DryRun: true})
+		if want == nil && err != nil || want != nil && !errors.Is(err, want) {
+			t.Errorf("%s: got %v, want %v", name, err, want)
+		}
+	}
+	rule := func(r model.Recurrence) func(it *model.BudgetItem) {
+		return func(it *model.BudgetItem) { it.Recurrence = r }
+	}
+	check("weekly", rule(model.Recurrence{Kind: model.Weekly}), nil)
+	check("quarterly", rule(model.Recurrence{Kind: model.Quarterly}), nil)
+	check("semimonthly", rule(model.Recurrence{Kind: model.Semimonthly, Day: 1, Day2: 15}), nil)
+	check("semimonthly same days", rule(model.Recurrence{Kind: model.Semimonthly, Day: 15, Day2: 15}), ErrInvalidValue)
+	check("semimonthly day 0", rule(model.Recurrence{Kind: model.Semimonthly, Day: 0, Day2: 15}), ErrInvalidValue)
+	check("semimonthly day2 32", rule(model.Recurrence{Kind: model.Semimonthly, Day: 1, Day2: 32}), ErrInvalidValue)
+	check("custom", rule(model.Recurrence{Kind: model.Custom, Count: 3, Unit: model.UnitWeeks}), nil)
+	check("custom count 0", rule(model.Recurrence{Kind: model.Custom, Count: 0, Unit: model.UnitWeeks}), ErrInvalidValue)
+	check("custom no unit", rule(model.Recurrence{Kind: model.Custom, Count: 2}), ErrInvalidValue)
+	check("custom bad unit", rule(model.Recurrence{Kind: model.Custom, Count: 2, Unit: "fortnights"}), ErrInvalidValue)
+	check("unknown kind", rule(model.Recurrence{Kind: "bimonthly"}), ErrInvalidValue)
+	check("no start", func(it *model.BudgetItem) { it.Start = nil }, ErrInvalidValue)
+	check("no amount", func(it *model.BudgetItem) { it.Amount = model.Schedule{} }, ErrInvalidValue)
+	check("amount segment zero", func(it *model.BudgetItem) {
+		it.Amount = model.MustSchedule(model.Segment{From: model.MinDate, End: model.Ptr(model.D(2028, 1, 31)), Value: 5}, model.Segment{From: model.D(2028, 2, 1), Value: 0})
+	}, ErrInvalidValue)
+	check("amount segments", func(it *model.BudgetItem) {
+		it.Amount = model.MustSchedule(model.Segment{From: model.MinDate, End: model.Ptr(model.D(2028, 1, 31)), Value: 1400}, model.Segment{From: model.D(2028, 2, 1), Value: 600})
+	}, nil)
+	check("growth segment too low", func(it *model.BudgetItem) {
+		it.Growth = model.MustSchedule(model.Segment{From: model.MinDate, End: model.Ptr(model.D(2028, 1, 31)), Value: 0.03}, model.Segment{From: model.D(2028, 2, 1), Value: -1})
+	}, ErrInvalidValue)
+	check("growth segments", func(it *model.BudgetItem) {
+		it.Growth = model.MustSchedule(model.Segment{From: model.MinDate, End: model.Ptr(model.D(2028, 1, 31)), Value: 0.03}, model.Segment{From: model.D(2028, 2, 1), Value: -0.5})
+	}, nil)
+	check("end before start", func(it *model.BudgetItem) { it.End = model.Ptr(model.D(2026, 12, 31)) }, ErrInvalidValue)
+	check("end on start", func(it *model.BudgetItem) { it.End = model.Ptr(*it.Start) }, nil)
+}
+
+func TestEditItemKeepsAbsentStart(t *testing.T) {
+	st, rec := seed(t)
+	it := *rec.Projection(demodata.ProjWithdraw).Mods[0].Item
+	it.Start = nil
+	it.Amount = model.Constant(1)
+	if _, err := EditItem(st, rec, demodata.ProjWithdraw, "early-401k-withdrawal", it, Options{DryRun: true}); err != nil {
+		t.Errorf("legacy item without a start: %v", err)
+	}
+	// A base item with a start may not lose it.
+	salary, _ := rec.Budget.Item("salary-a")
+	if _, err := EditBudgetItem(st, rec, "salary-a", salary, Options{DryRun: true}); !errors.Is(err, ErrNoChange) {
+		t.Errorf("unchanged legacy item: %v", err)
+	}
+	// Switching a legacy item to a recurrence that needs a phase needs a date.
+	for _, c := range []struct {
+		name string
+		r    model.Recurrence
+		want error
+	}{
+		{"one-time", model.Recurrence{Kind: model.OneTime}, ErrInvalidValue},
+		{"quarterly", model.Recurrence{Kind: model.Quarterly}, ErrInvalidValue},
+		{"biweekly with anchor", model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2027, 1, 8)}, nil},
+	} {
+		sal := salary
+		sal.Recurrence = c.r
+		if _, err := EditBudgetItem(st, rec, "salary-a", sal, Options{DryRun: true}); !errors.Is(err, c.want) {
+			t.Errorf("legacy base item to %s: %v", c.name, err)
+		}
+		pit := it
+		pit.Recurrence = c.r
+		if _, err := EditItem(st, rec, demodata.ProjWithdraw, "early-401k-withdrawal", pit, Options{DryRun: true}); !errors.Is(err, c.want) {
+			t.Errorf("legacy projection item to %s: %v", c.name, err)
+		}
+	}
+	groceries, _ := rec.Budget.Item("groceries")
+	groceries.Start = model.Ptr(model.D(2027, 1, 1))
+	res, err := EditBudgetItem(st, rec, "groceries", groceries, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := res.Record
+	groceries.Start = nil
+	if _, err := EditBudgetItem(st, next, "groceries", groceries, Options{DryRun: true}); !errors.Is(err, ErrInvalidValue) {
+		t.Errorf("dropping the start: %v", err)
+	}
+}
+
+func TestLegacyItemEndBeforeAnchor(t *testing.T) {
+	st, rec := seed(t)
+	it := *rec.Projection(demodata.ProjWithdraw).Mods[0].Item
+	it.Start = nil
+	it.End = model.Ptr(model.D(2027, 1, 1))
+	if _, err := EditItem(st, rec, demodata.ProjWithdraw, "early-401k-withdrawal", it, Options{DryRun: true}); !errors.Is(err, ErrInvalidValue) {
+		t.Errorf("ending the withdrawal before its anchor: %v", err)
+	}
+	for _, r := range []model.Recurrence{
+		{Kind: model.OneTime, Anchor: model.D(2027, 6, 1)},
+		{Kind: model.Biweekly, Anchor: model.D(2027, 6, 1)},
+	} {
+		next := rec.Clone()
+		base := model.BudgetItem{ID: "legacy", Name: "Legacy", Kind: model.ItemIncome, Amount: model.Constant(100), Account: demodata.Checking, Recurrence: r}
+		next.Budget.Items = append(next.Budget.Items, base)
+		if _, err := EndBudgetItem(st, next, "legacy", model.D(2027, 1, 1), Options{DryRun: true}); !errors.Is(err, ErrInvalidValue) {
+			t.Errorf("ending a legacy %s item before its anchor: %v", r.Kind, err)
+		}
+		if _, err := EndBudgetItem(st, next, "legacy", model.D(2027, 6, 1), Options{DryRun: true}); err != nil {
+			t.Errorf("ending a legacy %s item on its anchor: %v", r.Kind, err)
+		}
+	}
 }

@@ -43,23 +43,17 @@ func (t *budgetTab) setField(id, field, text string) bool {
 		t.fields.setErr(fid, "the item no longer exists")
 		return false
 	}
-	f := formOf(old)
+	f := formOf(old, t.a.rec.Today)
 	f.set(field, text)
 	if field == "every" && (f.every == model.OneTime || f.every == model.Biweekly) && strings.TrimSpace(f.date) == "" {
 		f.date = t.a.rec.Today.String()
 	}
-	it, err := f.item()
+	it, err := f.item(t.a.rec.Today)
 	if err != nil {
 		t.fields.setErr(fid, err.Error())
 		return false
 	}
-	switch {
-	case old.Recurrence.Kind == model.Semimonthly && f.every == model.Semimonthly:
-		// The form does not read the days of a semimonthly item; an edit of another field keeps its schedule.
-		it.Recurrence, it.Start = old.Recurrence, old.Start
-	case old.Recurrence.Kind == model.Biweekly && f.every == model.Biweekly && field != "date":
-		it.Start = old.Start
-	}
+	keepUnedited(&it, old, f, field)
 	return t.a.edit("change budget item", func() (*ops.Result, error) {
 		return ops.EditBudgetItem(t.a.st, t.a.rec, id, it, ops.Options{})
 	})
@@ -107,7 +101,7 @@ func (t *budgetTab) addNewItem() bool {
 	if itemProblem(t.a.rec, t.addItem) != "" {
 		return false
 	}
-	it, _ := t.addItem.item()
+	it, _ := t.addItem.item(t.a.rec.Today)
 	if !t.a.edit("add budget item", func() (*ops.Result, error) {
 		return ops.AddBudgetItem(t.a.st, t.a.rec, it, ops.Options{})
 	}) {
@@ -177,7 +171,7 @@ func (t *budgetTab) editor(id string) {
 	}
 	em := imgui.FontSize()
 	prefix := itemPrefix(id)
-	t.fields.itemFields(prefix, formOf(it), false, func(field, text string) { t.setField(id, field, text) })
+	t.fields.itemFields(prefix, formOf(it, t.a.rec.Today), false, func(field, text string) { t.setField(id, field, text) })
 	indexed := it.Indexed
 	if imgui.Checkbox("rises with inflation##"+prefix, &indexed) {
 		t.setField(id, "indexed", boolText(indexed))

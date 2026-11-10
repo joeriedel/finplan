@@ -21,33 +21,84 @@ const (
 // RecurrenceKind is a calendar rule.
 type RecurrenceKind string
 
-// Recurrence kinds.
+// Recurrence kinds. Annual is shown as "Annually".
 const (
+	Weekly      RecurrenceKind = "weekly"
 	Biweekly    RecurrenceKind = "biweekly"
 	Semimonthly RecurrenceKind = "semimonthly"
 	Monthly     RecurrenceKind = "monthly"
+	Quarterly   RecurrenceKind = "quarterly"
 	Annual      RecurrenceKind = "annual"
 	OneTime     RecurrenceKind = "one-time"
+	Custom      RecurrenceKind = "custom"
 )
+
+// RecurrenceUnit is the unit of a custom recurrence's Count.
+type RecurrenceUnit string
+
+// Recurrence units.
+const (
+	UnitDays   RecurrenceUnit = "days"
+	UnitWeeks  RecurrenceUnit = "weeks"
+	UnitMonths RecurrenceUnit = "months"
+	UnitYears  RecurrenceUnit = "years"
+)
+
+// Valid reports whether the unit is one of the four.
+func (u RecurrenceUnit) Valid() bool {
+	return u == UnitDays || u == UnitWeeks || u == UnitMonths || u == UnitYears
+}
 
 // Recurrence says on which dates an item happens.
 //
-//	Biweekly:    every 14 days from Anchor
+//	OneTime:     Anchor only
+//	Weekly:      every 7 days from the phase
+//	Biweekly:    every 14 days from the phase
 //	Semimonthly: Day and Day2 of each month
 //	Monthly:     Day of each month
+//	Quarterly:   every 3 months from the phase
 //	Annual:      Day of Month each year
-//	OneTime:     Anchor only
+//	Custom:      every Count Units from the phase
 //
-// A day past the end of a month falls on the month's last day.
+// The phase of an interval kind is Anchor when set, else the item's Start (see BudgetItem.Dates). Month-based intervals keep the phase's day of month and a day past the end of a month falls on the month's last day, without drifting afterwards. Count and Unit are for Custom only.
 type Recurrence struct {
 	Kind   RecurrenceKind
 	Anchor Date
 	Month  time.Month
 	Day    int
 	Day2   int
+	Count  int
+	Unit   RecurrenceUnit
 }
 
-// Between returns the dates after..upTo in order, excluding after and including upTo.
+// interval returns the step of an interval kind: days, or months when inMonths. It returns 0 for a kind that has none or a custom recurrence that is not valid.
+func (r Recurrence) interval() (n int, inMonths bool) {
+	switch r.Kind {
+	case Weekly:
+		return 7, false
+	case Biweekly:
+		return 14, false
+	case Quarterly:
+		return 3, true
+	case Custom:
+		if r.Count < 1 {
+			return 0, false
+		}
+		switch r.Unit {
+		case UnitDays:
+			return r.Count, false
+		case UnitWeeks:
+			return 7 * r.Count, false
+		case UnitMonths:
+			return r.Count, true
+		case UnitYears:
+			return 12 * r.Count, true
+		}
+	}
+	return 0, false
+}
+
+// Between returns the dates after..upTo in order, excluding after and including upTo. An interval kind steps from Anchor.
 func (r Recurrence) Between(after, upTo Date) []Date {
 	if upTo <= after {
 		return nil
@@ -58,13 +109,37 @@ func (r Recurrence) Between(after, upTo Date) []Date {
 		if r.Anchor > after && r.Anchor <= upTo {
 			out = append(out, r.Anchor)
 		}
-	case Biweekly:
+	case Weekly, Biweekly, Quarterly, Custom:
+		n, inMonths := r.interval()
+		if n == 0 {
+			return nil
+		}
+		if !inMonths {
+			k := 0
+			if after >= r.Anchor {
+				k = int(after-r.Anchor)/n + 1
+			}
+			for d := r.Anchor.Add(n * k); d <= upTo; d = d.Add(n) {
+				out = append(out, d)
+			}
+			return out
+		}
+		ay, am, ad := r.Anchor.YMD()
 		k := 0
 		if after >= r.Anchor {
-			k = int(after-r.Anchor)/14 + 1
+			fy, fm, _ := after.YMD()
+			k = max(0, ((fy-ay)*12+int(fm-am))/n-1)
 		}
-		for d := r.Anchor.Add(14 * k); d <= upTo; d = d.Add(14) {
-			out = append(out, d)
+		for ; ; k++ {
+			total := ay*12 + int(am) - 1 + k*n
+			y, m := total/12, time.Month(total%12+1)
+			d := D(y, m, min(ad, daysInMonth(y, m)))
+			if d > upTo {
+				break
+			}
+			if d > after {
+				out = append(out, d)
+			}
 		}
 	case Monthly, Semimonthly, Annual:
 		y, m, _ := after.Add(1).YMD()
@@ -99,18 +174,28 @@ func (r Recurrence) Between(after, upTo Date) []Date {
 // an expense draws from it, and a transfer moves money from From to To. An account named in a
 // transfer need not exist in the record; it stands for the outside.
 type BudgetItem struct {
-	ID         string
-	Name       string
-	Kind       ItemKind
-	Amount     float64
+	ID   string
+	Name string
+	Kind ItemKind
+	// Amount is the positive magnitude over time; a single number is a one-segment schedule.
+	Amount     Schedule
 	Recurrence Recurrence
 	Start, End *Date
 	// Indexed items grow with inflation from the record's Today.
 	Indexed bool
-	// Growth is the annual raise as a fraction: the amount steps up by it once a year on the anniversary of the item's start (see engine raises). Zero means no raises.
-	Growth   float64
+	// Growth is the annual raise as a fraction over time: the amount steps up by the rate in effect once a year on the anniversary of the item's start (see engine raises). An empty schedule means no raises.
+	Growth   Schedule
 	Account  AccountID
 	From, To AccountID
+}
+
+// Dates returns the dates after..upTo on which the item recurs; interval kinds take their phase from the recurrence's anchor, or from the item's start when it has none.
+func (b BudgetItem) Dates(after, upTo Date) []Date {
+	r := b.Recurrence
+	if r.Anchor == 0 && b.Start != nil {
+		r.Anchor = *b.Start
+	}
+	return r.Between(after, upTo)
 }
 
 // Touches reports whether the item changes the account's balance.

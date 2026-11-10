@@ -377,7 +377,7 @@ func TestDeleteAccountCascadeIsOneUndoStep(t *testing.T) {
 		a.install(r)
 	}
 	step(ops.NewAccount(a.st, a.rec, acct, ops.Options{}))
-	item := model.BudgetItem{Name: "Pay", Kind: model.ItemIncome, Amount: 10, Account: "scratch", Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, Start: model.Ptr(model.D(2027, 1, 1))}
+	item := model.BudgetItem{Name: "Pay", Kind: model.ItemIncome, Amount: model.Constant(10), Account: "scratch", Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, Start: model.Ptr(model.D(2027, 1, 1))}
 	step(ops.AddBudgetItem(a.st, a.rec, item, ops.Options{}))
 	item.Name = "Gig"
 	step(ops.AddItem(a.st, a.rec, demodata.ProjBase, item, ops.Options{}))

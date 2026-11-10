@@ -16,8 +16,8 @@ import (
 // converts it. Format 2 added the modification mode and the budget item growth to format 1's shape; a
 // format 1 document has neither and reads as set and zero, and the bump makes an older build refuse a
 // document whose scale modifications it would otherwise silently ignore. Format 3 added the accounts a
-// projection defines; a format 1 or 2 document has none and reads as an empty list. Format 4 added the close date of an account; an older document has none and reads as an open account, and the bump makes an older build refuse a document whose closed accounts it would otherwise show as open.
-const formatCurrent = 4
+// projection defines; a format 1 or 2 document has none and reads as an empty list. Format 4 added the close date of an account; an older document has none and reads as an open account, and the bump makes an older build refuse a document whose closed accounts it would otherwise show as open. Format 5 stores a budget item's amount and growth as segment arrays and adds the count and unit of a custom recurrence; an older document has numbers there, which read as a one-segment schedule (a zero growth as none), and the bump makes an older build refuse a document whose schedules it would otherwise misread.
+const formatCurrent = 5
 
 // Document kinds.
 const (
@@ -30,7 +30,7 @@ const (
 	kindProjection = "projection"
 )
 
-// The DTOs below are the stored shape of formats 1 to 4. They are separate from the model types so that
+// The DTOs below are the stored shape of formats 1 to 5. They are separate from the model types so that
 // renaming a model field cannot change what is on disk.
 
 type recordDoc struct {
@@ -86,18 +86,32 @@ type recurrenceDoc struct {
 	Month  int                  `json:"month"`
 	Day    int                  `json:"day"`
 	Day2   int                  `json:"day2"`
+	Count  int                  `json:"count,omitempty"`
+	Unit   model.RecurrenceUnit `json:"unit,omitempty"`
+}
+
+// numOrSegs is a schedule that is stored as segments in format 5 and as a single number before; a number reads as one segment from MinDate.
+type numOrSegs []segDoc
+
+func (n *numOrSegs) UnmarshalJSON(b []byte) error {
+	var v float64
+	if err := json.Unmarshal(b, &v); err == nil {
+		*n = numOrSegs{{From: model.MinDate, Value: v}}
+		return nil
+	}
+	return json.Unmarshal(b, (*[]segDoc)(n))
 }
 
 type budgetItemDoc struct {
 	ID         string          `json:"id"`
 	Name       string          `json:"name"`
 	Kind       model.ItemKind  `json:"kind"`
-	Amount     float64         `json:"amount"`
+	Amount     numOrSegs       `json:"amount"`
 	Recurrence recurrenceDoc   `json:"recurrence"`
 	Start      *model.Date     `json:"start"`
 	End        *model.Date     `json:"end"`
 	Indexed    bool            `json:"indexed"`
-	Growth     float64         `json:"growth,omitempty"`
+	Growth     numOrSegs       `json:"growth,omitempty"`
 	Account    model.AccountID `json:"account"`
 	From       model.AccountID `json:"from"`
 	To         model.AccountID `json:"to"`
@@ -181,7 +195,7 @@ type docRow struct {
 // decodeDoc decodes a document body of the given format version into v, the current shape.
 func decodeDoc(row docRow, v any) error {
 	switch row.format {
-	case 1, 2, 3, 4:
+	case 1, 2, 3, 4, 5:
 		if err := json.Unmarshal(row.body, v); err != nil {
 			return fmt.Errorf("store: %s %q: %w", row.kind, row.key, err)
 		}
@@ -252,15 +266,27 @@ func docDefault(d []intervalDoc) model.DefaultBalance {
 
 func itemDoc(b model.BudgetItem) budgetItemDoc {
 	r := b.Recurrence
-	return budgetItemDoc{b.ID, b.Name, b.Kind, b.Amount, recurrenceDoc{r.Kind, r.Anchor, int(r.Month), r.Day, r.Day2},
-		b.Start, b.End, b.Indexed, b.Growth, b.Account, b.From, b.To}
+	return budgetItemDoc{b.ID, b.Name, b.Kind, scheduleDoc(b.Amount), recurrenceDoc{r.Kind, r.Anchor, int(r.Month), r.Day, r.Day2, r.Count, r.Unit},
+		b.Start, b.End, b.Indexed, scheduleDoc(b.Growth), b.Account, b.From, b.To}
 }
 
-func docItem(d budgetItemDoc) model.BudgetItem {
+func docItem(d budgetItemDoc) (model.BudgetItem, error) {
 	r := d.Recurrence
-	return model.BudgetItem{ID: d.ID, Name: d.Name, Kind: d.Kind, Amount: d.Amount,
-		Recurrence: model.Recurrence{Kind: r.Kind, Anchor: r.Anchor, Month: time.Month(r.Month), Day: r.Day, Day2: r.Day2},
-		Start:      d.Start, End: d.End, Indexed: d.Indexed, Growth: d.Growth, Account: d.Account, From: d.From, To: d.To}
+	amount, err := docSchedule(d.Amount)
+	if err != nil {
+		return model.BudgetItem{}, fmt.Errorf("budget item %q amount: %w", d.ID, err)
+	}
+	// A format 1 to 4 growth of zero meant no raises.
+	if len(d.Growth) == 1 && d.Growth[0].From == model.MinDate && d.Growth[0].End == nil && d.Growth[0].Value == 0 {
+		d.Growth = nil
+	}
+	growth, err := docSchedule(d.Growth)
+	if err != nil {
+		return model.BudgetItem{}, fmt.Errorf("budget item %q growth: %w", d.ID, err)
+	}
+	return model.BudgetItem{ID: d.ID, Name: d.Name, Kind: d.Kind, Amount: amount,
+		Recurrence: model.Recurrence{Kind: r.Kind, Anchor: r.Anchor, Month: time.Month(r.Month), Day: r.Day, Day2: r.Day2, Count: r.Count, Unit: r.Unit},
+		Start:      d.Start, End: d.End, Indexed: d.Indexed, Growth: growth, Account: d.Account, From: d.From, To: d.To}, nil
 }
 
 func memberToDoc(m model.Member) memberDoc {
@@ -320,7 +346,10 @@ func docProjection(d projectionDoc) (*model.Projection, error) {
 			return nil, fmt.Errorf("projection %q mod %d: %w", d.Name, i, err)
 		}
 		if m.Item != nil {
-			it := docItem(*m.Item)
+			it, err := docItem(*m.Item)
+			if err != nil {
+				return nil, fmt.Errorf("projection %q mod %d: %w", d.Name, i, err)
+			}
 			mod.Item = &it
 		}
 		p.Mods[i] = mod

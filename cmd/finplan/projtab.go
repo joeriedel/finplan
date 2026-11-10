@@ -671,7 +671,7 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 	imgui.TableSetColumnIndex(2)
 	switch {
 	case adds:
-		t.itemFields("item"+strconv.Itoa(i), formOf(*m.Item), false, func(field, text string) { t.setItemField(p.Name, i, field, text) })
+		t.itemFields("item"+strconv.Itoa(i), formOf(*m.Item, rec.Today), false, func(field, text string) { t.setItemField(p.Name, i, field, text) })
 	case editable:
 		kind, obj, prop := m.Target.Kind, m.Target.ID, rowProperty(m)
 		if k, changed := kindCombo("kind", kind, imgui.FontSize()*7); changed {
@@ -830,9 +830,9 @@ func baseValue(rec *model.Record, proj string, i int, d model.Date) float64 {
 		items, _ := ops.ItemsBefore(rec, proj, i)
 		for _, a := range items {
 			if a.Item.ID == m.Target.ID {
-				v = a.Item.Growth
+				v = valueNow(a.Item.Growth, d)
 				if m.Property == model.PropAmount {
-					v = a.Item.Amount
+					v = valueNow(a.Item.Amount, d)
 				}
 			}
 		}

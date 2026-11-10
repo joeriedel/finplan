@@ -5,6 +5,7 @@ package main
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
@@ -40,7 +41,7 @@ func budgetGroups(rec *model.Record) []budgetGroup {
 
 // budgetRowOf describes the item for the Budget tab.
 func budgetRowOf(rec *model.Record, it model.BudgetItem) budgetRow {
-	row := budgetRow{ID: it.ID, Name: it.Name, Schedule: scheduleText(it.Recurrence), Amount: "$" + trimFloat(it.Amount), Start: "-", End: "-"}
+	row := budgetRow{ID: it.ID, Name: it.Name, Schedule: scheduleText(it.Recurrence), Amount: "$" + trimFloat(valueNow(it.Amount, rec.Today)), Start: "-", End: "-"}
 	if it.Kind == model.ItemTransfer {
 		row.Accounts = budgetAccountName(rec, it.From) + " to " + budgetAccountName(rec, it.To)
 	} else {
@@ -55,10 +56,10 @@ func budgetRowOf(rec *model.Record, it model.BudgetItem) budgetRow {
 	if it.Indexed {
 		row.Indexed = "indexed"
 	}
-	if it.Growth != 0 {
-		row.Growth = formatValue(model.PropGrowth, model.ModeSet, it.Growth) + " raise"
+	if g := valueNow(it.Growth, rec.Today); g != 0 {
+		row.Growth = formatValue(model.PropGrowth, model.ModeSet, g) + " raise"
 	}
-	if m := it.MonthlyEquivalent(); m != 0 {
+	if m := it.MonthlyEquivalent(rec.Today); m != 0 {
 		row.Monthly = graph.FormatMoney(m) + " a month"
 	}
 	return row
@@ -83,7 +84,18 @@ func scheduleText(r model.Recurrence) string {
 	case model.Biweekly:
 		return "every 2 weeks from " + r.Anchor.String()
 	case model.Annual:
-		return "yearly on " + r.Month.String() + " " + day(r.Day)
+		return "annually on " + r.Month.String() + " " + day(r.Day)
+	case model.Weekly:
+		return "every week"
+	case model.Quarterly:
+		return "quarterly"
+	case model.Custom:
+		unit := string(r.Unit)
+		if r.Count == 1 {
+			unit = strings.TrimSuffix(unit, "s")
+			return "every " + unit
+		}
+		return "every " + strconv.Itoa(r.Count) + " " + unit
 	case model.OneTime:
 		return "once on " + r.Anchor.String()
 	}

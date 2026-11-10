@@ -70,7 +70,7 @@ func TestScenarioEarlyWithdrawalInTheGUI(t *testing.T) {
 
 	mods := a.rec.Projection(name).Mods
 	it := mods[len(mods)-1].Item
-	if it == nil || it.Kind != model.ItemTransfer || it.Amount != 20000 || it.From != demodata.K401 || it.To != demodata.Checking || it.Recurrence.Kind != model.OneTime || it.Recurrence.Anchor != model.D(2027, 6, 1) {
+	if it == nil || it.Kind != model.ItemTransfer || valueNow(it.Amount, 0) != 20000 || it.From != demodata.K401 || it.To != demodata.Checking || it.Recurrence.Kind != model.OneTime || it.Recurrence.Anchor != model.D(2027, 6, 1) {
 		t.Fatalf("added %+v", it)
 	}
 	if got := balanceOn(t, a, demodata.K401, name, endOfYear); got >= base-19000 {
@@ -145,7 +145,7 @@ func TestScenarioChangeParentsWithdrawalInTheGUI(t *testing.T) {
 		t.Errorf("401k after the amount changed to 30000: %v, was %v", got, smaller)
 	}
 	// The parent keeps its own withdrawal.
-	if it := a.rec.Projection(demodata.ProjWithdraw).Mods[0].Item; it.Amount != 100000 {
+	if it := a.rec.Projection(demodata.ProjWithdraw).Mods[0].Item; valueNow(it.Amount, 0) != 100000 {
 		t.Errorf("parent's item %+v", it)
 	}
 }
@@ -229,7 +229,7 @@ func TestScenarioEditInPlaceInTheGUI(t *testing.T) {
 	pt.setItemField(w, 0, "to", string(demodata.Savings))
 	pt.setItemField(w, 0, "from", string(demodata.Brokerage))
 	it := item()
-	if it.ID != "early-401k-withdrawal" || it.Name != "Big draw" || it.Amount != 50000 || it.Recurrence.Anchor != model.D(2027, 9, 1) || it.To != demodata.Savings || it.From != demodata.Brokerage {
+	if it.ID != "early-401k-withdrawal" || it.Name != "Big draw" || valueNow(it.Amount, 0) != 50000 || it.Recurrence.Anchor != model.D(2027, 9, 1) || it.To != demodata.Savings || it.From != demodata.Brokerage {
 		t.Errorf("edited item %+v", it)
 	}
 	pt.setItemField(w, 0, "every", "monthly")
@@ -257,7 +257,7 @@ func TestEditKeepsBiweeklyStart(t *testing.T) {
 	a := demoApp(t)
 	job := newChild(t, a, demodata.ProjWithdraw)
 	start := model.D(2027, 1, 1)
-	it := model.BudgetItem{ID: "side-pay", Name: "Side pay", Kind: model.ItemIncome, Amount: 1000, Account: demodata.Checking, Recurrence: model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2025, 1, 3)}, Start: &start}
+	it := model.BudgetItem{ID: "side-pay", Name: "Side pay", Kind: model.ItemIncome, Amount: model.Constant(1000), Account: demodata.Checking, Recurrence: model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2025, 1, 3)}, Start: &start}
 	if !a.edit("add budget item", func() (*ops.Result, error) {
 		return ops.AddItem(a.st, a.rec, job, it, ops.Options{})
 	}) {
@@ -275,7 +275,7 @@ func TestEditDateMovesBiweeklyStart(t *testing.T) {
 	a := demoApp(t)
 	job := newChild(t, a, demodata.ProjWithdraw)
 	start := model.D(2027, 1, 1)
-	it := model.BudgetItem{ID: "side-pay", Name: "Side pay", Kind: model.ItemIncome, Amount: 1000, Account: demodata.Checking, Recurrence: model.Recurrence{Kind: model.Biweekly, Anchor: start}, Start: &start}
+	it := model.BudgetItem{ID: "side-pay", Name: "Side pay", Kind: model.ItemIncome, Amount: model.Constant(1000), Account: demodata.Checking, Recurrence: model.Recurrence{Kind: model.Biweekly, Anchor: start}, Start: &start}
 	if !a.edit("add budget item", func() (*ops.Result, error) {
 		return ops.AddItem(a.st, a.rec, job, it, ops.Options{})
 	}) {
@@ -284,7 +284,7 @@ func TestEditDateMovesBiweeklyStart(t *testing.T) {
 	i := len(a.rec.Projection(job).Mods) - 1
 	a.proj.setItemField(job, i, "date", "2026-06-05")
 	got := *a.rec.Projection(job).Mods[i].Item
-	if got.Recurrence.Anchor != model.D(2026, 6, 5) || got.Start != nil {
+	if got.Recurrence.Anchor != model.D(2026, 6, 5) || got.Start == nil || *got.Start != model.D(2026, 6, 5) {
 		t.Errorf("edited item %+v start %v", got, got.Start)
 	}
 }
@@ -415,23 +415,23 @@ func TestScenarioScaleAndRaisesInTheGUI(t *testing.T) {
 	}
 	mods := a.rec.Projection(name).Mods
 	item := *mods[len(mods)-1].Item
-	if item.Growth != 0.03 {
-		t.Errorf("growth %v", item.Growth)
+	if g := valueNow(item.Growth, 0); g != 0.03 {
+		t.Errorf("growth %v", g)
 	}
-	if f := formOf(item); f.growth != "3%" {
+	if f := formOf(item, a.rec.Today); f.growth != "3%" {
 		t.Errorf("the form shows %q", f.growth)
 	}
 	pt.setItemField(name, len(mods)-1, "growth", "4")
-	if got := a.rec.Projection(name).Mods[len(mods)-1].Item.Growth; got != 0.04 {
+	if got := a.rec.Projection(name).Mods[len(mods)-1].Item.Growth; valueNow(got, 0) != 0.04 {
 		t.Errorf("edited growth %v", got)
 	}
 	pt.setItemField(name, len(mods)-1, "growth", "")
-	if got := a.rec.Projection(name).Mods[len(mods)-1].Item.Growth; got != 0 {
+	if got := a.rec.Projection(name).Mods[len(mods)-1].Item.Growth; len(got.Segments()) != 0 {
 		t.Errorf("cleared growth %v", got)
 	}
 	f := newItemForm()
 	fillItem(&f, "growth", "lots")
-	if _, err := f.item(); err == nil {
+	if _, err := f.item(a.rec.Today); err == nil {
 		t.Error("a growth that is not a number was accepted")
 	}
 

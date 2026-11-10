@@ -466,6 +466,47 @@ func TestRecurrence(t *testing.T) {
 	}
 }
 
+func TestRecurrenceIntervals(t *testing.T) {
+	dates := func(r Recurrence, after, upTo Date) []Date { return r.Between(after, upTo) }
+	// Quarterly from 15 January pays January, April, July and October.
+	got := dates(Recurrence{Kind: Quarterly, Anchor: D(2027, 1, 15)}, D(2027, 1, 14), D(2027, 12, 31))
+	if want := []Date{D(2027, 1, 15), D(2027, 4, 15), D(2027, 7, 15), D(2027, 10, 15)}; !slices.Equal(got, want) {
+		t.Errorf("quarterly: got %v, want %v", got, want)
+	}
+	// Every 3 weeks steps 21 days.
+	got = dates(Recurrence{Kind: Custom, Count: 3, Unit: UnitWeeks, Anchor: D(2027, 1, 4)}, D(2027, 1, 3), D(2027, 3, 31))
+	if want := []Date{D(2027, 1, 4), D(2027, 1, 25), D(2027, 2, 15), D(2027, 3, 8), D(2027, 3, 29)}; !slices.Equal(got, want) {
+		t.Errorf("every 3 weeks: got %v, want %v", got, want)
+	}
+	// Weekly after a later window starts in phase.
+	got = dates(Recurrence{Kind: Weekly, Anchor: D(2027, 1, 4)}, D(2027, 1, 31), D(2027, 2, 15))
+	if want := []Date{D(2027, 2, 1), D(2027, 2, 8), D(2027, 2, 15)}; !slices.Equal(got, want) {
+		t.Errorf("weekly: got %v, want %v", got, want)
+	}
+	// A month-based interval from the 31st clamps without drifting.
+	got = dates(Recurrence{Kind: Custom, Count: 1, Unit: UnitMonths, Anchor: D(2027, 1, 31)}, D(2027, 1, 30), D(2027, 4, 30))
+	if want := []Date{D(2027, 1, 31), D(2027, 2, 28), D(2027, 3, 31), D(2027, 4, 30)}; !slices.Equal(got, want) {
+		t.Errorf("every month from the 31st: got %v, want %v", got, want)
+	}
+	got = dates(Recurrence{Kind: Custom, Count: 2, Unit: UnitYears, Anchor: D(2028, 2, 29)}, D(2028, 2, 28), D(2033, 1, 1))
+	if want := []Date{D(2028, 2, 29), D(2030, 2, 28), D(2032, 2, 29)}; !slices.Equal(got, want) {
+		t.Errorf("every 2 years from a leap day: got %v, want %v", got, want)
+	}
+	// A window that starts long after the phase stays in step.
+	got = dates(Recurrence{Kind: Quarterly, Anchor: D(2020, 1, 31)}, D(2027, 1, 1), D(2027, 7, 31))
+	if want := []Date{D(2027, 1, 31), D(2027, 4, 30), D(2027, 7, 31)}; !slices.Equal(got, want) {
+		t.Errorf("quarterly from far back: got %v, want %v", got, want)
+	}
+	if got := dates(Recurrence{Kind: Custom, Count: 0, Unit: UnitDays, Anchor: D(2027, 1, 1)}, 0, D(2027, 12, 31)); got != nil {
+		t.Errorf("invalid custom: got %v", got)
+	}
+	// An item's interval phase is its start when it has no anchor.
+	it := BudgetItem{Start: Ptr(D(2027, 1, 15)), Recurrence: Recurrence{Kind: Quarterly}}
+	if got := it.Dates(D(2027, 1, 14), D(2027, 5, 1)); !slices.Equal(got, []Date{D(2027, 1, 15), D(2027, 4, 15)}) {
+		t.Errorf("start as phase: got %v", got)
+	}
+}
+
 func TestProjectionChain(t *testing.T) {
 	r := NewRecord(day(time.January, 1))
 	for _, p := range []*Projection{{Name: "base"}, {Name: "mid", Parent: "base"}, {Name: "leaf", Parent: "mid"}, {Name: "x", Parent: "y"}, {Name: "y", Parent: "x"}} {
