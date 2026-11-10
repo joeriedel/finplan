@@ -27,6 +27,7 @@ type app struct {
 	// history holds the undoable edits (see edit); a reload from another program's changes clears it.
 	history undo.History[editStep]
 	proj    *projTab
+	accts   *acctTab
 	// unchanged is whether the latest edit call ended as a no-change; field commits use it to drop their typed text.
 	unchanged bool
 	// generation counts the undos, redos and reloads done, so an editor opened before one closes and drops its drag.
@@ -51,6 +52,7 @@ func newApp(st *store.Store) (*app, error) {
 	a.notifyOnce(problems)
 	a.graph = newGraphTab(rec, presets, st, a.notify)
 	a.proj = &projTab{a: a}
+	a.accts = &acctTab{a: a}
 	return a, nil
 }
 
@@ -120,7 +122,7 @@ func (a *app) drawNotices() {
 	}
 }
 
-// tabs lists the tab bar in order; only Graph and Projections are built.
+// tabs lists the tab bar in order; only Graph, Projections and Accounts are built.
 var tabs = []string{"Graph", "Projections", "Assets", "Accounts", "Budget", "Markets"}
 
 func (a *app) draw() {
@@ -162,6 +164,8 @@ func (a *app) draw() {
 						a.graph.draw()
 					case 1:
 						a.proj.draw()
+					case 3:
+						a.accts.draw()
 					default:
 						imgui.TextDisabled("The " + name + " tab is not built yet.")
 					}

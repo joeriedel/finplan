@@ -46,6 +46,7 @@ type waccount struct {
 	ID, Name, Type, Tax, Owner string
 	StatedRate                 float64 `json:"stated_rate"`
 	Default                    []winterval
+	Closed                     *string
 }
 
 type wentry struct {
@@ -176,8 +177,8 @@ func TestCLIAssetCommands(t *testing.T) {
 
 	data(t, path, "", "asset", "add-member", "spending-money", "--account", "Checking")
 	data(t, path, "", "asset", "add-member", "spending-money", "--asset", "all-cash")
-	w = data(t, path, "", "asset", "add-member", "spending-money", "--types", "brokerage,IRA", "--tax", "taxable")
-	if len(w.Asset.Members) != 3 || w.Asset.Members[2].Rule == nil || !slices.Equal(w.Asset.Members[2].Rule.Types, []string{"brokerage", "IRA"}) || !slices.Equal(w.Asset.Members[2].Rule.Tax, []string{"taxable"}) {
+	w = data(t, path, "", "asset", "add-member", "spending-money", "--types", "savings,IRA", "--tax", "taxable")
+	if len(w.Asset.Members) != 3 || w.Asset.Members[2].Rule == nil || !slices.Equal(w.Asset.Members[2].Rule.Types, []string{"savings", "IRA"}) || !slices.Equal(w.Asset.Members[2].Rule.Tax, []string{"taxable"}) {
 		t.Errorf("add-member rule: %+v", w.Asset.Members)
 	}
 	w = data(t, path, "", "asset", "add-member", "spending-money", "--rule")

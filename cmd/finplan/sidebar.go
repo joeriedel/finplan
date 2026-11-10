@@ -385,16 +385,17 @@ type lineCandidate struct {
 	name, kind string
 }
 
-// lineCandidates lists the assets and accounts of rec, which is the record as a projection sees it, whose names contain search (any case), in record order.
+// lineCandidates lists the assets and accounts of rec, which is the record as a projection sees it, whose names contain search (any case), in record order. Closed accounts are left out; lines already on the Graph stay.
 func lineCandidates(rec *model.Record, search string) []lineCandidate {
 	needle := strings.ToLower(search)
-	accounts := map[model.AssetID]bool{}
+	accounts, closed := map[model.AssetID]bool{}, map[model.AssetID]bool{}
 	for _, a := range rec.Accounts {
 		accounts[model.DefaultAssetID(a.ID)] = true
+		closed[model.DefaultAssetID(a.ID)] = a.IsClosed()
 	}
 	var out []lineCandidate
 	for _, a := range rec.Assets {
-		if needle != "" && !strings.Contains(strings.ToLower(a.Name), needle) {
+		if closed[a.ID] || needle != "" && !strings.Contains(strings.ToLower(a.Name), needle) {
 			continue
 		}
 		kind := "asset"

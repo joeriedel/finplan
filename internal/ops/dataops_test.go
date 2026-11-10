@@ -148,14 +148,16 @@ func TestRenameAsset(t *testing.T) {
 
 func TestDeleteAsset(t *testing.T) {
 	st, res := dataDryRun(t, func(st *store.Store, rec *model.Record, o Options) (*Result, error) {
-		return DeleteAsset(st, rec, demodata.Liquid, o)
+		return DeleteAsset(st, rec, demodata.Retirement, o)
 	})
 	rec := reload(t, st)
-	if rec.Asset(demodata.Liquid) != nil || res.Removed != string(demodata.Liquid) || res.Asset == nil || len(res.Asset.Members) != 3 {
-		t.Errorf("after the delete: %v, result %+v", rec.Asset(demodata.Liquid), res)
+	if rec.Asset(demodata.Retirement) != nil || res.Removed != string(demodata.Retirement) || res.Asset == nil || len(res.Asset.Members) != 3 {
+		t.Errorf("after the delete: %v, result %+v", rec.Asset(demodata.Retirement), res)
 	}
-	if rec.Asset(demodata.AllCash) == nil || rec.Account(demodata.Checking) == nil {
-		t.Error("the delete removed what the asset wrapped")
+	for _, id := range []model.AccountID{demodata.K401, demodata.TSP, demodata.Roth} {
+		if rec.Account(id) == nil {
+			t.Errorf("the delete removed account %s the asset wrapped", id)
+		}
 	}
 	consecutive(t, rec)
 	// The assets after the deleted one are still found.

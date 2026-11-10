@@ -52,9 +52,12 @@ func Handoff(samples []engine.Sample) (engine.Sample, bool) {
 	return engine.Sample{}, false
 }
 
+// Stale reports whether the last manual entry lies more than StaleDays before today.
+func Stale(lastActual, today model.Date) bool { return int(today-lastActual) > StaleDays }
+
 // StaleLabel returns "name · last manual entry Jan 2 2006" if the last actual date is more than StaleDays before today.
 func StaleLabel(name string, lastActual, today model.Date) (string, bool) {
-	if int(today-lastActual) <= StaleDays {
+	if !Stale(lastActual, today) {
 		return "", false
 	}
 	return name + " · last manual entry " + FormatDate(lastActual), true

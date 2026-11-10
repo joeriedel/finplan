@@ -455,6 +455,9 @@ func (p *path) readBack(d model.Date) float64 {
 }
 
 func (p *path) data(d model.Date) model.AccountData {
+	if p.acct.ClosedOn(d) {
+		return model.AccountData{Kind: model.DataActual}
+	}
 	if d > p.start {
 		return model.AccountData{Amount: p.valueAt(d), Kind: model.DataProjected}
 	}
@@ -503,6 +506,12 @@ func (p *path) build(rec *model.Record, items []model.BudgetItem, cutoffs map[st
 		}
 		if it.End != nil {
 			upTo = min(upTo, *it.End)
+		}
+		// An item stops on both sides after the close date of any closed account it touches, so a transfer neither drains an account into a closed one nor creates money out of it.
+		for _, id := range []model.AccountID{it.Account, it.From, it.To} {
+			if a := rec.Account(id); a != nil && a.Closed != nil {
+				upTo = min(upTo, *a.Closed)
+			}
 		}
 		raises, hasRaises := growths[it.ID]
 		if !hasRaises {

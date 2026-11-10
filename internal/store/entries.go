@@ -96,6 +96,17 @@ func (s *Store) Entries(account model.AccountID) ([]Entry, error) {
 	return queryEntries(s.db, false, `e.account = ?`, string(account))
 }
 
+// HasEntries reports whether the account has any entry stored, a voided one included.
+func (s *Store) HasEntries(account model.AccountID) (bool, error) {
+	es, err := queryEntries(s.db, true, `e.account = ?`, string(account))
+	return len(es) > 0, err
+}
+
+// EntriesNaming returns the entries, voided ones included, whose counter account is the given one, in the order they were stored.
+func (s *Store) EntriesNaming(counter model.AccountID) ([]Entry, error) {
+	return queryEntries(s.db, true, `COALESCE(c.counter, e.counter) = ?`, string(counter))
+}
+
 // withTx runs f in a transaction, which is committed if f succeeds and commit is set, and rolled back otherwise.
 func (s *Store) withTx(commit bool, f func(tx *sql.Tx) error) error {
 	tx, err := s.db.Begin()

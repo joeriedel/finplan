@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,7 +114,7 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	want := demodata.Family()
 	mustSave(t, s, want)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 3 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 4 {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
 	// Format 1 documents have no mode and no growth.
@@ -977,5 +978,31 @@ func TestDefaultBalanceModRoundTrip(t *testing.T) {
 	mustSave(t, s, want)
 	if got := mustLoad(t, s); !reflect.DeepEqual(got, want) {
 		t.Fatal("default balance modifications did not round-trip")
+	}
+}
+
+func TestClosedAccountRoundTrips(t *testing.T) {
+	s, _ := openTemp(t)
+	rec := demodata.Family()
+	closed := model.D(2026, time.March, 1)
+	rec.Accounts[0].Closed = &closed
+	mustSave(t, s, rec)
+	got := mustLoad(t, s)
+	if c := got.Accounts[0].Closed; c == nil || *c != closed {
+		t.Fatalf("Closed = %v, want %v", c, closed)
+	}
+	if !reflect.DeepEqual(got.Accounts, rec.Accounts) {
+		t.Error("loaded accounts differ")
+	}
+	// Documents of format 3 have no close date and read as open accounts.
+	if _, err := s.db.Exec(`UPDATE documents SET format = 3 WHERE kind = 'account' AND ordinal = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if c := mustLoad(t, s).Accounts[1].Closed; c != nil {
+		t.Errorf("a format 3 account reads as closed on %v", c)
+	}
+	var body string
+	if err := s.db.QueryRow(`SELECT body FROM documents WHERE kind = 'account' AND ordinal = 1`).Scan(&body); err != nil || strings.Contains(body, "closed") {
+		t.Errorf("open account stores a close date: %s, %v", body, err)
 	}
 }

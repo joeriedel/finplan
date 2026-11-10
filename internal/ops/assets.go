@@ -99,7 +99,7 @@ func RenameAsset(st *store.Store, rec *model.Record, id model.AssetID, name stri
 	})
 }
 
-// DeleteAsset deletes an asset with its members. It is ErrInUse while another asset has it as a member or a projection names it in an asset setting or a modification, and ErrInvalidValue for an account's default asset. The result's Asset is the asset as it was.
+// DeleteAsset deletes an asset with its members. It is ErrInUse while another asset has it as a member or a projection names it in an asset setting or a modification, or a modification names an account it contains, and ErrInvalidValue for an account's default asset. The result's Asset is the asset as it was.
 func DeleteAsset(st *store.Store, rec *model.Record, id model.AssetID, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		a, err := editableAsset(next, id)
@@ -111,6 +111,10 @@ func DeleteAsset(st *store.Store, rec *model.Record, id model.AssetID, o Options
 				return Result{}, refuse(ErrInUse, "asset %q is a member of asset %q", id, other.ID)
 			}
 		}
+		var under []model.AccountID
+		if res, err := next.Resolve(id); err == nil {
+			under = res.Accounts
+		}
 		for _, p := range next.Projections {
 			used := slices.ContainsFunc(p.AssetSettings, func(s model.AssetSetting) bool { return s.Asset == id }) ||
 				slices.ContainsFunc(p.Mods, func(m model.Modification) bool {
@@ -118,6 +122,11 @@ func DeleteAsset(st *store.Store, rec *model.Record, id model.AssetID, o Options
 				})
 			if used {
 				return Result{}, refuse(ErrInUse, "projection %q has a setting or modification for asset %q", p.Name, id)
+			}
+			for _, m := range p.Mods {
+				if m.Target.Kind == model.KindAccount && slices.Contains(under, model.AccountID(m.Target.ID)) {
+					return Result{}, refuse(ErrInUse, "projection %q has a modification for account %q, which asset %q contains", p.Name, m.Target.ID, id)
+				}
 			}
 		}
 		if err := next.RemoveAsset(id); err != nil {

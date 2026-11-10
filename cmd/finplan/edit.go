@@ -6,6 +6,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 
 	"github.com/joeriedel/finplan/internal/graph"
@@ -15,15 +16,17 @@ import (
 
 // editStep is what the history keeps of one edit: the projections before and after it, its rename if it had one, and
 // the Graph switcher before and after, which the edit moves when it deletes the projection the switcher names.
-// The lists are never changed once kept: edits change copies, and undo and redo install copies.
+// An edit of the accounts or assets also keeps the records before and after it (docsBefore, docsAfter; nil otherwise), whose accounts and assets undo and redo restore with ops.RestoreDocuments.
+// The lists and records are never changed once kept: edits change copies, and undo and redo install copies.
 type editStep struct {
-	before, after []*model.Projection
-	rename        *ops.Rename
-	switchBefore  string
-	switchAfter   string
+	before, after         []*model.Projection
+	rename                *ops.Rename
+	switchBefore          string
+	switchAfter           string
+	docsBefore, docsAfter *model.Record
 }
 
-// edit is the one way an editor tab changes the record. do makes the edit through internal/ops against the live record, which validates and saves it; only if that works does the new record replace the live one, the Graph tab see it and the history get a step named label. If do fails the live record stays as it was and the user is told why; an edit that changed nothing says nothing and sets a.unchanged. Record entries (past history) are not edited this way. It reports whether the edit was made.
+// edit is the one way an editor tab changes the record. do makes the edit through internal/ops against the live record, which validates and saves it; only if that works does the new record replace the live one, the Graph tab see it and the history get a step named label. If do fails the live record stays as it was and the user is told why; an edit that changed nothing says nothing and sets a.unchanged. Record entries (past history) are not edited this way: they are append-only, and an added one is made with addEntry, which leaves no undo step. It reports whether the edit was made.
 func (a *app) edit(label string, do func() (*ops.Result, error)) bool {
 	a.unchanged = false
 	res, err := do()
@@ -35,9 +38,24 @@ func (a *app) edit(label string, do func() (*ops.Result, error)) bool {
 		}
 		return false
 	}
-	before, switchBefore := a.rec.Projections, a.graph.lines.Switcher()
+	old, switchBefore := a.rec, a.graph.lines.Switcher()
 	a.install(res)
-	a.history.Push(label, editStep{before, res.Record.Projections, res.Rename, switchBefore, a.graph.lines.Switcher()})
+	step := editStep{before: old.Projections, after: res.Record.Projections, rename: res.Rename, switchBefore: switchBefore, switchAfter: a.graph.lines.Switcher()}
+	if !reflect.DeepEqual(old.Accounts, res.Record.Accounts) || !reflect.DeepEqual(old.Assets, res.Record.Assets) {
+		step.docsBefore, step.docsAfter = old, res.Record
+	}
+	a.history.Push(label, step)
+	return true
+}
+
+// addEntry makes an edit that adds a record entry through internal/ops and installs the result. Entries are append-only, so it pushes no undo step; an entry is corrected or voided, never undone. It reports whether the edit was made.
+func (a *app) addEntry(label string, do func() (*ops.Result, error)) bool {
+	res, err := do()
+	if err != nil {
+		a.notifyFailed(label, err)
+		return false
+	}
+	a.install(res)
 	return true
 }
 
@@ -63,9 +81,15 @@ func (a *app) install(res *ops.Result) {
 	a.graph.setRecord(res.Record)
 }
 
-// restore saves the projections ps (with the rename the step they undo or redo made) through the same ops as an edit and installs the result. It reports whether that worked.
-func (a *app) restore(label string, ps []*model.Projection, rename *ops.Rename) bool {
-	res, err := ops.RestoreProjections(a.st, a.rec, ps, rename, ops.Options{})
+// restore saves the projections ps (with the rename the step they undo or redo made) through the same ops as an edit and installs the result; a step of docs restores the accounts and assets of docs instead, which keep the record entries added since. It reports whether that worked.
+func (a *app) restore(label string, ps []*model.Projection, rename *ops.Rename, docs *model.Record) bool {
+	var res *ops.Result
+	var err error
+	if docs != nil {
+		res, err = ops.RestoreDocuments(a.st, a.rec, docs, ops.Options{})
+	} else {
+		res, err = ops.RestoreProjections(a.st, a.rec, ps, rename, ops.Options{})
+	}
 	if err != nil {
 		a.notifyFailed(label, err)
 		return false
@@ -78,7 +102,7 @@ func (a *app) restore(label string, ps []*model.Projection, rename *ops.Rename) 
 // undo reverts the latest step through the same save as an edit; if that fails the history stays where it is.
 func (a *app) undo() {
 	s, ok := a.history.PeekUndo()
-	if ok && a.restore("undo "+s.Label, s.Data.before, s.Data.rename.Reverse()) {
+	if ok && a.restore("undo "+s.Label, s.Data.before, s.Data.rename.Reverse(), s.Data.docsBefore) {
 		if s.Data.rename == nil && s.Data.switchBefore != s.Data.switchAfter {
 			a.graph.lines.SetSwitcher(s.Data.switchBefore)
 		}
@@ -89,7 +113,7 @@ func (a *app) undo() {
 // redo repeats the latest undone step; if the save fails the history stays where it is.
 func (a *app) redo() {
 	s, ok := a.history.PeekRedo()
-	if ok && a.restore("redo "+s.Label, s.Data.after, s.Data.rename) {
+	if ok && a.restore("redo "+s.Label, s.Data.after, s.Data.rename, s.Data.docsAfter) {
 		if s.Data.rename == nil && s.Data.switchBefore != s.Data.switchAfter {
 			a.graph.lines.SetSwitcher(s.Data.switchAfter)
 		}

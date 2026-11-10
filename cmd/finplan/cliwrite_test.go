@@ -531,6 +531,7 @@ func TestCLIWriteHelp(t *testing.T) {
 		"mod add", "mod edit", "mod move", "mod remove", "item add", "item edit", "item end",
 		"asset new", "asset rename", "asset delete", "asset add-member", "asset remove-member",
 		"asset add-default", "asset remove-default", "asset set-param", "account new", "account edit",
+		"account close", "account reopen", "account delete",
 		"entry add-snapshot", "entry add-transaction", "entry correct", "entry void",
 		"budget add", "budget edit", "budget end", "budget delete",
 		"asset-setting add", "asset-setting edit", "asset-setting move", "asset-setting remove",

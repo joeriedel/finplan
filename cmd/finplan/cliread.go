@@ -35,7 +35,7 @@ var commands = []*command{
 	},
 	{
 		Name: "account list", Summary: "list the accounts",
-		Output: "[{id, name, type, tax, owner, stated_rate (a fraction per year), default: [{from, to, value}]}]; default is the default balance intervals in the order added, the last added winning where they overlap",
+		Output: "[{id, name, type, tax, owner, stated_rate (a fraction per year), default: [{from, to, value}], closed, balance, last_data, stale}]; default is the default balance intervals in the order added, the last added winning where they overlap; closed is the date the account was closed, null while it is open, and it reads 0 after that date; balance is the balance on the record's today (0 once today is after the account's close date); last_data is the date of the latest record entry, null without a snapshot; stale is true for an open account whose last_data is more than 45 days before the record's today, as the Graph labels it",
 		run:    cmdAccountList,
 	},
 	{
@@ -242,11 +242,20 @@ type jaccount struct {
 	Owner      string      `json:"owner"`
 	StatedRate float64     `json:"stated_rate"`
 	Default    []jinterval `json:"default"`
+	Closed     *jdate      `json:"closed"`
+}
+
+// jaccountRow is an account with what account list adds to it.
+type jaccountRow struct {
+	jaccount
+	Balance  float64 `json:"balance"`
+	LastData *jdate  `json:"last_data"`
+	Stale    bool    `json:"stale"`
 }
 
 // accountJSON is the JSON shape of an account, as account list prints it and the write commands print the account they changed.
 func accountJSON(a *model.Account) jaccount {
-	return jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.Owner, a.StatedRate, defaultJSON(a.Default)}
+	return jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.Owner, a.StatedRate, defaultJSON(a.Default), jdp(a.Closed)}
 }
 
 func cmdAccountList(c *call) (any, error) {
@@ -254,9 +263,13 @@ func cmdAccountList(c *call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := []jaccount{}
-	for _, a := range rec.Accounts {
-		out = append(out, accountJSON(a))
+	out := []jaccountRow{}
+	for _, r := range listAccounts(rec) {
+		row := jaccountRow{jaccount: accountJSON(r.Account), Balance: r.Balance, Stale: r.Stale}
+		if r.HasData {
+			row.LastData = model.Ptr(jd(r.LastData))
+		}
+		out = append(out, row)
 	}
 	return out, nil
 }

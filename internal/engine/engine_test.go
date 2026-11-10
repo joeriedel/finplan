@@ -735,3 +735,51 @@ func TestRuleMatchingNothingContributesZero(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestClosedAccountReadsZeroAfterItsCloseDate(t *testing.T) {
+	rec := fixture(t)
+	rec.Account("inv").Closed = model.Ptr(d(2026, time.February, 15))
+	inv := model.DefaultAssetID("inv")
+	for _, proj := range []string{"", "p"} {
+		if proj != "" {
+			addProjection(t, rec, proj, "", growthMod(model.KindAccount, "inv", 0.1))
+		}
+		on, after := d(2026, time.February, 15), d(2026, time.February, 16)
+		if got := sample(t, rec, proj, inv, on); got.Amount <= 0 {
+			t.Errorf("%q: on the close date: got %+v, want the balance", proj, got)
+		}
+		for _, asset := range []model.AssetID{inv, "pair"} {
+			for _, date := range []model.Date{after, d(2030, time.January, 1)} {
+				want := 0.0
+				if asset == "pair" {
+					want = sample(t, rec, proj, model.DefaultAssetID("chk"), date).Amount
+				}
+				if got := sample(t, rec, proj, asset, date); !near(got.Amount, want) {
+					t.Errorf("%q: %s on %v: got %v, want %v", proj, asset, date, got.Amount, want)
+				}
+			}
+		}
+	}
+	if rec.Account("inv").ClosedOn(d(2026, time.February, 15)) {
+		t.Error("closed on its close date")
+	}
+}
+
+func TestItemStopsAfterAClosedAccountsCloseDate(t *testing.T) {
+	rec := fixture(t)
+	chk := model.DefaultAssetID("chk")
+	later := d(2026, time.June, 30)
+	for _, proj := range []string{"", "p"} {
+		if proj != "" {
+			addProjection(t, rec, proj, "", growthMod(model.KindAccount, "inv", 0.1))
+		}
+		before := sample(t, rec, proj, chk, later).Amount
+		rec.Account("inv").Closed = model.Ptr(d(2026, time.February, 1))
+		after := sample(t, rec, proj, chk, later).Amount
+		rec.Account("inv").Closed = nil
+		// save moves 300 on the 16th of each month; the ones after February 1 (February to June) stop.
+		if want := before + 5*300; !near(after, want) {
+			t.Errorf("%q: chk on %v: got %v, want %v", proj, later, after, want)
+		}
+	}
+}

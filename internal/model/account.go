@@ -92,10 +92,18 @@ type Account struct {
 	Default DefaultBalance
 	// Opens is set only on a projection's own accounts (see ProjAccount): the account has no value before that date and projects from it.
 	Opens *Date
+	// Closed is the date the account was closed, if it was. It keeps its history, and reads 0 on every date after Closed.
+	Closed *Date
 
 	Snapshots    []Snapshot
 	Transactions []Transaction
 }
+
+// IsClosed reports whether the account has been closed.
+func (a *Account) IsClosed() bool { return a.Closed != nil }
+
+// ClosedOn reports whether the account is closed on d, that is closed and d is after its close date.
+func (a *Account) ClosedOn(d Date) bool { return a.Closed != nil && d > *a.Closed }
 
 // AddSnapshot records a balance, replacing any snapshot on the same date.
 func (a *Account) AddSnapshot(d Date, balance float64) {
@@ -133,6 +141,19 @@ func (a *Account) Span() (Span, bool) {
 		sp.To = max(sp.To, a.Transactions[n-1].Date)
 	}
 	return sp, true
+}
+
+// LastEntry returns the date of the account's latest snapshot or transaction, and false if it has neither.
+func (a *Account) LastEntry() (Date, bool) {
+	var last Date
+	ok := false
+	if n := len(a.Snapshots); n > 0 {
+		last, ok = a.Snapshots[n-1].Date, true
+	}
+	if n := len(a.Transactions); n > 0 {
+		last, ok = max(last, a.Transactions[n-1].Date), true
+	}
+	return last, ok
 }
 
 // TransactionsIn returns the transactions dated after..upTo, that is excluding after and including upTo.

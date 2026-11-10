@@ -33,6 +33,8 @@ Drag to pan and scroll to zoom the plot. The toolbar has a Projection dropdown a
 
 The Projections tab lists the projections as a tree with Reality first, with search, New, Clone, Rename and Delete, and edits a projection's parent, start date, override history, inflation and modifications (add, remove, edit a modification's kind, object, property, value and start in place, add and edit budget items, end a budget item on a date, drag to reorder; a How column makes a modification set or scale, with a scale entered as a percentage change such as -30, and budget items can have an annual raise; modifications overwritten by later ones are greyed with a tooltip, and one whose target no longer exists is red with a tooltip and skipped). Edits are saved to the database at once. Edit > Undo and Redo (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y) step through them until the database is reloaded. An "Accounts in this projection" section adds, edits and removes the projection's own hypothetical accounts (inherited ones are read-only), and the modification target and budget-item account pickers list them. A "Start settings" section sets a start date and/or override history per asset (in order, drag to reorder, add and remove) and is followed by a table of the effective start of each account. Account and asset targets offer a default balance property (money in set mode, a percent change in scale mode), and the Add form has an optional To end date (an end without a start is refused); a modification with several segments (or a range) has a Timeline button that opens a timeline strip editor under the table, also used for a varying Inflation: drag segment edges (snapped to months, Ctrl for days), split, delete, add and clear the end, each as one undo step.
 
+The Accounts tab lists the accounts grouped by type with each one's balance, the date of its last data and a stale flag (an open account whose last data is more than 45 days old), and closed accounts apart. An Add account form (disabled with a red reason until valid) adds a manual account; the selected account's name, type, tax treatment, owner and stated rate are edited in place; a Record a balance form adds a snapshot; the default balance intervals are listed with remove and add. Close (with a date), Reopen and Delete are offered with a red reason when refused: an account with record entries cannot be deleted, so it is closed instead. A closed account keeps its history, reads 0 after its close date, stops its budget items after that date, is left out of the pickers for new Graph lines, modification targets and budget-item accounts, and refuses entries dated after the close date. Account and asset edits can be undone with Edit > Undo, except recording a balance, which is append-only. Browsing and correcting record entries in the tab is not built yet.
+
 ## Command line
 
     bin/finplan [--demo | --db <path>] <command> [arguments] [flags]
@@ -48,7 +50,7 @@ Read commands:
 
 | Command | Output |
 | --- | --- |
-| `account list` | accounts: id, name, type, tax, owner, `stated_rate` and `default` (the default balance intervals) |
+| `account list` | accounts: id, name, type, tax, owner, `stated_rate`, `default` (the default balance intervals), `closed` (close date or null), `balance` (on the record's today; 0 once today is after the close date), `last_data` (date of the latest record entry, null without data) and `stale` (an open account whose last data is more than 45 days before today) |
 | `account entries <account>` | the account's snapshots and transactions with current values (voided entries left out) |
 | `entry history <entry-id>` | every revision of one entry: original values, then each correction or void |
 | `asset list` | assets with their members, members left out as invalid, any resolve error, `default` (default balance intervals) and `params` (parameter settings) |
@@ -88,7 +90,7 @@ Write commands (see below):
 | `item end <projection> <item> <date>` | make a budget item (the record's or one added in the chain) pay nothing from a date on |
 | `asset new <name> [--id]` | add an aggregate asset with no members |
 | `asset rename <asset> <new-name>` | rename an aggregate asset |
-| `asset delete <asset>` | delete an aggregate asset and its members; refused (`in_use`) while another asset wraps it or a projection names it in an asset setting or modification |
+| `asset delete <asset>` | delete an aggregate asset and its members; refused (`in_use`) while another asset wraps it or a projection names it in an asset setting or modification, or has a modification of an account under it |
 | `asset add-member <asset> (--account A \| --asset A \| --rule [--types T] [--tax T])` | add a member after the others |
 | `asset remove-member <asset> <seq>` | remove a member |
 | `asset add-default <asset> --value N [--from D] [--to D]` | add a default balance interval |
@@ -96,6 +98,9 @@ Write commands (see below):
 | `asset set-param <asset> [--param growth] (--value N [--from D] \| --clear)` | set or clear the asset's growth setting; without `--value` and `--clear` a schedule is read as JSON |
 | `account new <name> --type T --tax T [--owner] [--rate] [--id]` | add an account and its default asset |
 | `account edit <account> [--name --type --tax --owner --rate]` | change an account's attributes; a rename also renames its default asset |
+| `account close <account> [--date D]` | close an account: it keeps its history, is left out of pickers for new lines and objects, and reads 0 after the date (the record's today when omitted); refused for an account already closed, one a projection defines, or a date before its last record entry or an entry that names it as counter account |
+| `account reopen <account>` | clear the close date; no change for an open account |
+| `account delete <account>` | delete an account and its default asset; refused (`in_use`) while it has record entries (close it instead), another account's entry names it as counter, or a budget item, asset member, modification or asset setting refers to it |
 | `entry add-snapshot <account> --date D --balance N` | record a balance |
 | `entry add-transaction <account> --date D --amount N --kind income\|expense\|transfer [--counter A] [--memo]` | record a transaction |
 | `entry correct <entry-id> [--date --amount --kind --counter --memo] [--note]` | correct an entry; the earlier values stay in `entry history` |

@@ -36,7 +36,7 @@ var (
 	ErrUnknownTarget = errors.New("ops: unknown modification target")
 	// ErrUnknownObject is returned for an account, asset, asset member, base budget item or entry that the record does not have.
 	ErrUnknownObject = errors.New("ops: unknown object")
-	// ErrInUse is returned by a delete of an asset that other assets or projections still refer to.
+	// ErrInUse is returned by a delete of an asset or account that other assets, projections or the budget still refer to, and of an account that has record entries.
 	ErrInUse = errors.New("ops: object is still in use")
 )
 
@@ -99,7 +99,7 @@ type Result struct {
 	Record *model.Record
 	// Projection is the projection the edit changed or added, in Record; nil for a delete, a restore and an edit of anything but projections.
 	Projection *model.Projection
-	// Account is the account an account, entry or default balance edit changed or added, in Record.
+	// Account is the account an account, entry or default balance edit changed or added, in Record; for an account delete, the account as it was.
 	Account *model.Account
 	// Asset is the asset an asset edit changed or added, in Record; for an asset delete, the asset as it was.
 	Asset *model.Asset
@@ -107,7 +107,7 @@ type Result struct {
 	Item *model.BudgetItem
 	// Entry is the entry an entry operation added, corrected or voided, with its values after the operation. Its ID is 0 for an entry added in a dry run. Record is nil for a correction and a void: they are stored without the record, so reload it.
 	Entry *store.Entry
-	// Removed is the name of the projection or id of the asset a delete removed.
+	// Removed is the name of the projection or id of the asset or account a delete removed.
 	Removed string
 	// Rename is set when the edit renamed a projection.
 	Rename *Rename

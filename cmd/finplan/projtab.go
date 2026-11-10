@@ -901,14 +901,16 @@ func propertiesFor(kind model.ObjectKind) []string {
 
 type objectChoice struct{ id, name string }
 
-// objectsFor lists what a modification of the kind can aim at when it is at index of the projection's modifications (len for the end of the list); accounts include those the projection's chain defines. Default assets are left out: aiming at the account does the same. A budget item is offered where it exists: the record's, those added by the projection's ancestors, and those its own modifications before index add.
+// objectsFor lists what a modification of the kind can aim at when it is at index of the projection's modifications (len for the end of the list); accounts include those the projection's chain defines, and leave out closed ones. Default assets are left out: aiming at the account does the same. A budget item is offered where it exists: the record's, those added by the projection's ancestors, and those its own modifications before index add.
 func objectsFor(base *model.Record, kind model.ObjectKind, proj string, index int) []objectChoice {
 	rec := effective(base, proj)
 	var out []objectChoice
 	switch kind {
 	case model.KindAccount:
 		for _, a := range rec.Accounts {
-			out = append(out, objectChoice{string(a.ID), a.Name})
+			if !a.IsClosed() {
+				out = append(out, objectChoice{string(a.ID), a.Name})
+			}
 		}
 	case model.KindAsset:
 		for _, a := range rec.Assets {
@@ -1066,24 +1068,15 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 	imgui.SameLine()
 	input("growth", "raise per year", "percent, e.g. 3", f.growth, em*6)
 
-	ids := []string{"", string(outsideAccount)}
-	names := []string{"choose an account", "outside the record"}
-	for _, a := range effective(t.a.rec, t.sel).Accounts {
-		ids, names = append(ids, string(a.ID)), append(names, a.Name)
-	}
+	rec := effective(t.a.rec, t.sel)
+	ids, names := itemAccountChoices(rec)
 	account := func(field, label string, cur model.AccountID) {
 		// Only a transfer may name the outside; the first entry is no choice.
 		from := 2
 		if f.kind == model.ItemTransfer {
 			from = 1
 		}
-		preview := names[0]
-		if i := slices.Index(ids, string(cur)); i > 0 {
-			preview = names[i]
-		} else if cur != "" {
-			preview = string(cur)
-		}
-		choose(field, label, preview, em*12, ids[from:], names[from:], string(cur))
+		choose(field, label, itemAccountPreview(rec, ids, names, cur), em*12, ids[from:], names[from:], string(cur))
 	}
 	if f.kind == model.ItemTransfer {
 		account("from", "from", f.from)
@@ -1092,6 +1085,31 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 	} else {
 		account("account", "account", f.account)
 	}
+}
+
+// itemAccountPreview is the text the account picker shows for cur: its name in the picker, else the name of an account rec has that the picker does not offer (a closed one), else the raw id.
+func itemAccountPreview(rec *model.Record, ids, names []string, cur model.AccountID) string {
+	if i := slices.Index(ids, string(cur)); i > 0 {
+		return names[i]
+	}
+	if a := rec.Account(cur); a != nil {
+		return a.Name
+	}
+	if cur != "" {
+		return string(cur)
+	}
+	return names[0]
+}
+
+// itemAccountChoices lists what a budget item's account pickers offer: a first entry that is no choice, the outside, and the open accounts of rec, which is the record as a projection sees it.
+func itemAccountChoices(rec *model.Record) (ids, names []string) {
+	ids, names = []string{"", string(outsideAccount)}, []string{"choose an account", "outside the record"}
+	for _, a := range rec.Accounts {
+		if !a.IsClosed() {
+			ids, names = append(ids, string(a.ID)), append(names, a.Name)
+		}
+	}
+	return ids, names
 }
 
 func (t *projTab) addForm(p *model.Projection) {
@@ -1161,10 +1179,13 @@ func (t *projTab) addForm(p *model.Projection) {
 }
 
 // addButton draws the Add button, disabled with the reason beside it while problem is not empty.
-func addButton(problem string, add func()) {
+func addButton(problem string, add func()) { actionButton("Add", problem, add) }
+
+// actionButton draws a button labelled label, disabled with the reason beside it while problem is not empty.
+func actionButton(label, problem string, do func()) {
 	imgui.BeginDisabledV(problem != "")
-	if imgui.Button("Add") {
-		add()
+	if imgui.Button(label) {
+		do()
 	}
 	imgui.EndDisabled()
 	if problem != "" {

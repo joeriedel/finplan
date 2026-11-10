@@ -51,6 +51,7 @@ func (r *Record) Clone() *Record {
 	for i, a := range r.Accounts {
 		ca := *a
 		ca.Default = a.Default.clone()
+		ca.Closed = clonePtr(a.Closed)
 		ca.Snapshots = slices.Clone(a.Snapshots)
 		ca.Transactions = slices.Clone(a.Transactions)
 		c.Accounts[i] = &ca
@@ -135,4 +136,45 @@ func (r *Record) RemoveAsset(id AssetID) error {
 	}
 	r.renumber()
 	return nil
+}
+
+// RemoveAccount deletes the account and its default asset. It refuses, changing nothing, an account that another asset has as a member, directly or through its default asset. The account's entries go with it.
+func (r *Record) RemoveAccount(id AccountID) error {
+	i, ok := r.accountIdx[id]
+	if !ok {
+		return fmt.Errorf("model: unknown account %q", id)
+	}
+	def := DefaultAssetID(id)
+	for _, o := range r.Assets {
+		if o.ID != def && slices.ContainsFunc(o.Members, func(m Member) bool { return m.Account == id || m.Asset == def }) {
+			return fmt.Errorf("model: account %q cannot be removed: asset %q has it as a member", id, o.ID)
+		}
+	}
+	r.Accounts = slices.Delete(r.Accounts, i, i+1)
+	delete(r.accountIdx, id)
+	for j := i; j < len(r.Accounts); j++ {
+		r.accountIdx[r.Accounts[j].ID] = j
+	}
+	j := r.assetIdx[def]
+	r.Assets = slices.Delete(r.Assets, j, j+1)
+	delete(r.assetIdx, def)
+	for k := j; k < len(r.Assets); k++ {
+		r.assetIdx[r.Assets[k].ID] = k
+	}
+	r.renumber()
+	return nil
+}
+
+// WithDocuments returns a copy of r whose accounts and assets are copies of src's, as an editor's undo needs. The entries stay r's: an account src has takes r's snapshots and transactions, or none if r lacks it.
+func (r *Record) WithDocuments(src *Record) *Record {
+	n := src.Clone()
+	for _, a := range n.Accounts {
+		a.Snapshots, a.Transactions = nil, nil
+		if live := r.Account(a.ID); live != nil {
+			a.Snapshots, a.Transactions = slices.Clone(live.Snapshots), slices.Clone(live.Transactions)
+		}
+	}
+	c := r.Clone()
+	c.Accounts, c.Assets, c.accountIdx, c.assetIdx, c.seq = n.Accounts, n.Assets, n.accountIdx, n.assetIdx, n.seq
+	return c
 }

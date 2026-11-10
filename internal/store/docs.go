@@ -16,8 +16,8 @@ import (
 // converts it. Format 2 added the modification mode and the budget item growth to format 1's shape; a
 // format 1 document has neither and reads as set and zero, and the bump makes an older build refuse a
 // document whose scale modifications it would otherwise silently ignore. Format 3 added the accounts a
-// projection defines; a format 1 or 2 document has none and reads as an empty list.
-const formatCurrent = 3
+// projection defines; a format 1 or 2 document has none and reads as an empty list. Format 4 added the close date of an account; an older document has none and reads as an open account, and the bump makes an older build refuse a document whose closed accounts it would otherwise show as open.
+const formatCurrent = 4
 
 // Document kinds.
 const (
@@ -30,7 +30,7 @@ const (
 	kindProjection = "projection"
 )
 
-// The DTOs below are the stored shape of formats 1 to 3. They are separate from the model types so that
+// The DTOs below are the stored shape of formats 1 to 4. They are separate from the model types so that
 // renaming a model field cannot change what is on disk.
 
 type recordDoc struct {
@@ -57,6 +57,7 @@ type accountDoc struct {
 	Owner      string             `json:"owner"`
 	StatedRate float64            `json:"stated_rate"`
 	Default    []intervalDoc      `json:"default"`
+	Closed     *model.Date        `json:"closed,omitempty"`
 }
 
 type ruleDoc struct {
@@ -180,7 +181,7 @@ type docRow struct {
 // decodeDoc decodes a document body of the given format version into v, the current shape.
 func decodeDoc(row docRow, v any) error {
 	switch row.format {
-	case 1, 2, 3:
+	case 1, 2, 3, 4:
 		if err := json.Unmarshal(row.body, v); err != nil {
 			return fmt.Errorf("store: %s %q: %w", row.kind, row.key, err)
 		}

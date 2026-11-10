@@ -31,7 +31,15 @@ func withID(st *store.Store, res *Result, err error, o Options) (*Result, error)
 	return res, nil
 }
 
-// AddSnapshot records the balance of the account at the end of the day. An account that already has a snapshot on the date is ErrInvalidValue: a recorded balance is changed by CorrectEntry, never replaced.
+// checkOpenOn refuses date after the close date of the account.
+func checkOpenOn(a *model.Account, date model.Date) error {
+	if a.ClosedOn(date) {
+		return refuse(ErrInvalidValue, "account %q is closed on %v: an entry cannot be dated %v", a.ID, *a.Closed, date)
+	}
+	return nil
+}
+
+// AddSnapshot records the balance of the account at the end of the day. A date after the account's close date is ErrInvalidValue. An account that already has a snapshot on the date is ErrInvalidValue: a recorded balance is changed by CorrectEntry, never replaced.
 func AddSnapshot(st *store.Store, rec *model.Record, account model.AccountID, date model.Date, balance float64, o Options) (*Result, error) {
 	res, err := editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		a := next.Account(account)
@@ -40,6 +48,9 @@ func AddSnapshot(st *store.Store, rec *model.Record, account model.AccountID, da
 		}
 		if !finite(balance) {
 			return Result{}, refuse(ErrInvalidValue, "%v is not a number within range", balance)
+		}
+		if err := checkOpenOn(a, date); err != nil {
+			return Result{}, err
 		}
 		if slices.ContainsFunc(a.Snapshots, func(s model.Snapshot) bool { return s.Date == date }) {
 			return Result{}, refuse(ErrInvalidValue, "account %q already has a snapshot on %v: correct that entry instead", account, date)
@@ -50,7 +61,7 @@ func AddSnapshot(st *store.Store, rec *model.Record, account model.AccountID, da
 	return withID(st, res, err, o)
 }
 
-// checkTx refuses a transaction kind that does not exist, an amount out of range, and a transfer without a counter account the record has or with the account itself.
+// checkTx refuses a transaction kind that does not exist, an amount out of range, a transfer without a counter account the record has or with the account itself, and a date after the close date of the account or of its counter account.
 func checkTx(rec *model.Record, account model.AccountID, v store.Values) error {
 	if !slices.Contains([]model.TxKind{model.TxIncome, model.TxExpense, model.TxTransfer}, v.TxKind) {
 		return refuse(ErrInvalidValue, "unknown transaction kind %q: use income, expense or transfer", v.TxKind)
@@ -66,8 +77,17 @@ func checkTx(rec *model.Record, account model.AccountID, v store.Values) error {
 			return refuse(ErrInvalidValue, "a transfer needs a counter account other than %q", account)
 		}
 	}
-	if v.Counter != "" && rec.Account(v.Counter) == nil {
-		return unknownAccount(v.Counter)
+	if v.Counter != "" {
+		c := rec.Account(v.Counter)
+		if c == nil {
+			return unknownAccount(v.Counter)
+		}
+		if err := checkOpenOn(c, v.Date); err != nil {
+			return err
+		}
+	}
+	if a := rec.Account(account); a != nil {
+		return checkOpenOn(a, v.Date)
 	}
 	return nil
 }
@@ -138,6 +158,10 @@ func CorrectEntry(st *store.Store, rec *model.Record, id int64, ch EntryChange, 
 	}
 	if e.Kind == store.KindTransaction {
 		if err := checkTx(rec, e.Account, v); err != nil {
+			return nil, err
+		}
+	} else if a := rec.Account(e.Account); a != nil {
+		if err := checkOpenOn(a, v.Date); err != nil {
 			return nil, err
 		}
 	}

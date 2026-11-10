@@ -31,7 +31,7 @@ func encodeRecord(r *model.Record) ([]docRow, error) {
 		return nil, err
 	}
 	for i, a := range r.Accounts {
-		d := accountDoc{a.ID, a.Name, a.Type, a.Tax, a.Owner, a.StatedRate, defaultDoc(a.Default)}
+		d := accountDoc{a.ID, a.Name, a.Type, a.Tax, a.Owner, a.StatedRate, defaultDoc(a.Default), a.Closed}
 		if err := add(kindAccount, string(a.ID), i, d); err != nil {
 			return nil, err
 		}
@@ -243,7 +243,7 @@ func restoreAccountsAndAssets(rec *model.Record, accts []accountDoc, assets []as
 
 func buildAccount(d accountDoc, entries []Entry) (*model.Account, error) {
 	a := &model.Account{ID: d.ID, Name: d.Name, Type: d.Type, Tax: d.Tax, Owner: d.Owner,
-		StatedRate: d.StatedRate, Default: docDefault(d.Default)}
+		StatedRate: d.StatedRate, Default: docDefault(d.Default), Closed: d.Closed}
 	for _, e := range entries {
 		switch e.Kind {
 		case KindSnapshot:

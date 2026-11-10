@@ -55,7 +55,7 @@ var dataCommands = []*command{
 		run:    cmdAssetRename,
 	},
 	{
-		Name: "asset delete", Summary: "delete an aggregate asset; refused while another asset has it as a member or a projection has a setting or modification for it",
+		Name: "asset delete", Summary: "delete an aggregate asset; refused while another asset has it as a member or a projection has a setting or modification for it or for an account under it",
 		Args:   []argDef{{Name: "asset", Description: "asset id or name", Required: true}},
 		Output: "{dry_run, changed, removed: asset id, asset: the asset as it was, as asset list prints it}; its members are removed with it, the accounts they name are not",
 		run:    cmdAssetDelete,
@@ -140,6 +140,25 @@ var dataCommands = []*command{
 		},
 		Output: accountOut,
 		run:    cmdAccountEdit,
+	},
+	{
+		Name: "account close", Summary: "close an account: it keeps its history, is left out of pickers for new lines and objects, and reads 0 after its close date; refused for an account already closed or with record entries after the date",
+		Args:   []argDef{{Name: "account", Description: "account id or name", Required: true}},
+		Flags:  []flagDef{{Name: "date", Type: typeDate, Description: "the last day the account has a balance: " + dateNote + "; the record's today when omitted"}},
+		Output: accountOut,
+		run:    cmdAccountClose,
+	},
+	{
+		Name: "account reopen", Summary: "reopen a closed account; changes nothing for an account that is open",
+		Args:   []argDef{{Name: "account", Description: "account id or name", Required: true}},
+		Output: accountOut,
+		run:    cmdAccountReopen,
+	},
+	{
+		Name: "account delete", Summary: "delete an account and its default asset; refused while it has record entries (close it instead) or a budget item, asset member, modification or asset setting refers to it",
+		Args:   []argDef{{Name: "account", Description: "account id or name", Required: true}},
+		Output: "{dry_run, changed, removed: account id, account: the account as it was, as account list prints it}",
+		run:    cmdAccountDelete,
 	},
 	{
 		Name: "entry add-snapshot", Summary: "record the balance of an account at the end of a day; refused when the account has a snapshot on that date, which entry correct changes",
@@ -514,6 +533,43 @@ func cmdAccountEdit(c *call) (any, error) {
 	}
 	res, err := ops.EditAccount(c.st, c.rec, id, ch, c.options())
 	return c.accountResult(res, err, id)
+}
+
+func cmdAccountClose(c *call) (any, error) {
+	id, err := c.accountArg(0)
+	if err != nil {
+		return nil, err
+	}
+	date, ok, err := c.date("date")
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		date = c.rec.Today
+	}
+	res, err := ops.CloseAccount(c.st, c.rec, id, date, c.options())
+	return c.accountResult(res, err, id)
+}
+
+func cmdAccountReopen(c *call) (any, error) {
+	id, err := c.accountArg(0)
+	if err != nil {
+		return nil, err
+	}
+	res, err := ops.ReopenAccount(c.st, c.rec, id, c.options())
+	return c.accountResult(res, err, id)
+}
+
+func cmdAccountDelete(c *call) (any, error) {
+	id, err := c.accountArg(0)
+	if err != nil {
+		return nil, err
+	}
+	res, err := ops.DeleteAccount(c.st, c.rec, id, c.options())
+	if err != nil {
+		return nil, opsError(err)
+	}
+	return map[string]any{"dry_run": c.options().DryRun, "changed": true, "removed": res.Removed, "account": accountJSON(res.Account)}, nil
 }
 
 // entryResult is the output of an operation on an entry.

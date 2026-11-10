@@ -291,6 +291,9 @@ func (res *Resolution) Eval(d Date, f func(AccountID) AccountData) Evaluation {
 func (res *Resolution) Balance(d Date) Balance {
 	e := res.Eval(d, func(id AccountID) AccountData {
 		a := res.rec.Account(id)
+		if a.ClosedOn(d) {
+			return AccountData{0, DataActual}
+		}
 		if v, ok := a.ActualAt(d); ok {
 			return AccountData{v, DataActual}
 		}
