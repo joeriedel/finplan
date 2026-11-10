@@ -122,6 +122,8 @@ func TestNewAccountFormProblems(t *testing.T) {
 		{[]string{"name", "My TSP"}, "type"},
 		{[]string{"type", "TSP"}, "tax"},
 		{[]string{"tax", "tax-deferred", "rate", "lots"}, "not a number"},
+		{[]string{"name", "all CASH"}, "all cash"},
+		{[]string{"name", "My TSP"}, ""},
 		{[]string{"rate", "5"}, ""},
 		{[]string{"rate", "500"}, "stated rate"},
 		{[]string{"rate", ""}, ""},

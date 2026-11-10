@@ -323,6 +323,10 @@ func TestCLIAccountCommands(t *testing.T) {
 	}
 
 	refusedWrite(t, path, "", 2, "usage", "account", "new", "X", "--tax", "taxable")
+	refusedWrite(t, path, "", 1, "name_taken", "account", "new", "net WORTH", "--type", "savings", "--tax", "taxable")
+	refusedWrite(t, path, "", 1, "name_taken", "account", "new", "savings", "--type", "savings", "--tax", "taxable")
+	refusedWrite(t, path, "", 1, "name_taken", "account", "edit", "college-fund", "--name", "all cash")
+	refusedWrite(t, path, "", 1, "name_taken", "account", "edit", "college-fund", "--name", "Checking")
 	refusedWrite(t, path, "", 2, "usage", "account", "new", "X", "--type", "piggy bank", "--tax", "taxable")
 	refusedWrite(t, path, "", 1, "invalid", "account", "new", " ", "--type", "savings", "--tax", "taxable")
 	refusedWrite(t, path, "", 1, "invalid", "account", "new", "X", "--type", "savings", "--tax", "taxable", "--rate", "3")

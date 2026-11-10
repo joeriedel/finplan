@@ -28,7 +28,7 @@ func checkAttrs(typ model.AccountType, tax model.TaxTreatment, rate float64) err
 	return nil
 }
 
-// NewAccount adds an account with no record entries, and its default asset. The account needs a name, a type and a tax treatment; an empty ID is made from the name, and an ID that an account or asset has is ErrNameTaken. Snapshots, transactions and default balances in acct are ignored.
+// NewAccount adds an account with no record entries, and its default asset. The account needs a name, a type and a tax treatment; an empty ID is made from the name, and an ID that an account or asset has is ErrNameTaken, and so is a name that another account or an asset has, ignoring case. Snapshots, transactions and default balances in acct are ignored.
 func NewAccount(st *store.Store, rec *model.Record, acct model.Account, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		name := strings.TrimSpace(acct.Name)
@@ -62,7 +62,7 @@ type AccountChange struct {
 	StatedRate *float64
 }
 
-// EditAccount changes attributes of an account. Renaming the account renames its default asset too.
+// EditAccount changes attributes of an account. Renaming the account renames its default asset too; a name that another account or an asset has is ErrNameTaken.
 func EditAccount(st *store.Store, rec *model.Record, id model.AccountID, ch AccountChange, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		a := next.Account(id)

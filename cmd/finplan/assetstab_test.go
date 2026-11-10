@@ -129,10 +129,14 @@ func TestAssetCoverageGapsStayGaps(t *testing.T) {
 	// Two accounts whose data does not meet leave a gap between their spans.
 	early := rec.Account(demodata.Savings)
 	early.Snapshots = early.Snapshots[:1]
+	early.Transactions = nil
 	late := rec.Account(demodata.Checking)
 	late.Snapshots = late.Snapshots[len(late.Snapshots)-1:]
-	if a, b := early.Snapshots[0].Date, late.Snapshots[0].Date; b.Add(-1) <= a {
-		t.Skipf("demo spans %v and %v meet", a, b)
+	late.Transactions = nil
+	es, _ := early.Span()
+	ls, _ := late.Span()
+	if ls.From.Add(-1) <= es.To {
+		t.Skipf("demo spans %v and %v meet", es, ls)
 	}
 	c := buildChart(rec, demodata.AllCash)
 	if len(c.Coverage) != 2 || c.Coverage[0].To >= c.Coverage[1].From {
@@ -301,11 +305,11 @@ func TestMemberFormProblems(t *testing.T) {
 		{memberForm{}, "kind"},
 		{memberForm{kind: memberAccount}, "pick an account"},
 		{memberForm{kind: memberAsset}, "pick an asset"},
-		{memberForm{kind: memberAsset, asset: demodata.NetWorth}, "contain"},
+		{memberForm{kind: memberAsset, asset: demodata.Liquid}, "cycle"},
 		{memberForm{kind: memberAccount, account: demodata.Savings}, ""},
 		{memberForm{kind: memberRule}, ""},
 	} {
-		got := memberProblem(a.st, a.rec, demodata.Liquid, c.f)
+		got := memberProblem(a.st, a.rec, demodata.AllCash, c.f)
 		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
 			t.Errorf("%+v: problem %q, want one with %q", c.f, got, c.want)
 		}

@@ -422,6 +422,8 @@ func TestNewAccount(t *testing.T) {
 		{"nan rate", func(a *model.Account) { a.StatedRate = math.NaN() }, ErrInvalidValue},
 		{"account id", func(a *model.Account) { a.ID = "checking" }, ErrNameTaken},
 		{"asset id", func(a *model.Account) { a.ID = "net-worth" }, ErrNameTaken},
+		{"account name", func(a *model.Account) { a.Name = " savings " }, ErrNameTaken},
+		{"asset name", func(a *model.Account) { a.Name = "net WORTH" }, ErrNameTaken},
 	} {
 		a := acct
 		c.change(&a)
@@ -450,6 +452,9 @@ func TestEditAccount(t *testing.T) {
 	if _, err := EditAccount(st, got, demodata.Checking, ch, Options{}); !errors.Is(err, ErrNoChange) {
 		t.Errorf("same attributes: %v", err)
 	}
+	if res, err := EditAccount(st, got, demodata.Checking, AccountChange{Name: model.Ptr("MAIN CHECKING")}, Options{}); err != nil || res.Account.Name != "MAIN CHECKING" {
+		t.Errorf("case change of its own name: %v", err)
+	}
 	for _, c := range []struct {
 		id   model.AccountID
 		ch   AccountChange
@@ -457,6 +462,8 @@ func TestEditAccount(t *testing.T) {
 	}{
 		{"nope", ch, ErrUnknownObject},
 		{demodata.Checking, AccountChange{Name: model.Ptr(" ")}, ErrInvalidValue},
+		{demodata.Checking, AccountChange{Name: model.Ptr("SAVINGS")}, ErrNameTaken},
+		{demodata.Checking, AccountChange{Name: model.Ptr("all cash")}, ErrNameTaken},
 		{demodata.Checking, AccountChange{Type: model.Ptr(model.AccountType("x"))}, ErrInvalidValue},
 		{demodata.Checking, AccountChange{Tax: model.Ptr(model.TaxTreatment("x"))}, ErrInvalidValue},
 		{demodata.Checking, AccountChange{StatedRate: model.Ptr(5.0)}, ErrInvalidValue},

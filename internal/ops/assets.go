@@ -77,6 +77,21 @@ func freeAssetName(rec *model.Record, name string, except model.AssetID) error {
 	return nil
 }
 
+// freeAccountName refuses a name that another account or any user asset already has, ignoring case and surrounding space, because an account's name is also the name of its default asset. The account except is not compared, so an account can change the case of its own name.
+func freeAccountName(rec *model.Record, name string, except model.AccountID) error {
+	for _, a := range rec.Assets {
+		if _, isDefault := accountOfDefault(a.ID); !isDefault && strings.EqualFold(strings.TrimSpace(a.Name), name) {
+			return refuse(ErrNameTaken, "there is already an asset named %q", a.Name)
+		}
+	}
+	for _, a := range rec.Accounts {
+		if a.ID != except && strings.EqualFold(strings.TrimSpace(a.Name), name) {
+			return refuse(ErrNameTaken, "there is already an account named %q", a.Name)
+		}
+	}
+	return nil
+}
+
 // NewAsset adds an aggregate asset with no members. A name that another asset or an account has is ErrNameTaken. An empty id is made from the name; an id that an account or asset has is ErrNameTaken, and one that starts with "acct:" is reserved for the default assets of accounts.
 func NewAsset(st *store.Store, rec *model.Record, name, id string, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
