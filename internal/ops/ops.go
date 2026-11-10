@@ -105,7 +105,7 @@ type Result struct {
 	Asset *model.Asset
 	// Item is the base budget item a budget edit changed or added.
 	Item *model.BudgetItem
-	// Entry is the entry an entry operation added, corrected or voided, with its values after the operation. Its ID is 0 for an entry added in a dry run. Record is nil for a correction and a void: they are stored without the record, so reload it.
+	// Entry is the entry an entry operation added, corrected or voided, with its values after the operation. Its ID is 0 for an entry added in a dry run. Record is the reloaded record for a correction and a void, and nil for their dry run.
 	Entry *store.Entry
 	// Removed is the name of the projection or id of the asset or account a delete removed.
 	Removed string

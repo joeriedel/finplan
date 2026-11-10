@@ -26,7 +26,7 @@ type editStep struct {
 	docsBefore, docsAfter *model.Record
 }
 
-// edit is the one way an editor tab changes the record. do makes the edit through internal/ops against the live record, which validates and saves it; only if that works does the new record replace the live one, the Graph tab see it and the history get a step named label. If do fails the live record stays as it was and the user is told why; an edit that changed nothing says nothing and sets a.unchanged. Record entries (past history) are not edited this way: they are append-only, and an added one is made with addEntry, which leaves no undo step. It reports whether the edit was made.
+// edit is the one way an editor tab changes the record. do makes the edit through internal/ops against the live record, which validates and saves it; only if that works does the new record replace the live one, the Graph tab see it and the history get a step named label. If do fails the live record stays as it was and the user is told why; an edit that changed nothing says nothing and sets a.unchanged. Record entries (past history) are not edited this way: they are append-only, and an added, corrected or voided one is made with addEntry, which leaves no undo step. It reports whether the edit was made.
 func (a *app) edit(label string, do func() (*ops.Result, error)) bool {
 	a.unchanged = false
 	res, err := do()
@@ -48,7 +48,7 @@ func (a *app) edit(label string, do func() (*ops.Result, error)) bool {
 	return true
 }
 
-// addEntry makes an edit that adds a record entry through internal/ops and installs the result. Entries are append-only, so it pushes no undo step; an entry is corrected or voided, never undone. It reports whether the edit was made.
+// addEntry makes an edit that adds, corrects or voids a record entry through internal/ops and installs the result. Entries are append-only, so it pushes no undo step; an entry is corrected or voided, never undone. It reports whether the edit was made.
 func (a *app) addEntry(label string, do func() (*ops.Result, error)) bool {
 	res, err := do()
 	if err != nil {

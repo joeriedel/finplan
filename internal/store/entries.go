@@ -96,6 +96,11 @@ func (s *Store) Entries(account model.AccountID) ([]Entry, error) {
 	return queryEntries(s.db, false, `e.account = ?`, string(account))
 }
 
+// EntriesWithVoided returns the account's entries in the order they were stored, with their current values, voided ones included (Void is set).
+func (s *Store) EntriesWithVoided(account model.AccountID) ([]Entry, error) {
+	return queryEntries(s.db, true, `e.account = ?`, string(account))
+}
+
 // HasEntries reports whether the account has any entry stored, a voided one included.
 func (s *Store) HasEntries(account model.AccountID) (bool, error) {
 	es, err := queryEntries(s.db, true, `e.account = ?`, string(account))

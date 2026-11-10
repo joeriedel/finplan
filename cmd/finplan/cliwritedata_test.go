@@ -57,6 +57,7 @@ type wentry struct {
 	TxKind  *string `json:"tx_kind"`
 	Counter *string
 	Memo    *string
+	Void    bool
 }
 
 type wdata struct {
@@ -573,4 +574,95 @@ func TestCLIBaseBudgetItemScenario(t *testing.T) {
 	if ended >= with {
 		t.Errorf("checking at the end of 2027: %v with the item ended, %v running", ended, with)
 	}
+}
+
+func TestCLIAccountEntriesScenario(t *testing.T) {
+	path := seededFile(t)
+	const date = "2031-03-09"
+	data(t, path, "", "entry", "add-snapshot", "checking", "--date", date, "--balance", "5000")
+	inc := data(t, path, "", "entry", "add-transaction", "checking", "--date", date, "--amount", "120", "--kind", "income", "--memo", "Invented pay").Entry
+	xfer := data(t, path, "", "entry", "add-transaction", "checking", "--date", date, "--amount", "-60", "--kind", "transfer", "--counter", "savings").Entry
+	dup := data(t, path, "", "entry", "add-transaction", "checking", "--date", date, "--amount", "-60", "--kind", "transfer", "--counter", "savings").Entry
+
+	byID := map[int64]wentry{}
+	for _, e := range entriesOf(t, path, "checking") {
+		byID[*e.ID] = e
+	}
+	if e := byID[*inc.ID]; e.Kind != "transaction" || *e.TxKind != "income" || e.Counter != nil || e.Amount != 120 {
+		t.Errorf("income: %+v", e)
+	}
+	if e := byID[*xfer.ID]; *e.TxKind != "transfer" || *e.Counter != "savings" {
+		t.Errorf("transfer: %+v", e)
+	}
+	snaps := 0
+	for _, e := range byID {
+		if e.Kind == "snapshot" && e.Date == date && e.Amount == 5000 {
+			snaps++
+		}
+	}
+	if snaps != 1 {
+		t.Errorf("%d snapshots of the day", snaps)
+	}
+
+	// A correction keeps the original in the history.
+	id := itoa64(*inc.ID)
+	data(t, path, "", "entry", "correct", id, "--amount", "125", "--note", "bonus")
+	var hist struct {
+		Revisions []struct {
+			Amount float64
+			MadeAt string `json:"made_at"`
+			Note   *string
+			Void   bool
+		}
+	}
+	cliJSON(t, &hist, "--db", path, "entry", "history", id)
+	if len(hist.Revisions) != 2 || hist.Revisions[0].Amount != 120 || hist.Revisions[0].Note != nil || hist.Revisions[1].Amount != 125 || *hist.Revisions[1].Note != "bonus" {
+		t.Errorf("history: %+v", hist.Revisions)
+	}
+	for _, r := range hist.Revisions {
+		if r.MadeAt == "" {
+			t.Error("a revision has no made_at")
+		}
+	}
+
+	// Voiding the duplicate takes it out of the list, keeps it with --voided and in its history, and a later correction restores it.
+	dupID := itoa64(*dup.ID)
+	data(t, path, "", "entry", "void", dupID, "--note", "entered twice")
+	if _, ok := entryIDs(entriesOf(t, path, "checking"))[*dup.ID]; ok {
+		t.Error("the voided entry is listed")
+	}
+	var all []wentry
+	cliJSON(t, &all, "--db", path, "account", "entries", "checking", "--voided")
+	voided := 0
+	for _, e := range all {
+		if e.Void {
+			voided++
+			if *e.ID != *dup.ID {
+				t.Errorf("entry %d is flagged void", *e.ID)
+			}
+		}
+	}
+	if _, ok := entryIDs(all)[*dup.ID]; !ok || voided != 1 || len(all) != len(byID) {
+		t.Errorf("--voided: %d entries, %d voided, listed %v", len(all), voided, ok)
+	}
+	cliJSON(t, &hist, "--db", path, "entry", "history", dupID)
+	if len(hist.Revisions) != 2 || !hist.Revisions[1].Void || *hist.Revisions[1].Note != "entered twice" {
+		t.Errorf("history of the voided entry: %+v", hist.Revisions)
+	}
+	data(t, path, "", "entry", "correct", dupID, "--amount", "-60", "--memo", "", "--note", "not a duplicate")
+	if _, ok := entryIDs(entriesOf(t, path, "checking"))[*dup.ID]; !ok {
+		t.Error("the restored entry is not listed")
+	}
+	cliJSON(t, &hist, "--db", path, "entry", "history", dupID)
+	if len(hist.Revisions) != 3 || hist.Revisions[2].Void || *hist.Revisions[2].Note != "not a duplicate" {
+		t.Errorf("history after the restore: %+v", hist.Revisions)
+	}
+}
+
+func entryIDs(list []wentry) map[int64]bool {
+	ids := map[int64]bool{}
+	for _, e := range list {
+		ids[*e.ID] = true
+	}
+	return ids
 }

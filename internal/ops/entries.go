@@ -4,6 +4,7 @@
 package ops
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"slices"
@@ -131,7 +132,7 @@ func entryError(err error, id int64) error {
 	return &SaveError{err}
 }
 
-// CorrectEntry stores a correction of the entry with the changed values, and a note. Only the values given change; the original stays in the entry's history. A snapshot has a date and an amount only. Correcting a voided entry restores it. A correction that leaves the entry as it is is ErrNoChange. The store's checks decide whether a correction is allowed, in a dry run too: the correction is made in a transaction that is rolled back. The result has no Record; reload it.
+// CorrectEntry stores a correction of the entry with the changed values, and a note. Only the values given change; the original stays in the entry's history. A snapshot has a date and an amount only. Correcting a voided entry restores it. A correction that leaves the entry as it is is ErrNoChange. The store's checks decide whether a correction is allowed, in a dry run too: the correction is made in a transaction that is rolled back. The result has the reloaded Record unless the run was a dry run, which has none.
 func CorrectEntry(st *store.Store, rec *model.Record, id int64, ch EntryChange, note string, o Options) (*Result, error) {
 	e, err := st.Entry(id)
 	if err != nil {
@@ -177,10 +178,10 @@ func CorrectEntry(st *store.Store, rec *model.Record, id int64, ch EntryChange, 
 		return nil, entryError(err, id)
 	}
 	e.Values, e.Void = v, false
-	return &Result{Entry: &e}, nil
+	return withReloaded(st, &Result{Entry: &e}, o)
 }
 
-// VoidEntry stores a correction that takes the entry out of the record, with a note. The entry stays in its history, and CorrectEntry restores it. An entry already voided is ErrNoChange. A dry run makes the void in a transaction that is rolled back. The result has no Record; reload it.
+// VoidEntry stores a correction that takes the entry out of the record, with a note. The entry stays in its history, and CorrectEntry restores it. An entry already voided is ErrNoChange. A dry run makes the void in a transaction that is rolled back. The result has the reloaded Record unless the run was a dry run, which has none.
 func VoidEntry(st *store.Store, rec *model.Record, id int64, note string, o Options) (*Result, error) {
 	e, err := st.Entry(id)
 	if err != nil {
@@ -198,5 +199,48 @@ func VoidEntry(st *store.Store, rec *model.Record, id int64, note string, o Opti
 		return nil, entryError(err, id)
 	}
 	e.Void = true
-	return &Result{Entry: &e}, nil
+	return withReloaded(st, &Result{Entry: &e}, o)
+}
+
+// withReloaded sets the record of a saved correction or void to the stored record, which the store applied the correction to.
+func withReloaded(st *store.Store, res *Result, o Options) (*Result, error) {
+	if o.DryRun {
+		return res, nil
+	}
+	rec, err := st.Load()
+	if err != nil {
+		return nil, fmt.Errorf("the entry was saved but the record could not be reloaded: %w", err)
+	}
+	res.Record = rec
+	return res, nil
+}
+
+// ListEntries returns the account's entries newest first: by date, and by id among entries of one date. A voided entry is left out unless withVoided is set, and then has Void set.
+func ListEntries(st *store.Store, account model.AccountID, withVoided bool) ([]store.Entry, error) {
+	var es []store.Entry
+	var err error
+	if withVoided {
+		es, err = st.EntriesWithVoided(account)
+	} else {
+		es, err = st.Entries(account)
+	}
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(es, func(a, b store.Entry) int {
+		if a.Date != b.Date {
+			return cmp.Compare(b.Date, a.Date)
+		}
+		return cmp.Compare(b.ID, a.ID)
+	})
+	return es, nil
+}
+
+// EntryHistory returns the entry's original values followed by each correction and void in the order made. An unknown id is ErrUnknownObject.
+func EntryHistory(st *store.Store, id int64) ([]store.Revision, error) {
+	revs, err := st.History(id)
+	if err != nil {
+		return nil, entryError(err, id)
+	}
+	return revs, nil
 }

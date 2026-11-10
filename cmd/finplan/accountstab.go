@@ -184,6 +184,7 @@ type acctTab struct {
 
 	add                   newAcctForm
 	snapDate, snapBalance string
+	ent                   entriesUI
 	closeOn               string
 	ivFrom, ivTo, ivValue string
 }
@@ -356,11 +357,12 @@ func (t *acctTab) detail(acct *model.Account) {
 	}
 
 	t.snapshots(acct)
+	t.entries(acct)
 	t.defaults(acct)
 	t.lifecycle(acct)
 }
 
-// snapshots draws the Record a balance form. A balance is a record entry: it is appended and has no undo; correcting one is done on the entries, not here.
+// snapshots draws the Record a balance form. A balance is a record entry: it is appended and has no undo; correcting one is done on the entries below.
 func (t *acctTab) snapshots(acct *model.Account) {
 	em := imgui.FontSize()
 	imgui.Spacing()

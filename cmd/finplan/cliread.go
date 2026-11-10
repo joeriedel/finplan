@@ -39,9 +39,10 @@ var commands = []*command{
 		run:    cmdAccountList,
 	},
 	{
-		Name: "account entries", Summary: "list an account's record entries (snapshots and transactions) with their current values; voided entries are left out",
+		Name: "account entries", Summary: "list an account's record entries (snapshots and transactions) with their current values, in the order they were stored; voided entries are left out unless --voided is given",
 		Args:   []argDef{{Name: "account", Description: "account id or name", Required: true}},
-		Output: "[{id, kind (snapshot or transaction), date, amount, tx_kind, counter, memo}]; empty fields are null",
+		Flags:  []flagDef{{Name: "voided", Type: typeBool, Default: "false", Description: "include voided entries, marked void: true"}},
+		Output: "[{id, kind (snapshot or transaction), date, amount, tx_kind, counter, memo}]; empty fields are null; with --voided each also has void (true for a voided entry)",
 		run:    cmdAccountEntries,
 	},
 	{
@@ -292,6 +293,12 @@ type jentry struct {
 	jvalues
 }
 
+// jentryVoid is an entry as account entries --voided prints it.
+type jentryVoid struct {
+	jentry
+	Void bool `json:"void"`
+}
+
 // entryJSON is the JSON shape of an entry, as account entries prints it and the write commands print the entry they changed.
 func entryJSON(e store.Entry) jentry {
 	je := jentry{Kind: string(e.Kind), jvalues: valuesJSON(e.Values)}
@@ -309,6 +316,17 @@ func cmdAccountEntries(c *call) (any, error) {
 	acct, err := resolveTarget(rec, c.args[0], true)
 	if err != nil {
 		return nil, err
+	}
+	if c.str("voided") == "true" {
+		entries, err := st.EntriesWithVoided(acct.account)
+		if err != nil {
+			return nil, failErr("database", "%v", err)
+		}
+		out := []jentryVoid{}
+		for _, e := range entries {
+			out = append(out, jentryVoid{entryJSON(e), e.Void})
+		}
+		return out, nil
 	}
 	entries, err := st.Entries(acct.account)
 	if err != nil {
