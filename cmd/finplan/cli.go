@@ -35,6 +35,8 @@ type cliError struct {
 	Code    string
 	Message string
 	Exit    int
+	// Affected, when set, is printed with the error as "affected": what the refused command would have changed.
+	Affected any
 }
 
 func (e *cliError) Error() string { return e.Message }
@@ -454,7 +456,11 @@ func runCLI(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if !errors.As(err, &ce) {
 			ce = &cliError{Code: "failed", Message: err.Error(), Exit: exitFailure}
 		}
-		writeJSON(stdout, map[string]any{"error": map[string]string{"code": ce.Code, "message": ce.Message}})
+		body := map[string]any{"code": ce.Code, "message": ce.Message}
+		if ce.Affected != nil {
+			body["affected"] = ce.Affected
+		}
+		writeJSON(stdout, map[string]any{"error": body})
 		return ce.Exit
 	}
 	if text, ok := result.(textOutput); ok {

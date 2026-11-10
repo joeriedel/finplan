@@ -172,11 +172,11 @@ func TestAssetProblems(t *testing.T) {
 	if got := renameAssetProblem(a.st, a.rec, "acct:checking", "x"); got == "" {
 		t.Error("an account's default asset can be renamed")
 	}
-	if got := deleteAssetProblem(a.st, a.rec, demodata.AllCash); !strings.Contains(got, "member of") {
+	if got := deleteAssetProblem(a.st, a.rec, demodata.AllCash); got != "" {
 		t.Errorf("delete of a member: %q", got)
 	}
-	if got := deleteAssetProblem(a.st, a.rec, demodata.NetWorth); got == "" {
-		t.Error("net worth can be deleted although a modification targets an account under it")
+	if got := deleteAssetProblem(a.st, a.rec, demodata.NetWorth); got != "" {
+		t.Errorf("net worth cannot be deleted: %q", got)
 	}
 	if got := deleteAssetProblem(a.st, a.rec, "acct:checking"); got == "" {
 		t.Error("an account's default asset can be deleted")
@@ -231,24 +231,66 @@ func TestEmergencyFundScenario(t *testing.T) {
 	}
 }
 
-func TestDeleteAssetRefusedForAnySetting(t *testing.T) {
+func TestDeleteAssetCascadeIsOneUndoStep(t *testing.T) {
 	a := demoApp(t)
 	r, err := ops.NewAsset(a.st, a.rec, "Spare", "", ops.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	a.install(r)
-	if why := deleteAssetProblem(a.st, a.rec, "spare"); why != "" {
-		t.Fatalf("unused asset: %q", why)
-	}
-	// A projection's asset setting keeps it.
-	r, err = ops.AddAssetSetting(a.st, a.rec, demodata.ProjBase, model.AssetSetting{Asset: "spare", Start: model.Ptr(model.D(2027, 1, 1))}, ops.Options{})
-	if err != nil {
+	if r, err = ops.AddMember(a.st, a.rec, demodata.Liquid, model.AssetMember("spare"), ops.Options{}); err != nil {
 		t.Fatal(err)
 	}
 	a.install(r)
-	if why := deleteAssetProblem(a.st, a.rec, "spare"); !strings.Contains(why, "setting") {
-		t.Errorf("with an asset setting: %q", why)
+	if r, err = ops.AddAssetSetting(a.st, a.rec, demodata.ProjBase, model.AssetSetting{Asset: "spare", Start: model.Ptr(model.D(2027, 1, 1))}, ops.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	a.install(r)
+	if why := deleteAssetProblem(a.st, a.rec, "spare"); why != "" {
+		t.Fatalf("delete problem %q", why)
+	}
+	plan, err := ops.AssetDeletePlan(a.rec, "spare")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := deleteLines(plan)
+	if len(lines) != 2 || !strings.Contains(lines[0], string(demodata.Liquid)) || !strings.Contains(lines[1], demodata.ProjBase) {
+		t.Errorf("lines %q", lines)
+	}
+	members := len(a.rec.Asset(demodata.Liquid).Members)
+	if !a.edit("delete asset", func() (*ops.Result, error) { return ops.DeleteAsset(a.st, a.rec, "spare", ops.Options{}) }) {
+		t.Fatal(a.notices)
+	}
+	if a.rec.Asset("spare") != nil || len(a.rec.Asset(demodata.Liquid).Members) != members-1 || len(a.rec.Projection(demodata.ProjBase).AssetSettings) != 0 {
+		t.Fatal("the delete left the asset, its membership or its setting")
+	}
+	a.undo()
+	if a.rec.Asset("spare") == nil || len(a.rec.Asset(demodata.Liquid).Members) != members || len(a.rec.Projection(demodata.ProjBase).AssetSettings) != 1 {
+		t.Error("one undo did not restore the asset, its membership and its setting")
+	}
+	a.redo()
+	if a.rec.Asset("spare") != nil || len(a.rec.Asset(demodata.Liquid).Members) != members-1 || len(a.rec.Projection(demodata.ProjBase).AssetSettings) != 0 {
+		t.Error("redo did not repeat the whole delete")
+	}
+}
+
+func TestDeleteLines(t *testing.T) {
+	plan := ops.DeletePlan{Affected: []ops.Affected{
+		{Kind: ops.AffectedMember, In: "liquid", Detail: `account "x"`, Effect: ops.EffectRemoved},
+		{Kind: ops.AffectedAssetSetting, In: "Base", Detail: `asset "y"`, Effect: ops.EffectRemoved},
+		{Kind: ops.AffectedModification, In: "Base", Detail: "growth of account \"x\"", Effect: ops.EffectRemoved},
+		{Kind: ops.AffectedBudgetItem, In: "budget", Detail: `"Rent" (rent)`, Effect: ops.EffectDeleted},
+		{Kind: ops.AffectedBudgetItem, In: "Base", Detail: `"Gig" (gig)`, Effect: ops.EffectDeleted},
+	}}
+	want := []string{
+		`Asset "liquid": remove its member account "x"`,
+		`Projection "Base": remove the setting for asset "y"`,
+		`Projection "Base": remove the modification growth of account "x"`,
+		`Base budget: delete the item "Rent" (rent)`,
+		`Projection "Base": delete the item it adds, "Gig" (gig)`,
+	}
+	if got := deleteLines(plan); !slices.Equal(got, want) {
+		t.Errorf("got %q", got)
 	}
 }
 

@@ -280,11 +280,11 @@ func TestCloseReopenDeleteAreUndoable(t *testing.T) {
 	f := newAcctForm{name: "Scratch", typ: model.TypeSavings, tax: model.Taxable}
 	acct, _ := f.account()
 	a.edit("add account", func() (*ops.Result, error) { return ops.NewAccount(a.st, a.rec, acct, ops.Options{}) })
-	if p := deleteProblem(a.st, a.rec, "scratch"); p != "" {
-		t.Fatalf("delete problem %q", p)
+	if plan, err := ops.AccountDeletePlan(a.st, a.rec, "scratch"); err != nil || plan.Blocked != "" {
+		t.Fatalf("delete plan %+v, %v", plan, err)
 	}
-	if p := deleteProblem(a.st, a.rec, demodata.Checking); !strings.Contains(p, "record entries") {
-		t.Errorf("delete problem of an account with entries: %q", p)
+	if plan, err := ops.AccountDeletePlan(a.st, a.rec, demodata.Checking); err != nil || !strings.Contains(plan.Blocked, "record entries") {
+		t.Errorf("delete plan of an account with entries: %+v, %v", plan, err)
 	}
 	if !a.edit("delete account", func() (*ops.Result, error) { return ops.DeleteAccount(a.st, a.rec, "scratch", ops.Options{}) }) {
 		t.Fatal(a.notices)
@@ -362,5 +362,49 @@ func TestClosedAccountsAreLeftOutOfPickers(t *testing.T) {
 	// Other accounts and the asset pickers are untouched.
 	if !slices.ContainsFunc(lineCandidates(effective(a.rec, demodata.ProjBase), ""), func(c lineCandidate) bool { return c.id == demodata.NetWorth }) {
 		t.Error("an aggregate asset is missing from the line picker")
+	}
+}
+
+func TestDeleteAccountCascadeIsOneUndoStep(t *testing.T) {
+	a := demoApp(t)
+	f := newAcctForm{name: "Scratch", typ: model.TypeSavings, tax: model.Taxable}
+	acct, _ := f.account()
+	step := func(r *ops.Result, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.install(r)
+	}
+	step(ops.NewAccount(a.st, a.rec, acct, ops.Options{}))
+	item := model.BudgetItem{Name: "Pay", Kind: model.ItemIncome, Amount: 10, Account: "scratch", Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, Start: model.Ptr(model.D(2027, 1, 1))}
+	step(ops.AddBudgetItem(a.st, a.rec, item, ops.Options{}))
+	item.Name = "Gig"
+	step(ops.AddItem(a.st, a.rec, demodata.ProjBase, item, ops.Options{}))
+	growth := model.Modification{Target: model.ObjectRef{Kind: model.KindAccount, ID: "scratch"}, Property: model.PropGrowth, Values: model.Constant(0.01)}
+	step(ops.AddMod(a.st, a.rec, demodata.ProjBase, growth, ops.Options{}))
+	// The projection's added item is one of its modifications, so the delete removes two.
+	counts := func() (int, int) { return len(a.rec.Budget.Items), len(a.rec.Projection(demodata.ProjBase).Mods) }
+	items, mods := counts()
+	if !a.edit("delete account", func() (*ops.Result, error) { return ops.DeleteAccount(a.st, a.rec, "scratch", ops.Options{}) }) {
+		t.Fatal(a.notices)
+	}
+	if i, m := counts(); a.rec.Account("scratch") != nil || i != items-1 || m != mods-2 {
+		t.Fatalf("the delete left %d items, %d modifications", i, m)
+	}
+	a.undo()
+	if i, m := counts(); a.rec.Account("scratch") == nil || i != items || m != mods {
+		t.Errorf("undo restored %d items, %d modifications", i, m)
+	}
+	a.redo()
+	if i, m := counts(); a.rec.Account("scratch") != nil || i != items-1 || m != mods-2 {
+		t.Errorf("redo left %d items, %d modifications", i, m)
+	}
+}
+
+func TestCloseProblemRefusesABadDate(t *testing.T) {
+	a := demoApp(t)
+	if closeProblem(a.st, a.rec, demodata.TSP, "not a date") == "" {
+		t.Error("a bad close date is allowed")
 	}
 }

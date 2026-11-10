@@ -5,6 +5,8 @@ package ops
 
 import (
 	"errors"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -107,63 +109,13 @@ func TestDeleteAccount(t *testing.T) {
 }
 
 func TestDeleteAccountRefusals(t *testing.T) {
-	scratch := model.AccountID("scratch")
-	mod := func(kind model.ObjectKind, id string) model.Modification {
-		return model.Modification{Target: model.ObjectRef{Kind: kind, ID: id}, Property: model.PropGrowth, Values: model.Constant(0.01)}
+	st, rec := seed(t)
+	_, err := DeleteAccount(st, rec, demodata.TSP, Options{})
+	if !errors.Is(err, ErrInUse) || !strings.Contains(err.Error(), "close it instead") {
+		t.Fatalf("got %v, want ErrInUse offering to close", err)
 	}
-	for _, c := range []struct {
-		name  string
-		block func(t *testing.T, st *store.Store, rec *model.Record)
-		want  string
-	}{
-		{"entries", nil, "record entries"},
-		{"account mod", func(t *testing.T, st *store.Store, rec *model.Record) {
-			mustOp(t, func() (*Result, error) {
-				return AddMod(st, rec, demodata.ProjBase, mod(model.KindAccount, "scratch"), Options{})
-			})
-		}, "projection"},
-		{"asset mod", func(t *testing.T, st *store.Store, rec *model.Record) {
-			mustOp(t, func() (*Result, error) {
-				return AddMod(st, rec, demodata.ProjBase, mod(model.KindAsset, "acct:scratch"), Options{})
-			})
-		}, "projection"},
-		{"asset setting", func(t *testing.T, st *store.Store, rec *model.Record) {
-			mustOp(t, func() (*Result, error) {
-				return AddAssetSetting(st, rec, demodata.ProjBase, model.AssetSetting{Asset: "acct:scratch", Start: model.Ptr(model.D(2027, time.January, 1))}, Options{})
-			})
-		}, "projection"},
-		{"member", func(t *testing.T, st *store.Store, rec *model.Record) {
-			mustOp(t, func() (*Result, error) {
-				return AddMember(st, rec, demodata.Liquid, model.AccountMember(scratch), Options{})
-			})
-		}, "asset"},
-		{"default asset member", func(t *testing.T, st *store.Store, rec *model.Record) {
-			mustOp(t, func() (*Result, error) {
-				return AddMember(st, rec, demodata.Liquid, model.AssetMember("acct:scratch"), Options{})
-			})
-		}, "asset"},
-		{"budget item", func(t *testing.T, st *store.Store, rec *model.Record) {
-			it := goodItem()
-			it.Account = scratch
-			mustOp(t, func() (*Result, error) { return AddBudgetItem(st, rec, it, Options{}) })
-		}, "budget item"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			st, rec := seed(t)
-			target := demodata.TSP
-			if c.block != nil {
-				rec = withEmptyAccount(t, st, rec)
-				c.block(t, st, rec)
-				rec, target = reload(t, st), scratch
-			}
-			_, err := DeleteAccount(st, rec, target, Options{})
-			if !errors.Is(err, ErrInUse) || !strings.Contains(err.Error(), c.want) {
-				t.Fatalf("got %v, want ErrInUse mentioning %q", err, c.want)
-			}
-			if reload(t, st).Account(target) == nil {
-				t.Error("the account is gone")
-			}
-		})
+	if reload(t, st).Account(demodata.TSP) == nil {
+		t.Error("the account is gone")
 	}
 	dataRefused(t, ErrUnknownObject, func(st *store.Store, rec *model.Record) (*Result, error) {
 		return DeleteAccount(st, rec, "nope", Options{})
@@ -196,27 +148,29 @@ func TestDeleteAccountWithOnlyVoidedEntriesIsRefused(t *testing.T) {
 	}
 }
 
-func TestDeleteAssetChecksAccountModifications(t *testing.T) {
-	growth := func(id model.AccountID) model.Modification {
-		return model.Modification{Target: model.ObjectRef{Kind: model.KindAccount, ID: string(id)}, Property: model.PropGrowth, Values: model.Constant(0.01)}
-	}
-	dataRefused(t, ErrInUse, func(st *store.Store, rec *model.Record) (*Result, error) {
-		mustOp(t, func() (*Result, error) {
-			return AddMod(st, rec, demodata.ProjBase, growth(demodata.Checking), Options{})
-		})
-		res, err := DeleteAsset(st, reload(t, st), demodata.Liquid, Options{})
-		if err != nil && !strings.Contains(err.Error(), string(demodata.Checking)) {
-			t.Errorf("the refusal does not name the checking modification: %v", err)
-		}
-		return res, err
-	})
-	// A modification of an account the asset does not contain does not stop the delete.
+func TestDeleteAssetKeepsAccountModifications(t *testing.T) {
+	growth := model.Modification{Target: model.ObjectRef{Kind: model.KindAccount, ID: string(demodata.Checking)}, Property: model.PropGrowth, Values: model.Constant(0.01)}
 	st, rec := seed(t)
-	mustOp(t, func() (*Result, error) {
-		return AddMod(st, rec, demodata.ProjBase, growth(demodata.Brokerage), Options{})
-	})
-	if _, err := DeleteAsset(st, reload(t, st), demodata.Retirement, Options{}); err != nil {
-		t.Errorf("unrelated delete: %v", err)
+	mustOp(t, func() (*Result, error) { return AddMod(st, rec, demodata.ProjBase, growth, Options{}) })
+	rec = reload(t, st)
+	plan, err := AssetDeletePlan(rec, demodata.Liquid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range plan.Affected {
+		if a.Kind == AffectedModification {
+			t.Errorf("the plan lists a modification: %+v", a)
+		}
+	}
+	if _, err := DeleteAsset(st, rec, demodata.Liquid, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	after := reload(t, st)
+	if after.Asset(demodata.Liquid) != nil || after.Account(demodata.Checking) == nil {
+		t.Error("the asset is still there or the account is gone")
+	}
+	if !slices.ContainsFunc(after.Projection(demodata.ProjBase).Mods, func(m model.Modification) bool { return m.Target == growth.Target }) {
+		t.Error("the modification of the account is gone")
 	}
 }
 
@@ -294,6 +248,37 @@ func TestRestoreDocuments(t *testing.T) {
 	}
 }
 
+func TestRestoreDocumentsRestoresProjections(t *testing.T) {
+	st, rec := seed(t)
+	rec = withEmptyAccount(t, st, rec)
+	growth := model.Modification{Target: model.ObjectRef{Kind: model.KindAccount, ID: "scratch"}, Property: model.PropGrowth, Values: model.Constant(0.01)}
+	mustOp(t, func() (*Result, error) { return AddMod(st, rec, demodata.ProjBase, growth, Options{}) })
+	before := reload(t, st)
+	del, err := DeleteAccount(st, before, "scratch", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mods := reload(t, st).Projection(demodata.ProjBase).Mods; len(mods) != len(before.Projection(demodata.ProjBase).Mods)-1 {
+		t.Fatalf("the delete left the modification: %d", len(mods))
+	}
+	back, err := RestoreDocuments(st, del.Record, before, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []*model.Record{back.Record, reload(t, st)} {
+		if r.Account("scratch") == nil || !reflect.DeepEqual(r.Projections, before.Projections) {
+			t.Error("the account or the projections were not restored")
+		}
+	}
+	redo, err := RestoreDocuments(st, back.Record, del.Record, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if redo.Record.Account("scratch") != nil || !reflect.DeepEqual(reload(t, st).Projections, del.Record.Projections) {
+		t.Error("the redo did not remove the account and its modification")
+	}
+}
+
 func TestDeleteAccountNamedAsACounterIsRefused(t *testing.T) {
 	st, rec := seed(t)
 	rec = withEmptyAccount(t, st, rec)
@@ -305,6 +290,9 @@ func TestDeleteAccountNamedAsACounterIsRefused(t *testing.T) {
 	rec = reload(t, st)
 	if _, err := DeleteAccount(st, rec, "scratch", Options{}); !errors.Is(err, ErrInUse) || !strings.Contains(err.Error(), string(demodata.Checking)) {
 		t.Errorf("counter of a live entry: %v", err)
+	}
+	if plan, err := AccountDeletePlan(st, rec, "scratch"); err != nil || plan.Blocked == "" || len(plan.Affected) != 0 {
+		t.Errorf("plan of a counter account: %+v, %v", plan, err)
 	}
 	if _, err := VoidEntry(st, rec, res.Entry.ID, "", Options{}); err != nil {
 		t.Fatal(err)

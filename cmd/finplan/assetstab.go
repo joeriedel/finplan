@@ -5,6 +5,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -36,7 +37,7 @@ func renameAssetProblem(st *store.Store, rec *model.Record, id model.AssetID, na
 	return reasonOf(err)
 }
 
-// deleteAssetProblem says why the asset cannot be deleted, or "" if it can: what ops.DeleteAsset refuses.
+// deleteAssetProblem says why the asset cannot be deleted, or "" if it can: what ops.DeleteAsset refuses. Whatever refers to the asset is no problem; the delete dialog lists it.
 func deleteAssetProblem(st *store.Store, rec *model.Record, id model.AssetID) string {
 	_, err := ops.DeleteAsset(st, rec, id, ops.Options{DryRun: true})
 	return reasonOf(err)
@@ -111,6 +112,7 @@ type assetsTab struct {
 	delFor    model.AssetID
 	delReason string
 	delKnown  bool
+	del       deleteDialog
 	fieldEditor
 
 	newName string
@@ -536,10 +538,15 @@ func (t *assetsTab) lifecycle(asset *model.Asset) {
 		t.delFor, t.delReason, t.delKnown = asset.ID, deleteAssetProblem(t.a.st, t.a.rec, asset.ID), true
 	}
 	actionButton("Delete", t.delReason, func() {
+		if plan, err := ops.AssetDeletePlan(t.a.rec, asset.ID); err == nil {
+			t.del.ask(fmt.Sprintf("asset %q", asset.Name), plan)
+		}
+	})
+	if t.del.draw(false, "") == deleteGo {
 		if t.a.edit("delete asset", func() (*ops.Result, error) {
 			return ops.DeleteAsset(t.a.st, t.a.rec, asset.ID, ops.Options{})
 		}) {
 			t.sel = ""
 		}
-	})
+	}
 }

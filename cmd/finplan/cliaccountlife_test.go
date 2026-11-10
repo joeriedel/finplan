@@ -5,6 +5,7 @@ package main
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -149,23 +150,33 @@ func TestCLIClosingAnAccountStopsTheTransfersIntoIt(t *testing.T) {
 	}
 }
 
-func TestCLIAccountDeleteIsRefusedWhileReferenced(t *testing.T) {
+func TestCLIAccountDeleteRemovesWhatRefersToIt(t *testing.T) {
 	path := seededFile(t)
 	data(t, path, "", "account", "new", "Scratch", "--type", "savings", "--tax", "taxable")
 	write(t, path, "", "mod", "add", "Base", "--target", "account:scratch", "--property", "growth", "--value", "0.01")
-	refusedWrite(t, path, "", 1, "in_use", "account", "delete", "scratch")
+	affected := errorAffected(t, path, "confirm_required", "account", "delete", "scratch")
+	if len(affected) != 1 || affected[0].Kind != "modification" || affected[0].In != "Base" {
+		t.Fatalf("affected %+v", affected)
+	}
+	data(t, path, "", "account", "delete", "scratch", "--force")
+	var p struct {
+		Mods []any `json:"modifications"`
+	}
+	cliJSON(t, &p, "--db", path, "projection", "show", "Base")
+	if len(p.Mods) != 0 {
+		t.Errorf("the modification of the deleted account is left: %+v", p)
+	}
 }
 
-func TestCLIAssetDeleteChecksAccountModifications(t *testing.T) {
+func TestCLIAccountWithRecordsIsClosedNotDeleted(t *testing.T) {
 	path := seededFile(t)
-	write(t, path, "", "mod", "add", "Base", "--target", "account:checking", "--property", "growth", "--value", "0.01")
-	refusedWrite(t, path, "", 1, "in_use", "asset", "delete", "liquid")
-
-	// A modification of an account the asset does not contain does not stop the delete.
-	path = seededFile(t)
-	write(t, path, "", "mod", "add", "Base", "--target", "account:brokerage", "--property", "growth", "--value", "0.01")
-	data(t, path, "", "asset", "delete", "retirement")
-	if _, ok := listAssets(t, path)["retirement"]; ok {
-		t.Error("the asset was not deleted")
+	for _, extra := range [][]string{{}, {"--force"}, {"--dry-run"}} {
+		code, out := wcli(t, "", append([]string{"--db", path, "account", "delete", "checking"}, extra...)...)
+		if code != 1 || !strings.Contains(string(out), `"in_use"`) || !strings.Contains(string(out), "close it instead") {
+			t.Errorf("delete %v exited %d: %s", extra, code, out)
+		}
+	}
+	if w := data(t, path, "", "account", "close", "checking", "--date", "2026-11-09"); w.Account.Closed == nil {
+		t.Errorf("close: %+v", w.Account)
 	}
 }

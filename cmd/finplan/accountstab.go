@@ -120,12 +120,6 @@ func closeProblem(st *store.Store, rec *model.Record, id model.AccountID, date s
 	return reasonOf(err)
 }
 
-// deleteProblem says why the account cannot be deleted, or "" if it can: what ops.DeleteAccount refuses.
-func deleteProblem(st *store.Store, rec *model.Record, id model.AccountID) string {
-	_, err := ops.DeleteAccount(st, rec, id, ops.Options{DryRun: true})
-	return reasonOf(err)
-}
-
 // interval reads a default balance interval from the form: a blank start is the beginning of time and a blank end no end.
 func interval(from, to, value string) (model.Interval, error) {
 	iv := model.Interval{From: model.MinDate}
@@ -180,10 +174,7 @@ type acctTab struct {
 	rec  *model.Record
 	rows []listRow
 	sel  model.AccountID
-	// delFor and delReason cache deleteProblem for the selected account, which reads the database.
-	delFor    model.AccountID
-	delReason string
-	delKnown  bool
+	del  deleteDialog
 	fieldEditor
 
 	add                   newAcctForm
@@ -195,7 +186,7 @@ type acctTab struct {
 
 func (t *acctTab) reset() {
 	t.rows = listAccounts(t.rec)
-	t.bufs, t.errs, t.delKnown = map[string]string{}, map[string]string{}, false
+	t.bufs, t.errs = map[string]string{}, map[string]string{}
 }
 
 func (t *acctTab) draw() {
@@ -451,7 +442,7 @@ func (t *acctTab) lifecycle(acct *model.Account) {
 			})
 		})
 	} else {
-		imgui.TextWrapped("Closing keeps the history and shows the account as 0 after its close date. Only an account without record entries can be deleted.")
+		imgui.TextWrapped("Closing keeps the history and shows the account as 0 after its close date. Only an account without record entries can be deleted; deleting it also deletes the budget items that use it.")
 		t.label("Closes on")
 		imgui.SetNextItemWidth(em * 10)
 		imgui.InputTextWithHint("##closeon", "today; or "+dateLayout, &t.closeOn, 0, nil)
@@ -465,17 +456,32 @@ func (t *acctTab) lifecycle(acct *model.Account) {
 			}
 		})
 	}
-	if !t.delKnown || t.delFor != acct.ID {
-		t.delFor, t.delReason, t.delKnown = acct.ID, deleteProblem(t.a.st, t.a.rec, acct.ID), true
-	}
 	imgui.Spacing()
-	actionButton("Delete", t.delReason, func() {
+	actionButton("Delete", "", func() {
+		if plan, err := ops.AccountDeletePlan(t.a.st, t.a.rec, acct.ID); err != nil {
+			t.a.notifyFailed("delete account", err)
+		} else {
+			t.del.ask(fmt.Sprintf("account %q", acct.Name), plan)
+		}
+	})
+	switch t.del.draw(!acct.IsClosed(), closeProblem(t.a.st, t.a.rec, acct.ID, t.closeOn)) {
+	case deleteGo:
 		if t.a.edit("delete account", func() (*ops.Result, error) {
 			return ops.DeleteAccount(t.a.st, t.a.rec, acct.ID, ops.Options{})
 		}) {
 			t.sel = ""
 		}
-	})
+	case deleteClose:
+		d, err := closeDate(t.a.rec, t.closeOn)
+		if err != nil {
+			return
+		}
+		if t.a.edit("close account", func() (*ops.Result, error) {
+			return ops.CloseAccount(t.a.st, t.a.rec, acct.ID, d, ops.Options{})
+		}) {
+			t.closeOn = ""
+		}
+	}
 }
 
 // addForm draws the Add account form under the list.

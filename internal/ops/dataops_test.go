@@ -180,21 +180,11 @@ func TestDeleteAsset(t *testing.T) {
 		t.Error(err)
 	}
 
-	dataRefused(t, ErrInUse, func(st *store.Store, rec *model.Record) (*Result, error) {
-		return DeleteAsset(st, rec, demodata.AllCash, Options{})
-	})
 	dataRefused(t, ErrInvalidValue, func(st *store.Store, rec *model.Record) (*Result, error) {
 		return DeleteAsset(st, rec, "acct:checking", Options{})
 	})
 	dataRefused(t, ErrUnknownObject, func(st *store.Store, rec *model.Record) (*Result, error) {
 		return DeleteAsset(st, rec, "nope", Options{})
-	})
-	dataRefused(t, ErrInUse, func(st *store.Store, rec *model.Record) (*Result, error) {
-		m := model.Modification{Target: model.ObjectRef{Kind: model.KindAsset, ID: string(demodata.Liquid)}, Property: model.PropGrowth, Values: model.Constant(0.01)}
-		if _, err := AddMod(st, rec, demodata.ProjBase, m, Options{}); err != nil {
-			t.Fatal(err)
-		}
-		return DeleteAsset(st, reload(t, st), demodata.Liquid, Options{})
 	})
 }
 

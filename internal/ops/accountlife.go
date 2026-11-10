@@ -58,39 +58,21 @@ func ReopenAccount(st *store.Store, rec *model.Record, id model.AccountID, o Opt
 	})
 }
 
-// DeleteAccount deletes an account and its default asset. It is ErrUnknownObject for an account the record does not have, and ErrInUse, naming what blocks it, while the account has any entry stored (a voided one too), is the counter account of any entry stored, or is referred to by: a modification of any projection that targets the account or its default asset, or a budget item it adds that uses the account; an asset setting of any projection for its default asset; another asset's member; or a base budget item that uses it as account, from or to. The result's Account is the account as it was. An account with entries is closed instead (CloseAccount).
+// DeleteAccount deletes an account and its default asset, and removes it from what refers to it, as AccountDeletePlan lists: other assets' members, asset settings and modifications that name it or its default asset, the budget items (base and projection-added) that move money in or out of it, and the modifications of those base items. It is ErrUnknownObject for an account the record does not have, and ErrInUse while the account has any entry stored (a voided one too) or is the counter account of any entry stored: close it instead (CloseAccount). The result's Account is the account as it was.
 func DeleteAccount(st *store.Store, rec *model.Record, id model.AccountID, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		a := next.Account(id)
 		if a == nil {
 			return Result{}, unknownAccount(id)
 		}
-		stored, err := st.HasEntries(id)
+		blocked, err := accountBlocked(st, a)
 		if err != nil {
-			return Result{}, fmt.Errorf("could not read the entries of account %q: %w", id, err)
-		}
-		if stored || len(a.Snapshots) > 0 || len(a.Transactions) > 0 {
-			return Result{}, refuse(ErrInUse, "account %q has record entries: close it instead", id)
-		}
-		if err := checkNotCounter(st, id); err != nil {
 			return Result{}, err
 		}
-		def := model.DefaultAssetID(id)
-		for _, other := range next.Assets {
-			if other.ID != def && slices.ContainsFunc(other.Members, func(m model.Member) bool { return m.Account == id || m.Asset == def }) {
-				return Result{}, refuse(ErrInUse, "account %q is a member of asset %q", id, other.ID)
-			}
+		if blocked != "" {
+			return Result{}, refuse(ErrInUse, "%s", blocked)
 		}
-		for _, it := range next.Budget.Items {
-			if it.Account == id || it.From == id || it.To == id {
-				return Result{}, refuse(ErrInUse, "account %q is used by budget item %q", id, it.ID)
-			}
-		}
-		for _, p := range next.Projections {
-			if refersTo(p, id) {
-				return Result{}, refuse(ErrInUse, "account %q is used by projection %q", id, p.Name)
-			}
-		}
+		unlinkAccount(next, id)
 		if err := next.RemoveAccount(id); err != nil {
 			return Result{}, refuse(ErrInvalidValue, "%v", err)
 		}
@@ -110,7 +92,7 @@ func checkNotCounter(st *store.Store, id model.AccountID) error {
 	return nil
 }
 
-// RestoreDocuments replaces the record's accounts and assets with copies of those of src, an earlier state of this record: how an editor undoes and redoes an edit of them. Record entries are not restored: an account keeps the entries it has, and one that has entries, or is the counter account of any, cannot be removed (ErrInUse), so such a restore saves nothing.
+// RestoreDocuments replaces the record's accounts, assets, base budget and projections with copies of those of src, an earlier state of this record: how an editor undoes and redoes an edit of them. Record entries are not restored: an account keeps the entries it has, and one that has entries, or is the counter account of any, cannot be removed (ErrInUse), so such a restore saves nothing.
 func RestoreDocuments(st *store.Store, rec *model.Record, src *model.Record, o Options) (*Result, error) {
 	next := rec.WithDocuments(src)
 	for _, a := range rec.Accounts {

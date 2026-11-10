@@ -61,15 +61,19 @@ type wentry struct {
 	Void    bool
 }
 
+// waffected is one object a delete changes besides the one it deletes.
+type waffected struct{ Kind, In, Detail, Effect string }
+
 type wdata struct {
-	DryRun  bool `json:"dry_run"`
-	Changed bool
-	Removed string
-	Voided  bool
-	Asset   *wasset
-	Account *waccount
-	Entry   *wentry
-	Item    *struct {
+	DryRun   bool `json:"dry_run"`
+	Changed  bool
+	Removed  string
+	Voided   bool
+	Asset    *wasset
+	Account  *waccount
+	Entry    *wentry
+	Affected []waffected
+	Item     *struct {
 		ID, Name, Kind string
 		Amount         float64
 		Growth         float64
@@ -251,7 +255,7 @@ func itoa(n int) string { return strconv.Itoa(n) }
 
 func TestCLIAssetRefusals(t *testing.T) {
 	path := seededFile(t)
-	refusedWrite(t, path, "", 1, "in_use", "asset", "delete", "all-cash")
+	refusedWrite(t, path, "", 1, "confirm_required", "asset", "delete", "all-cash")
 	refusedWrite(t, path, "", 1, "invalid", "asset", "delete", "acct:checking")
 	refusedWrite(t, path, "", 1, "invalid", "asset", "rename", "acct:checking", "x")
 	refusedWrite(t, path, "", 1, "not_found", "asset", "delete", "no-such-asset")
@@ -281,9 +285,9 @@ func TestCLIAssetRefusals(t *testing.T) {
 	refusedWrite(t, path, "", 2, "usage", "asset", "set-param", "retirement")
 	refusedWrite(t, path, "", 2, "usage", "asset", "set-param", "retirement", "--param", "inflation", "--value", "1")
 	refusedWrite(t, path, "", 1, "not_found", "asset", "set-param", "no-such-asset", "--value", "1")
-	// A projection that names the asset keeps it.
+	// A projection that names the asset has to be confirmed.
 	write(t, path, "", "mod", "add", "Base", "--target", "asset:liquid", "--property", "growth", "--value", "0.01")
-	refusedWrite(t, path, "", 1, "in_use", "asset", "delete", "liquid")
+	refusedWrite(t, path, "", 1, "confirm_required", "asset", "delete", "liquid")
 }
 
 func TestCLIAccountCommands(t *testing.T) {
@@ -599,23 +603,142 @@ func TestCLIEmergencyFundScenario(t *testing.T) {
 		t.Errorf("renamed: %+v", a)
 	}
 
-	// Another asset, a projection's asset setting and a modification each keep the asset.
+	// Another asset, a projection's asset setting and a modification each need the delete to be forced.
 	write(t, path, "", "asset", "add-member", "net-worth", "--asset", "emergency-fund")
-	refusedWrite(t, path, "", 1, "in_use", "asset", "delete", "emergency-fund")
+	refusedWrite(t, path, "", 1, "confirm_required", "asset", "delete", "emergency-fund")
 	write(t, path, "", "asset", "remove-member", "net-worth", itoa(memberSeq(t, listAssets(t, path)["net-worth"], `asset "emergency-fund"`)))
 	write(t, path, "", "asset-setting", "add", "Base", "--asset", "emergency-fund", "--start", "2027-03-01")
-	refusedWrite(t, path, "", 1, "in_use", "asset", "delete", "emergency-fund")
+	refusedWrite(t, path, "", 1, "confirm_required", "asset", "delete", "emergency-fund")
 	write(t, path, "", "asset-setting", "remove", "Base", "0")
 	write(t, path, "", "mod", "add", "Base", "--target", "asset:emergency-fund", "--property", "growth", "--value", "0.01")
-	refusedWrite(t, path, "", 1, "in_use", "asset", "delete", "emergency-fund")
+	refusedWrite(t, path, "", 1, "confirm_required", "asset", "delete", "emergency-fund")
 	write(t, path, "", "mod", "remove", "Base", "0")
 
 	w := data(t, path, "", "asset", "delete", "emergency-fund")
-	if w.Removed != "emergency-fund" {
+	if w.Removed != "emergency-fund" || len(w.Affected) != 0 {
 		t.Errorf("delete: %+v", w)
 	}
 	if _, ok := listAssets(t, path)["emergency-fund"]; ok {
 		t.Error("the deleted asset is still listed")
+	}
+}
+
+// errorAffected runs a command that must be refused with the code and returns the objects the error lists.
+func errorAffected(t *testing.T, path, code string, args ...string) []waffected {
+	t.Helper()
+	exit, out := wcli(t, "", append([]string{"--db", path}, args...)...)
+	var e struct {
+		Error struct {
+			Code     string
+			Affected []waffected
+		}
+	}
+	if exit != 1 || json.Unmarshal(out, &e) != nil || e.Error.Code != code {
+		t.Fatalf("finplan %v exited %d, want 1 with code %s: %s", args, exit, code, out)
+	}
+	return e.Error.Affected
+}
+
+func countKind(list []waffected, kind string) int {
+	n := 0
+	for _, a := range list {
+		if a.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+func TestCLIAssetDeleteListsAndRemovesWhatRefersToIt(t *testing.T) {
+	path := seededFile(t)
+	write(t, path, "", "asset", "new", "Emergency fund")
+	write(t, path, "", "asset", "add-member", "liquid", "--asset", "emergency-fund")
+	write(t, path, "", "asset-setting", "add", "New job", "--asset", "emergency-fund", "--start", "2027-03-01")
+
+	affected := errorAffected(t, path, "confirm_required", "asset", "delete", "emergency-fund")
+	if len(affected) != 2 || countKind(affected, "member") != 1 || countKind(affected, "asset setting") != 1 {
+		t.Fatalf("affected %+v", affected)
+	}
+	for _, a := range affected {
+		if a.Kind == "member" && a.In != "liquid" || a.Kind == "asset setting" && a.In != "New job" {
+			t.Errorf("container of %+v", a)
+		}
+	}
+	if dry := data(t, path, "", "asset", "delete", "emergency-fund", "--force"); len(dry.Affected) != 2 || dry.Removed != "emergency-fund" {
+		t.Errorf("forced delete: %+v", dry)
+	}
+	if _, ok := listAssets(t, path)["emergency-fund"]; ok {
+		t.Error("the deleted asset is still listed")
+	}
+	for _, m := range listAssets(t, path)["liquid"].Members {
+		if m.Asset != nil && *m.Asset == "emergency-fund" {
+			t.Errorf("liquid still has the member %+v", m)
+		}
+	}
+	var p struct {
+		AssetSettings []any `json:"asset_settings"`
+	}
+	cliJSON(t, &p, "--db", path, "projection", "show", "New job")
+	if len(p.AssetSettings) != 0 {
+		t.Errorf("the asset setting is still there: %+v", p)
+	}
+}
+
+func TestCLIAssetDeleteKeepsAccountModifications(t *testing.T) {
+	type shown struct {
+		Mods []any `json:"modifications"`
+	}
+	for _, referenced := range []bool{false, true} {
+		path := seededFile(t)
+		if referenced {
+			write(t, path, "", "asset-setting", "add", "New job", "--asset", "liquid", "--start", "2027-03-01")
+		}
+		var before shown
+		cliJSON(t, &before, "--db", path, "projection", "show", "New job")
+		if referenced {
+			affected := errorAffected(t, path, "confirm_required", "asset", "delete", "liquid")
+			if len(affected) != 1 || countKind(affected, "asset setting") != 1 {
+				t.Errorf("affected %+v", affected)
+			}
+		}
+		args := []string{"asset", "delete", "liquid"}
+		if referenced {
+			args = append(args, "--force")
+		}
+		w := data(t, path, "", args...)
+		if w.Removed != "liquid" || countKind(w.Affected, "modification") != 0 || (len(w.Affected) != 0) != referenced {
+			t.Errorf("referenced %v: delete %+v", referenced, w)
+		}
+		if _, ok := listAssets(t, path)["liquid"]; ok {
+			t.Errorf("referenced %v: the deleted asset is still listed", referenced)
+		}
+		var after shown
+		cliJSON(t, &after, "--db", path, "projection", "show", "New job")
+		if len(before.Mods) == 0 || len(after.Mods) != len(before.Mods) {
+			t.Errorf("referenced %v: modifications of New job: %d before, %d after the delete", referenced, len(before.Mods), len(after.Mods))
+		}
+	}
+}
+
+func TestCLIAccountDeleteListsAndRemovesItsBudgetItems(t *testing.T) {
+	path := seededFile(t)
+	data(t, path, "", "account", "new", "Scratch", "--type", "savings", "--tax", "taxable")
+	write(t, path, "", "budget", "add", "--name", "Scratch deposit", "--kind", "income", "--amount", "100", "--account", "scratch", "--every", "monthly", "--on", "2027-01-05")
+	write(t, path, "", "item", "add", "New job", "--name", "Scratch gig", "--kind", "income", "--amount", "50", "--account", "scratch", "--every", "monthly", "--on", "2027-01-06")
+
+	affected := errorAffected(t, path, "confirm_required", "account", "delete", "scratch")
+	if countKind(affected, "budget item") != 2 {
+		t.Fatalf("affected %+v", affected)
+	}
+	if w := data(t, path, "", "account", "delete", "scratch", "--force"); w.Removed != "scratch" || len(w.Affected) != 2 {
+		t.Errorf("forced delete: %+v", w)
+	}
+	var items []struct{ Account *string }
+	cliJSON(t, &items, "--db", path, "budget", "list")
+	for _, it := range items {
+		if it.Account != nil && *it.Account == "scratch" {
+			t.Errorf("a budget item of the deleted account is left: %+v", it)
+		}
 	}
 }
 

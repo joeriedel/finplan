@@ -165,7 +165,7 @@ func (r *Record) RemoveAccount(id AccountID) error {
 	return nil
 }
 
-// WithDocuments returns a copy of r whose accounts, assets and base budget are copies of src's, as an editor's undo needs. The entries stay r's: an account src has takes r's snapshots and transactions, or none if r lacks it.
+// WithDocuments returns a copy of r whose accounts, assets, base budget and projections are copies of src's, as an editor's undo needs. The entries stay r's: an account src has takes r's snapshots and transactions, or none if r lacks it.
 func (r *Record) WithDocuments(src *Record) *Record {
 	n := src.Clone()
 	for _, a := range n.Accounts {
@@ -175,7 +175,7 @@ func (r *Record) WithDocuments(src *Record) *Record {
 		}
 	}
 	c := r.Clone()
-	c.Budget = n.Budget
+	c.Budget, c.Projections = n.Budget, n.Projections
 	c.Accounts, c.Assets, c.accountIdx, c.assetIdx, c.seq = n.Accounts, n.Assets, n.accountIdx, n.assetIdx, n.seq
 	return c
 }

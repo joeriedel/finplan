@@ -26,6 +26,8 @@ const (
 
 const defaultIndexNote = "the interval's index from 0, in the order the default list of asset list shows"
 
+const forceDesc = "delete although other objects refer to it: they are changed as the error's affected (or --dry-run) lists"
+
 var accountTypes = func() []string {
 	var out []string
 	for _, t := range model.AccountTypes {
@@ -57,9 +59,10 @@ var dataCommands = []*command{
 		run:    cmdAssetRename,
 	},
 	{
-		Name: "asset delete", Summary: "delete an aggregate asset; refused while another asset has it as a member or a projection has a setting or modification for it or for an account under it",
+		Name: "asset delete", Summary: "delete an aggregate asset and remove it from what refers to it: other assets' members and projections' asset settings and modifications for it; refused with confirm_required, listing them in the error's affected, unless --force is given or nothing refers to it",
 		Args:   []argDef{{Name: "asset", Description: "asset id or name", Required: true}},
-		Output: "{dry_run, changed, removed: asset id, asset: the asset as it was, as asset list prints it}; its members are removed with it, the accounts they name are not",
+		Flags:  []flagDef{{Name: "force", Type: typeBool, Default: "false", Description: forceDesc}},
+		Output: "{dry_run, changed, removed: asset id, asset: the asset as it was, as asset list prints it, affected: [{kind, in, detail, effect}]}; its members are removed with it, the accounts they name are not, and modifications of those accounts stay",
 		run:    cmdAssetDelete,
 	},
 	{
@@ -181,9 +184,10 @@ var dataCommands = []*command{
 		run:    cmdAccountReopen,
 	},
 	{
-		Name: "account delete", Summary: "delete an account and its default asset; refused while it has record entries (close it instead) or a budget item, asset member, modification or asset setting refers to it",
+		Name: "account delete", Summary: "delete an account and its default asset, and remove it from what refers to it: asset members, asset settings and modifications for it, and the budget items (base and projection-added) that move money in or out of it with the modifications of them; refused with confirm_required, listing them in the error's affected, unless --force is given or nothing refers to it; refused with in_use while it has record entries or is the counter account of one (close it instead)",
 		Args:   []argDef{{Name: "account", Description: "account id or name", Required: true}},
-		Output: "{dry_run, changed, removed: account id, account: the account as it was, as account list prints it}",
+		Flags:  []flagDef{{Name: "force", Type: typeBool, Default: "false", Description: forceDesc}},
+		Output: "{dry_run, changed, removed: account id, account: the account as it was, as account list prints it, affected: [{kind, in, detail, effect}]}",
 		run:    cmdAccountDelete,
 	},
 	{
@@ -374,11 +378,39 @@ func cmdAssetDelete(c *call) (any, error) {
 		return nil, err
 	}
 	a := c.rec.Asset(id)
+	plan, err := ops.AssetDeletePlan(c.rec, id)
+	if err != nil {
+		return nil, opsError(err)
+	}
+	if err := c.confirmDelete(plan); err != nil {
+		return nil, err
+	}
 	res, err := ops.DeleteAsset(c.st, c.rec, id, c.options())
 	if err != nil {
 		return nil, opsError(err)
 	}
-	return map[string]any{"dry_run": c.options().DryRun, "changed": true, "removed": res.Removed, "asset": assetJSON(c.rec, a)}, nil
+	return map[string]any{"dry_run": c.options().DryRun, "changed": true, "removed": res.Removed, "asset": assetJSON(c.rec, a), "affected": affectedList(plan)}, nil
+}
+
+// affectedList is the plan's affected objects, never null.
+func affectedList(plan ops.DeletePlan) []ops.Affected {
+	if plan.Affected == nil {
+		return []ops.Affected{}
+	}
+	return plan.Affected
+}
+
+// confirmDelete refuses a delete that has to be forced: in_use when the plan is blocked, confirm_required when it changes other objects and neither --force nor --dry-run is given.
+func (c *call) confirmDelete(plan ops.DeletePlan) error {
+	if plan.Blocked != "" {
+		return failErr("in_use", "%s", plan.Blocked)
+	}
+	if len(plan.Affected) > 0 && !c.options().DryRun && c.str("force") != "true" {
+		err := failErr("confirm_required", "the delete changes %d other objects: run it again with --force, or with --dry-run to see the plan", len(plan.Affected)).(*cliError)
+		err.Affected = plan.Affected
+		return err
+	}
+	return nil
 }
 
 func splitList(s string) []string {
@@ -643,11 +675,18 @@ func cmdAccountDelete(c *call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	plan, err := ops.AccountDeletePlan(c.st, c.rec, id)
+	if err != nil {
+		return nil, opsError(err)
+	}
+	if err := c.confirmDelete(plan); err != nil {
+		return nil, err
+	}
 	res, err := ops.DeleteAccount(c.st, c.rec, id, c.options())
 	if err != nil {
 		return nil, opsError(err)
 	}
-	return map[string]any{"dry_run": c.options().DryRun, "changed": true, "removed": res.Removed, "account": accountJSON(res.Account)}, nil
+	return map[string]any{"dry_run": c.options().DryRun, "changed": true, "removed": res.Removed, "account": accountJSON(res.Account), "affected": affectedList(plan)}, nil
 }
 
 // entryResult is the output of an operation on an entry.

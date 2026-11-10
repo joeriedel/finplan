@@ -36,7 +36,7 @@ var (
 	ErrUnknownTarget = errors.New("ops: unknown modification target")
 	// ErrUnknownObject is returned for an account, asset, asset member, base budget item or entry that the record does not have.
 	ErrUnknownObject = errors.New("ops: unknown object")
-	// ErrInUse is returned by a delete of an asset or account that other assets, projections or the budget still refer to, and of an account that has record entries.
+	// ErrInUse is returned by a delete of an account that has record entries or is the counter account of one: it is closed instead.
 	ErrInUse = errors.New("ops: object is still in use")
 )
 
