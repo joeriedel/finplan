@@ -182,8 +182,10 @@ type acctTab struct {
 	ent                   entriesUI
 
 	// ledger says whether the ledger panel is folded out to the right of the detail.
-	ledger bool
-	closeOn               string
+	ledger  bool
+	closeOn string
+	// closeCheck keeps the close problem of the account, which reads the database, until the record, account or date changes.
+	closeCheck            problemCache
 	ivFrom, ivTo, ivValue string
 }
 
@@ -474,6 +476,9 @@ func (t *acctTab) defaults(acct *model.Account) {
 // lifecycle draws closing, reopening and deleting the account.
 func (t *acctTab) lifecycle(acct *model.Account) {
 	em := imgui.FontSize()
+	closeReason := t.closeCheck.get(fmt.Sprintf("%p|%s|%s", t.a.rec, acct.ID, t.closeOn), func() string {
+		return closeProblem(t.a.st, t.a.rec, acct.ID, t.closeOn)
+	})
 	imgui.Spacing()
 	imgui.SeparatorText("Close or delete")
 	if acct.IsClosed() {
@@ -489,7 +494,7 @@ func (t *acctTab) lifecycle(acct *model.Account) {
 		imgui.SetNextItemWidth(em * 10)
 		imgui.InputTextWithHint("##closeon", "today; or "+dateHint, &t.closeOn, 0, nil)
 		t.label("")
-		actionButton("Close", closeProblem(t.a.st, t.a.rec, acct.ID, t.closeOn), func() {
+		actionButton("Close", closeReason, func() {
 			d, _ := closeDate(t.a.rec, t.closeOn)
 			if t.a.edit("close account", func() (*ops.Result, error) {
 				return ops.CloseAccount(t.a.st, t.a.rec, acct.ID, d, ops.Options{})
@@ -506,7 +511,7 @@ func (t *acctTab) lifecycle(acct *model.Account) {
 			t.del.ask(fmt.Sprintf("account %q", acct.Name), plan)
 		}
 	})
-	switch t.del.draw(!acct.IsClosed(), closeProblem(t.a.st, t.a.rec, acct.ID, t.closeOn)) {
+	switch t.del.draw(!acct.IsClosed(), closeReason) {
 	case deleteGo:
 		if t.a.edit("delete account", func() (*ops.Result, error) {
 			return ops.DeleteAccount(t.a.st, t.a.rec, acct.ID, ops.Options{})
