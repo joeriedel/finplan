@@ -160,7 +160,7 @@ func (t *assetsTab) params(asset *model.Asset) {
 		t.label("Growth")
 		imgui.TextUnformatted(describeWhen(asset.Params[model.PropGrowth]))
 		for _, g := range asset.Params[model.PropGrowth].Segments() {
-			imgui.TextDisabled("    " + segmentText(g))
+			disabledText("    " + segmentText(g))
 		}
 	}
 	if kind != growthNone {
@@ -251,7 +251,7 @@ func (t *assetsTab) effectiveGrowth(asset *model.Asset) {
 				if l.Applies {
 					imgui.TextUnformatted(text)
 				} else {
-					imgui.TextDisabled(text)
+					disabledText(text)
 				}
 			}
 		}

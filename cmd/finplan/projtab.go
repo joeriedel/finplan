@@ -1435,6 +1435,13 @@ func describeWhen(s model.Schedule) string {
 	return fmt.Sprintf("%d periods from %s", len(segs), segs[0].From)
 }
 
+// disabledText draws msg in the disabled colour as plain text; TextDisabled takes a format string, which a rate such as "4%" would corrupt.
+func disabledText(msg string) {
+	imgui.PushStyleColorVec4(imgui.ColText, *imgui.StyleColorVec4(imgui.ColTextDisabled))
+	imgui.TextUnformatted(msg)
+	imgui.PopStyleColor()
+}
+
 // errorText draws msg in the error colour as plain text; msg quotes user input, so it must never be a format string.
 func errorText(msg string) {
 	imgui.PushStyleColorVec4(imgui.ColText, rgba(colError, 1))

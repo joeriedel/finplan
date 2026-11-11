@@ -186,6 +186,9 @@ func (s *timelineStrip) draw(title string, values model.Schedule, start model.Da
 		st.sel = len(segs) - 1
 	}
 
+	// The strip's own scope keeps its Delete button from sharing an ID with the Delete button of the form around it.
+	imgui.PushIDStr("timeline")
+	defer imgui.PopID()
 	imgui.Separator()
 	imgui.AlignTextToFramePadding()
 	imgui.TextUnformatted(title)

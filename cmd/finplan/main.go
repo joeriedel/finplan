@@ -52,7 +52,7 @@ func main() {
 	frames := flag.Int("frames", 10, "with --screenshot: how many frames to draw before saving")
 	size := flag.String("size", "1280x800", "with --screenshot: the window size in pixels, WxH")
 	sel := flag.String("select", "", "with --screenshot: the projection, asset or account to select, by name (Projections, Assets and Accounts tabs)")
-	open := flag.String("open", "", "with --screenshot: a state to show, one of add-line (Graph tab), target (Projections tab, needs --select), member (Assets tab, needs --select), new-item (Projections tab, needs --select; the Add form for a new budget item) budget-item (Budget tab; the first item's editor), timeline (Projections tab, needs --select; the strip editor of the projection's first modification with a schedule) and asset-timeline (Assets tab, needs --select; the strip editor of the asset's growth, which must have growth; the demo's 529 accounts has a schedule)")
+	open := flag.String("open", "", "with --screenshot: a state to show, one of add-line (Graph tab), target (Projections tab, needs --select), member (Assets tab, needs --select), new-item (Projections tab, needs --select; the Add form for a new budget item), budget-item (Budget tab; the first item's editor), timeline (Projections tab, needs --select; the strip editor of the projection's first modification with a schedule) and asset-timeline (Assets tab, needs --select; the strip editor of the asset's growth, which must have growth; the demo's 529 accounts has a schedule)")
 	checkIDs := flag.Bool("check-ids", false, "with --screenshot: after saving, move the mouse over every widget, in a window made tall enough to show them all, and fail if two visible widgets share an ID")
 	flag.Parse()
 	var shot *shotOptions
