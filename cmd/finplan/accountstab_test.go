@@ -417,10 +417,10 @@ func TestLedgerWidths(t *testing.T) {
 	}{
 		{em * 115, em * 40, em * 32},
 		{em * 110, em * 40, em * 30},
-		{em * 105, em * 39, em * 26},
-		{em * 100, em * 34, em * 26},
-		{em * 95, em * 29, em * 26},
-		{em * 60, em * 28, em * 26},
+		{em * 105, em * 38, em * 27},
+		{em * 100, em * 33, em * 27},
+		{em * 95, em * 28, em * 27},
+		{em * 60, em * 28, em * 27},
 	} {
 		list, detail := ledgerWidths(tc.avail, em)
 		if list != tc.list || detail != tc.detail {
@@ -440,7 +440,17 @@ func TestAddFormStacked(t *testing.T) {
 	if addFormStacked(em*40-20, em) {
 		t.Error("the form is stacked in the closed list")
 	}
+	// With a vertical scrollbar the list is 14 px narrower, still enough for the rows.
+	if addFormStacked(em*40-20-14, em) {
+		t.Error("the form is stacked in the closed list with a scrollbar")
+	}
 	if !addFormStacked(373-20, em) {
 		t.Error("the form is not stacked in the ledger's narrow list")
+	}
+}
+
+func TestFitsBeside(t *testing.T) {
+	if !fitsBeside(200, 150) || fitsBeside(5, 150) {
+		t.Error("fitsBeside does not compare the text to the room")
 	}
 }

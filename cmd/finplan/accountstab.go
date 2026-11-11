@@ -248,12 +248,12 @@ func ledgerWidths(avail, em float32) (list, detail float32) {
 
 const (
 	ledgerMinEm = 40
-	detailMinEm = 26
+	detailMinEm = 27
 	listMinEm   = 28
 )
 
-// addFormStackedBelowEm is the list width, in font sizes, that the Add account form's two rows of fields need side by side.
-const addFormStackedBelowEm = 38
+// addFormStackedBelowEm is the list width, in font sizes, that the Add account form's two rows of fields need side by side: the longer row is about 481 px at 13 px, its labels, fields and spacing.
+const addFormStackedBelowEm = 37
 
 // addFormStacked reports whether the Add account form puts each field on its own line because avail, the width inside the list, is too narrow for its rows.
 func addFormStacked(avail, em float32) bool {
@@ -335,8 +335,7 @@ func (t *fieldEditor) field(id, hint, value string, width float32) (string, bool
 		delete(t.errs, id)
 	}
 	if e := t.errs[id]; e != "" {
-		imgui.SameLine()
-		errorText("Not changed: " + e)
+		errorBeside("Not changed: " + e)
 	}
 	return text, done
 }

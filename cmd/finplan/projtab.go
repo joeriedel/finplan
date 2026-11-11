@@ -1270,8 +1270,7 @@ func formButton(label, problem string, untouched bool, do func()) {
 	}
 	imgui.EndDisabled()
 	if problem != "" && !untouched {
-		imgui.SameLine()
-		errorText("Not yet: " + problem)
+		errorBeside("Not yet: " + problem)
 	}
 }
 
@@ -1447,6 +1446,21 @@ func errorText(msg string) {
 	imgui.PushStyleColorVec4(imgui.ColText, rgba(colError, 1))
 	imgui.TextUnformatted(msg)
 	imgui.PopStyleColor()
+}
+
+// errorBeside shows msg after the previous item when it fits on that line, otherwise under it, where a wrapping panel can wrap it across its full width.
+func errorBeside(msg string) {
+	spacing := imgui.CurrentStyle().ItemSpacing().X
+	room := imgui.CursorScreenPos().X + imgui.ContentRegionAvail().X - imgui.ItemRectMax().X - spacing
+	if fitsBeside(room, imgui.CalcTextSize(msg).X) {
+		imgui.SameLine()
+	}
+	errorText(msg)
+}
+
+// fitsBeside reports whether text, width textW, fits in room, the width left on the line of the previous item.
+func fitsBeside(room, textW float32) bool {
+	return textW <= room
 }
 
 // tooltipText shows msg as a tooltip without treating it as a format string.
