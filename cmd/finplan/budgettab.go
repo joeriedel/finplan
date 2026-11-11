@@ -4,6 +4,7 @@
 package main
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -27,6 +28,9 @@ type budgetTab struct {
 	tl timelineState
 	// addItem is the Add form.
 	addItem itemForm
+	// del confirms the delete of the item with the id delID.
+	del   deleteDialog
+	delID string
 }
 
 func newBudgetTab(a *app) *budgetTab {
@@ -87,7 +91,7 @@ func (t *budgetTab) endItem(id, text string) bool {
 	return true
 }
 
-// deleteItem deletes the base item through ops.DeleteBudgetItem. A projection modification of it is left pointing at nothing. It reports whether it did.
+// deleteItem deletes the base item through ops.DeleteBudgetItem, once the confirmation has been given. A projection modification of it is left pointing at nothing. It reports whether it did.
 func (t *budgetTab) deleteItem(id string) bool {
 	if !t.a.edit("delete budget item", func() (*ops.Result, error) {
 		return ops.DeleteBudgetItem(t.a.st, t.a.rec, id, ops.Options{})
@@ -100,6 +104,25 @@ func (t *budgetTab) deleteItem(id string) bool {
 		t.tl = timelineState{}
 	}
 	return true
+}
+
+// askDelete opens the confirmation for deleting the base item, listing the projection modifications the delete leaves pointing at nothing.
+func (t *budgetTab) askDelete(id string) {
+	it, ok := t.a.rec.Budget.Item(id)
+	if !ok {
+		return
+	}
+	plan, err := ops.BudgetItemDeletePlan(t.a.rec, id)
+	if err != nil {
+		t.a.notifyFailed("delete budget item", err)
+		return
+	}
+	name := it.Name
+	if name == "" {
+		name = it.ID
+	}
+	t.delID = id
+	t.del.ask(fmt.Sprintf("budget item %q", name), plan)
 }
 
 // addNewItem adds the item the Add form describes to the base budget and clears the form. It reports whether it did.
@@ -134,8 +157,11 @@ func (t *budgetTab) draw() {
 	imgui.TextUnformatted("income " + income + "    expenses " + expenses + "    left over " + net)
 	imgui.TextDisabled("Transfers are in neither total; a one-time item counts for nothing, and an annual item for a twelfth.")
 
-	imgui.TextDisabled("A dash means no start or end date is set. Open an item with Edit to change it.")
+	imgui.TextDisabled("A dash means no start or end date is set. Open an item with its arrow to change it.")
 	t.table()
+	if t.del.draw(false, "") == deleteGo {
+		t.deleteItem(t.delID)
+	}
 
 	imgui.Spacing()
 	imgui.SeparatorText("Add a budget item")
@@ -149,7 +175,7 @@ func (t *budgetTab) table() {
 	segment := 0
 	begin := func() bool {
 		segment++
-		if !imgui.BeginTableV("##budgetitems"+strconv.Itoa(segment), int32(len(budgetHeaders)+1), imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
+		if !imgui.BeginTableV("##budgetitems"+strconv.Itoa(segment), int32(len(budgetHeaders)+1), imgui.TableFlagsBordersInnerV|imgui.TableFlagsPadOuterX|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
 			return false
 		}
 		imgui.TableSetupColumnV("", imgui.TableColumnFlagsWidthFixed, em*4, 0)
@@ -175,13 +201,15 @@ func (t *budgetTab) table() {
 			imgui.PushIDStr(r.ID)
 			imgui.TableNextRowV(0, 0)
 			imgui.TableSetColumnIndex(0)
-			label := "Edit"
-			if t.open[r.ID] {
-				label = "Close"
-			}
-			if imgui.Button(label) {
+			if disclosureArrow("##open", t.open[r.ID]) {
 				t.open[r.ID] = !t.open[r.ID]
 			}
+			tooltipOn("Edit this item")
+			imgui.SameLine()
+			if trashButton("##delete") {
+				t.askDelete(r.ID)
+			}
+			tooltipOn("Delete")
 			for i, s := range []string{r.Name, r.Schedule, r.Amount, r.Accounts, r.Start, r.End, r.Indexed, r.Growth, r.Monthly} {
 				imgui.TableSetColumnIndex(int32(i + 1))
 				imgui.AlignTextToFramePadding()
@@ -204,7 +232,7 @@ func (t *budgetTab) table() {
 	imgui.EndTable()
 }
 
-// editor draws the fields of the base item with the id, and its End and Delete actions.
+// editor draws the fields of the base item with the id, and its End action.
 func (t *budgetTab) editor(id string) {
 	it, ok := t.a.rec.Budget.Item(id)
 	if !ok {
@@ -228,10 +256,6 @@ func (t *budgetTab) editor(id string) {
 	}
 	imgui.SameLine()
 	actionButton("End", t.endProblem(id, text), func() { t.endItem(id, text) })
-	imgui.SameLine()
-	if imgui.Button("Delete") {
-		t.deleteItem(id)
-	}
 	t.timelineEditor(id)
 }
 

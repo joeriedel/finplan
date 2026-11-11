@@ -68,6 +68,7 @@ func TestScreenshotSmoke(t *testing.T) {
 		{"member-form", "Assets", "Net worth", "member-form"},
 		{"projections-new-item", "Projections", "Base", "new-item"},
 		{"budget-item", "Budget", "", "budget-item"},
+		{"budget-delete", "Budget", "", "budget-delete"},
 		{"projections-timeline", "Projections", "New job", "timeline"},
 		{"assets-timeline", "Assets", "529 accounts", "asset-timeline"},
 	}
@@ -131,6 +132,7 @@ func TestScreenshotBadArguments(t *testing.T) {
 		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Graph", "--select", "Base", "--open", "new-item"},
 		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Projections", "--select", "Base", "--open", "budget-item"},
 		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Assets", "--open", "budget-item"},
+		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Assets", "--open", "budget-delete"},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), caseTimeout)
 		cmd := exec.CommandContext(ctx, bin, args...)

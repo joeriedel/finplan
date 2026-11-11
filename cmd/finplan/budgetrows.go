@@ -72,7 +72,7 @@ func budgetRowOf(rec *model.Record, it model.BudgetItem) budgetRow {
 		row.End = it.End.String()
 	}
 	if it.Indexed {
-		row.Indexed = "indexed"
+		row.Indexed = "Yes"
 	}
 	if g := valueNow(it.Growth, rec.Today); g != 0 {
 		row.Growth = formatValue(model.PropGrowth, model.ModeSet, g) + " raise"

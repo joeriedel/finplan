@@ -108,3 +108,19 @@ func TestPadFor(t *testing.T) {
 		}
 	}
 }
+
+func TestTrashSegments(t *testing.T) {
+	for _, size := range []float32{12, 14, 40} {
+		segs := trashSegments(size)
+		if len(segs) == 0 {
+			t.Fatal("the trash can has no segments")
+		}
+		for _, s := range segs {
+			for _, v := range []float32{s.ax, s.ay, s.bx, s.by} {
+				if v < 0 || v > size {
+					t.Errorf("size %v: segment %+v leaves the box", size, s)
+				}
+			}
+		}
+	}
+}

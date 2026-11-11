@@ -73,11 +73,61 @@ func iconSegments(k iconKind, size float32) []iconSeg {
 			{0.5, 0.5, 0.08, 0.27}, {0.5, 0.5, 0.92, 0.27}, {0.5, 0.5, 0.5, 0.96}, // the edges meeting at the near corner
 		}
 	}
+	return scaleSegs(unit, size)
+}
+
+// scaleSegs scales segments given in the unit square to a box of the given size.
+func scaleSegs(unit []iconSeg, size float32) []iconSeg {
 	out := make([]iconSeg, len(unit))
 	for i, s := range unit {
 		out[i] = iconSeg{s.ax * size, s.ay * size, s.bx * size, s.by * size}
 	}
 	return out
+}
+
+// trashSegments returns the line art of a trash can in a square box of the given size: a handled lid over a tapering body with two ribs. Every segment lies inside the box.
+func trashSegments(size float32) []iconSeg {
+	return scaleSegs([]iconSeg{
+		{0.08, 0.22, 0.92, 0.22},                                                     // the lid
+		{0.38, 0.22, 0.38, 0.06}, {0.38, 0.06, 0.62, 0.06}, {0.62, 0.06, 0.62, 0.22}, // the handle
+		{0.2, 0.22, 0.27, 0.94}, {0.27, 0.94, 0.73, 0.94}, {0.73, 0.94, 0.8, 0.22}, // the body
+		{0.42, 0.4, 0.42, 0.78}, {0.58, 0.4, 0.58, 0.78}, // the ribs
+	}, size)
+}
+
+// disclosureArrow draws a tree-node style arrow, pointing right when closed and down when open, as a button with the id. It reports a click.
+func disclosureArrow(id string, open bool) bool {
+	h := imgui.FrameHeight()
+	clicked := imgui.InvisibleButton(id, imgui.NewVec2(h, h))
+	col := iconColor()
+	if imgui.IsItemHovered() {
+		col = u32(rgba(colText, 1))
+	}
+	lo, hi := imgui.ItemRectMin(), imgui.ItemRectMax()
+	cx, cy, r := (lo.X+hi.X)/2, (lo.Y+hi.Y)/2, h*0.22
+	dl := imgui.WindowDrawList()
+	if open {
+		dl.AddTriangleFilled(imgui.NewVec2(cx-r, cy-r*0.6), imgui.NewVec2(cx+r, cy-r*0.6), imgui.NewVec2(cx, cy+r), col)
+	} else {
+		dl.AddTriangleFilled(imgui.NewVec2(cx-r*0.6, cy-r), imgui.NewVec2(cx-r*0.6, cy+r), imgui.NewVec2(cx+r, cy), col)
+	}
+	return clicked
+}
+
+// trashButton draws a trash can as a button with the id, brighter under the mouse. It reports a click.
+func trashButton(id string) bool {
+	h := imgui.FrameHeight()
+	clicked := imgui.InvisibleButton(id, imgui.NewVec2(h, h))
+	col := iconColor()
+	if imgui.IsItemHovered() {
+		col = u32(rgba(colText, 1))
+	}
+	min, _ := iconRect(imgui.ItemRectMin().X+(h-iconSize())/2, (imgui.ItemRectMin().Y+imgui.ItemRectMax().Y)/2)
+	thick := max(1, 1.25*uiScale)
+	for _, s := range trashSegments(iconSize()) {
+		imgui.WindowDrawList().AddLineArgs(imgui.NewVec2(min.X+s.ax, min.Y+s.ay), imgui.NewVec2(min.X+s.bx, min.Y+s.by), col, thick)
+	}
+	return clicked
 }
 
 // iconSize is the side of an icon's box in pixels: about the text height, a whole number of pixels.

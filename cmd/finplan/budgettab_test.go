@@ -5,6 +5,7 @@ package main
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -38,7 +39,7 @@ func TestBudgetTabGroupsRowsAndTotals(t *testing.T) {
 	salary := groups[0].Rows[0]
 	want := budgetRow{
 		ID: "salary-a", Name: "Salary (Parent A)", Schedule: "twice a month, days 15 and 31", Amount: "$5,000",
-		Accounts: accountName(a.rec, demodata.Checking), Start: "-", End: "-", Indexed: "indexed", Monthly: "$10,000",
+		Accounts: accountName(a.rec, demodata.Checking), Start: "-", End: "-", Indexed: "Yes", Monthly: "$10,000",
 	}
 	if salary != want {
 		t.Errorf("salary row %+v, want %+v", salary, want)
@@ -441,5 +442,22 @@ func TestBudgetTabDeleteClosesTimeline(t *testing.T) {
 	}
 	if bt.tl.open {
 		t.Errorf("timeline still open: %+v", bt.tl)
+	}
+}
+
+func TestBudgetTabAskDeleteListsTheModificationsLeftBehind(t *testing.T) {
+	a := demoApp(t)
+	bt := a.budget
+	bt.askDelete("salary-a")
+	want := []string{`Projection "New job": its amount change will target nothing`}
+	if !bt.del.opening || bt.delID != "salary-a" || !slices.Equal(bt.del.lines, want) || !bt.del.orphans || !strings.Contains(bt.del.what, "Salary (Parent A)") {
+		t.Errorf("dialog %+v for %q", bt.del, bt.delID)
+	}
+	if _, ok := a.rec.Budget.Item("salary-a"); !ok {
+		t.Error("asking deleted the item")
+	}
+	bt.askDelete("groceries")
+	if len(bt.del.lines) != 0 || bt.del.orphans {
+		t.Errorf("an item without modifications lists %q", bt.del.lines)
 	}
 }

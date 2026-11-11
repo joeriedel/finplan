@@ -46,6 +46,7 @@ var openNames = []openState{
 	{"member-form", "Assets", "", true},
 	{"new-item", "Projections", "", true},
 	{"budget-item", "Budget", "", false},
+	{"budget-delete", "Budget", "", false},
 	{"timeline", "Projections", "", true},
 	{"asset-timeline", "Assets", "", true},
 	{"ledger", "Accounts", "", true},
@@ -139,7 +140,7 @@ func (o *shotOptions) openName() (n openState) {
 	return n
 }
 
-// applyOpen puts the app in the state --open asks for that is not a picker: the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the first Budget item's editor, the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth, or the selected account's ledger panel (ledger).
+// applyOpen puts the app in the state --open asks for that is not a picker: the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the first Budget item's editor (budget-item) or its delete confirmation (budget-delete), the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth, or the selected account's ledger panel (ledger).
 func (o *shotOptions) applyOpen(a *app) error {
 	switch o.open {
 	case "member", "member-form":
@@ -156,6 +157,14 @@ func (o *shotOptions) applyOpen(a *app) error {
 			}
 		}
 		return fmt.Errorf("the budget has no items to open")
+	case "budget-delete":
+		for _, g := range budgetGroups(a.rec) {
+			if len(g.Rows) > 0 {
+				a.budget.askDelete(g.Rows[0].ID)
+				return nil
+			}
+		}
+		return fmt.Errorf("the budget has no items to delete")
 	case "timeline":
 		p := a.rec.Projection(a.proj.sel)
 		for i, m := range p.Mods {
