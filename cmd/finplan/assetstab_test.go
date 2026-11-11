@@ -281,6 +281,7 @@ func TestDeleteLines(t *testing.T) {
 		{Kind: ops.AffectedModification, In: "Base", Detail: "growth of account \"x\"", Effect: ops.EffectRemoved},
 		{Kind: ops.AffectedBudgetItem, In: "budget", Detail: `"Rent" (rent)`, Effect: ops.EffectDeleted},
 		{Kind: ops.AffectedBudgetItem, In: "Base", Detail: `"Gig" (gig)`, Effect: ops.EffectDeleted},
+		{Kind: ops.AffectedOrphan, In: "Base", Detail: "amount", Effect: ops.EffectOrphaned},
 	}}
 	want := []string{
 		`Asset "liquid": remove its member account "x"`,
@@ -288,6 +289,7 @@ func TestDeleteLines(t *testing.T) {
 		`Projection "Base": remove the modification growth of account "x"`,
 		`Base budget: delete the item "Rent" (rent)`,
 		`Projection "Base": delete the item it adds, "Gig" (gig)`,
+		`Projection "Base": its amount change will target nothing`,
 	}
 	if got := deleteLines(plan); !slices.Equal(got, want) {
 		t.Errorf("got %q", got)
@@ -376,5 +378,32 @@ func TestAssetTreeSurvivesACycle(t *testing.T) {
 	}
 	if c := buildChart(rec, demodata.AllCash); c.Err == "" {
 		t.Error("the chart of a cycle shows no error")
+	}
+}
+
+func TestRuleMemberTreeTextIsShort(t *testing.T) {
+	a := demoApp(t)
+	cash := assetRowOf(buildAssets(a.rec), demodata.AllCash).Members[0]
+	if got := cash.treeLabel(); !strings.HasPrefix(got, cash.Label+", ") || !strings.HasSuffix(got, " accounts") {
+		t.Errorf("tree label %q", got)
+	}
+	if strings.Contains(cash.treeLabel(), "matches") || !strings.Contains(cash.fullLabel(), "matches Checking") || !strings.Contains(cash.fullLabel(), cash.Label) {
+		t.Errorf("tree %q, full %q", cash.treeLabel(), cash.fullLabel())
+	}
+	for _, tc := range []struct {
+		names           []string
+		detail, summary string
+	}{
+		{nil, "matches no account", "no accounts"},
+		{[]string{"A"}, "matches A", "1 account"},
+		{[]string{"A", "B", "C"}, "matches A, B, C", "3 accounts"},
+	} {
+		if d, s := ruleMatches(tc.names); d != tc.detail || s != tc.summary {
+			t.Errorf("ruleMatches(%q) = %q, %q", tc.names, d, s)
+		}
+	}
+	plain := memberRow{Label: "Checking"}
+	if plain.treeLabel() != "Checking" || plain.fullLabel() != "Checking" {
+		t.Error("a member without a rule changes its text")
 	}
 }

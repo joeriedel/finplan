@@ -90,12 +90,12 @@ func drawLine(dl *imgui.DrawList, v lineView, pts []graph.Pt, selected bool, lo,
 	}
 }
 
-func (g *graphTab) toPx(x, y float64) graph.Pt {
-	return graph.Pt{
-		X: g.plotPos.X + float32((x-g.xMin)/(g.xMax-g.xMin))*g.plotSize.X,
-		Y: g.plotPos.Y + float32((g.yMax-y)/(g.yMax-g.yMin))*g.plotSize.Y,
-	}
+// geom is the plot's geometry as drawPlot last read it.
+func (g *graphTab) geom() plotGeom {
+	return plotGeom{g.plotPos, g.plotSize, g.xMin, g.xMax, g.yMin, g.yMax}
 }
+
+func (g *graphTab) toPx(x, y float64) graph.Pt { return g.geom().toPx(x, y) }
 
 // drawPlot draws everything inside the plot: the today marker, the bands, the lines, handoff markers and labels,
 // the crosshair, and handles selecting a line by clicking it. Limits and plot area are read from ImPlot.
@@ -166,26 +166,12 @@ func (g *graphTab) drawPlot(views []lineView) {
 
 	hovered := implot.IsPlotHovered()
 	mouse := imgui.MousePos()
-	cursor := implot.GetPlotMousePos()
-	day := dateOf(cursor.X)
+	day := dateOf(implot.GetPlotMousePos().X)
+	var rows []crosshairRow
+	var pts []crosshairPoint
 	if hovered {
-		dashRGBA := u32(rgba(colMuted, 0.6))
-		for _, sg := range graph.Dash([]graph.Pt{{X: mouse.X, Y: top}, {X: mouse.X, Y: bottom}}, 4*s, 4*s) {
-			dl.AddLineArgs(vec(sg.A), vec(sg.B), dashRGBA, s)
-		}
-		for _, v := range views {
-			amount, _, ok := graph.At(v.samples, day)
-			if !ok {
-				continue
-			}
-			p := g.toPx(cursor.X, amount)
-			p.X = mouse.X
-			col := lineColor(v.line.Color, 0.75)
-			for _, sg := range graph.Dash([]graph.Pt{p, {X: left, Y: p.Y}}, 4*s, 4*s) {
-				dl.AddLineArgs(vec(sg.A), vec(sg.B), u32(col), s)
-			}
-			dl.AddCircleFilled(vec(p), 3.5*s, u32(lineColor(v.line.Color, 1)))
-		}
+		rows, pts = crosshairAt(views, day)
+		drawCrosshair(dl, g.geom(), mouse.X, pts)
 	}
 	implot.PopPlotClipRect()
 
@@ -204,79 +190,34 @@ func (g *graphTab) drawPlot(views []lineView) {
 	}
 
 	if hovered {
-		g.crosshairTags(views, bands, day)
+		g.crosshairTags(views, rows, pts, bands, day)
 	}
 }
 
-// pendingTag is a crosshair tag with its top-left corner, queued while the plot is being built, to be drawn once
-// ImPlot has finished.
-type pendingTag struct {
-	at   graph.Pt
-	bg   imgui.Vec4
-	text string
+// crosshairRow is a line's value at the date under the pointer, for the tooltip.
+type crosshairRow struct {
+	v      lineView
+	amount float64
+	status engine.Status
 }
 
-// drawPendingTags draws the queued tags on the window, after implot.EndPlot, so that ImPlot's tick marks and
-// border do not paint over them.
-func (g *graphTab) drawPendingTags() {
-	dl := imgui.WindowDrawList()
-	for _, t := range g.tags {
-		g.drawTag(dl, t.at, t.bg, t.text)
-	}
-	g.tags = g.tags[:0]
-}
-
-// tagSize returns the size of a tag around the text, with ImPlot's annotation padding.
-func tagSize(text string) graph.Pt {
-	pad := implot.GetStyle().AnnotationPadding()
-	ts := imgui.CalcTextSize(text)
-	return graph.Pt{X: ts.X + 2*pad.X, Y: ts.Y + 2*pad.Y}
-}
-
-// drawTag draws a filled tag with its top-left corner at p, with text black or white by the background's
-// brightness, as ImPlot does for its own axis tags.
-func (g *graphTab) drawTag(dl *imgui.DrawList, p graph.Pt, bg imgui.Vec4, text string) {
-	pad := implot.GetStyle().AnnotationPadding()
-	size := tagSize(text)
-	fg := uint32(0xffffffff)
-	if graph.TagTextBlack(bg.X, bg.Y, bg.Z) {
-		fg = 0xff000000
-	}
-	dl.AddRectFilled(vec(p), vec(graph.Pt{X: p.X + size.X, Y: p.Y + size.Y}), u32(bg))
-	dl.AddTextVec2(imgui.NewVec2(p.X+pad.X, p.Y+pad.Y), fg, text)
-}
-
-// crosshairTags queues the value tags (in the y-axis gutter, against the plot's left edge) and the date tag (in
-// the x-axis area, below the plot), and shows the tooltip, for the date under the pointer. The tags are our own
-// rather than ImPlot's, which would resize the axis gutters as the pointer moves.
-func (g *graphTab) crosshairTags(views []lineView, bands []bandView, day model.Date) {
-	type row struct {
-		v      lineView
-		amount float64
-		status engine.Status
-	}
-	var rows []row
-	plotPos := graph.Pt{X: g.plotPos.X, Y: g.plotPos.Y}
-	plotSize := graph.Pt{X: g.plotSize.X, Y: g.plotSize.Y}
+// crosshairAt returns the value of each line that has one at the day, in the order of views, as tooltip rows and as the points of the crosshair.
+func crosshairAt(views []lineView, day model.Date) (rows []crosshairRow, pts []crosshairPoint) {
 	for _, v := range views {
 		if amount, st, ok := graph.At(v.samples, day); ok {
-			rows = append(rows, row{v, amount, st})
-			if !graph.InRange(amount, g.yMin, g.yMax) {
-				continue
-			}
-			y := g.toPx(0, amount).Y
-			text := graph.FormatTagMoney(amount)
-			g.tags = append(g.tags, pendingTag{graph.ValueTagPos(y, tagSize(text), plotPos, plotSize), lineColor(v.line.Color, 1), text})
+			rows = append(rows, crosshairRow{v, amount, st})
+			pts = append(pts, crosshairPoint{amount, v.line.Color})
 		}
 	}
+	return rows, pts
+}
+
+// crosshairTags queues the value and date tags for the day under the pointer and shows the tooltip.
+func (g *graphTab) crosshairTags(views []lineView, rows []crosshairRow, pts []crosshairPoint, bands []bandView, day model.Date) {
 	if len(rows) == 0 {
 		return
 	}
-	dateText := graph.FormatDate(day)
-	dx := g.toPx(float64(day)*secondsPerDay, 0).X
-	if dayStart := float64(day) * secondsPerDay; dayStart+secondsPerDay > g.xMin && dayStart <= g.xMax {
-		g.tags = append(g.tags, pendingTag{graph.DateTagPos(dx, tagSize(dateText), plotPos, plotSize), rgba(colSelect, 1), dateText})
-	}
+	g.tags.crosshair(g.geom(), day, pts)
 	if imgui.BeginTooltip() {
 		imgui.PushStyleColorVec4(imgui.ColText, rgba(colMuted, 1))
 		imgui.TextUnformatted(graph.FormatDate(day))

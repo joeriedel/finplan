@@ -42,8 +42,8 @@ type graphTab struct {
 	// The plot area in screen pixels as of last frame, shared with the data lanes.
 	plotPos, plotSize imgui.Vec2
 
-	// The crosshair tags queued by crosshairTags, drawn after the plot by drawPendingTags.
-	tags []pendingTag
+	// The crosshair tags queued by crosshairTags, drawn after the plot.
+	tags tagQueue
 
 	// The Add popup.
 	search     string
@@ -336,19 +336,8 @@ func (g *graphTab) plotArea() {
 		implot.SetupAxisV(implot.AxisX1, "", implot.AxisFlagsNoLabel)
 		implot.SetupAxisScalePlotScale(implot.AxisX1, implot.ScaleTime)
 		implot.SetupAxisV(implot.AxisY1, "", implot.AxisFlagsNoLabel)
-		implot.SetupAxisLimitsConstraints(implot.AxisX1, float64(model.D(1971, 1, 1))*secondsPerDay, float64(model.D(2200, 1, 1))*secondsPerDay)
-		implot.SetupAxisZoomConstraints(implot.AxisX1, 7*secondsPerDay, 200*365*secondsPerDay)
-		// ImPlot sizes the y gutter to the widest tick label. A last tick far outside the visible range, never drawn, is
-		// labelled (space-padded if need be) to be as wide as the widest tick label or value tag, which keeps the gutter
-		// the same width however the view moves and wide enough for the tags drawn in it.
-		ticks := graph.NiceTicks(g.yMin, g.yMax, max(3, int(g.plotSize.Y/(48*uiScale))))
-		labels := make([]string, len(ticks), len(ticks)+1)
-		for i, t := range ticks {
-			labels[i] = graph.FormatMoneyCompact(t)
-		}
-		ticks = append(ticks, g.yMin-1000*max(g.yMax-g.yMin, math.Abs(g.yMin), 1))
-		labels = append(labels, graph.GutterLabel(func(s string) float32 { return imgui.CalcTextSize(s).X }, implot.GetStyle().AnnotationPadding().X))
-		implot.SetupAxisTicksdoublePtrV(implot.AxisY1, &ticks[0], int32(len(ticks)), labels, false)
+		constrainTimeAxis()
+		setupMoneyTicks(g.yMin, g.yMax, g.plotSize.Y)
 		condX, condY := implot.CondOnce, implot.CondOnce
 		if g.applyX {
 			condX = implot.CondAlways
@@ -362,7 +351,7 @@ func (g *graphTab) plotArea() {
 		g.applyX, g.applyY = false, false
 		g.drawPlot(views)
 		implot.EndPlot()
-		g.drawPendingTags()
+		g.tags.draw()
 	}
 	g.drawLanes(views, laneH, pitch)
 }

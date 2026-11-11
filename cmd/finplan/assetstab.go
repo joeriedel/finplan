@@ -108,6 +108,12 @@ type assetsTab struct {
 	// chart is the chart of the asset chartFor.
 	chart    *assetChart
 	chartFor model.AssetID
+	// chartView is the chart's plot as of the last frame; chartLimitsFor is the asset whose data range the plot's limits were last set to and chartFit asks for them to be set again, which a double-click does.
+	chartView      plotGeom
+	chartLimitsFor model.AssetID
+	chartFit       bool
+	// tags are the crosshair tags of the chart, drawn after the plot.
+	tags tagQueue
 	// delFor and delReason cache deleteAssetProblem for the selected asset, which reads the database.
 	delFor    model.AssetID
 	delReason string
@@ -201,7 +207,7 @@ func (t *assetsTab) assetNode(r *assetRow, path, problem string) {
 	if imgui.IsItemClicked() && !imgui.IsItemToggledOpen() && !isDefaultAsset(r.Asset.ID) {
 		t.sel = r.Asset.ID
 	}
-	treeDecor(textX, label, r.Asset.Name, kind, problem+r.Err)
+	treeDecor(textX, label, r.Asset.Name, false, kind, problem+r.Err)
 	imgui.TableSetColumnIndex(1)
 	if r.Err != "" {
 		errorText("error")
@@ -233,15 +239,11 @@ func (t *assetsTab) memberNode(parent *assetRow, m memberRow) {
 	if m.Problem != "" {
 		imgui.PushStyleColorVec4(imgui.ColText, rgba(colError, 1))
 	}
-	label := m.Label
-	if m.Detail != "" {
-		label += " (" + m.Detail + ")"
-	}
 	kind := memberKind(m.Member)
 	textX := treeTextX()
-	shown := iconLabel(kind, label)
+	shown := iconLabel(kind, m.treeLabel())
 	imgui.TreeNodeExStrV(shown, imgui.TreeNodeFlagsLeaf|imgui.TreeNodeFlagsNoTreePushOnOpen|imgui.TreeNodeFlagsSpanFullWidth)
-	treeDecor(textX, shown, label, kind, m.Problem)
+	treeDecor(textX, shown, m.fullLabel(), m.Detail != "", kind, m.Problem)
 	imgui.TableSetColumnIndex(1)
 	imgui.TextUnformatted(graph.FormatMoney(m.Balance))
 	if m.Problem != "" {
@@ -268,12 +270,12 @@ func treeTip(name string, clipped bool, problem string) string {
 	return problem
 }
 
-// treeDecor finishes the tree node just drawn, whose text starts at textX and was drawn as label, a padded name: it draws the kind's icon and shows the tooltip of the icon, else of the row.
-func treeDecor(textX float32, label, name string, kind iconKind, problem string) {
+// treeDecor finishes the tree node just drawn, whose text starts at textX and was drawn as label, a padded name: it draws the kind's icon and shows the tooltip of the icon, else of the row. The row's tooltip holds name when the row clips it or always is set, for a name that the row shortens.
+func treeDecor(textX float32, label, name string, always bool, kind iconKind, problem string) {
 	if itemIcon(textX, kind) {
 		return
 	}
-	clipped := textClipped(imgui.CalcTextSize(label).X, imgui.ItemRectMax().X-textX)
+	clipped := always || textClipped(imgui.CalcTextSize(label).X, imgui.ItemRectMax().X-textX)
 	if tip := treeTip(name, clipped, problem); tip != "" && imgui.IsItemHovered() {
 		if imgui.BeginTooltip() {
 			imgui.PushTextWrapPosV(imgui.FontSize() * 30)
@@ -366,10 +368,7 @@ func (t *assetsTab) members(asset *model.Asset, row *assetRow) {
 	for _, m := range row.Members {
 		imgui.PushIDStr("member" + strconv.Itoa(m.Member.Seq))
 		imgui.AlignTextToFramePadding()
-		label := m.Label
-		if m.Detail != "" {
-			label += " (" + m.Detail + ")"
-		}
+		label := m.fullLabel()
 		kind := memberKind(m.Member)
 		p := imgui.CursorScreenPos()
 		imgui.PushTextWrapPosV(em*30 - imgui.CurrentStyle().ItemSpacing().X*2)
@@ -484,7 +483,16 @@ func orAny(s string) string {
 	return s
 }
 
-// chartArea draws the chart of the asset's value with the coverage bar of its actual data under it.
+// assetChartColor is the colour of the asset chart's line and crosshair.
+var assetChartColor = graph.Color{R: 0x6E, G: 0xA8, B: 0xFE}
+
+// chartYRange is the y range that shows the whole of the chart's values with a margin.
+func chartYRange(c *assetChart) (lo, hi float64) {
+	pad := max(c.Max-c.Min, 1) * 0.08
+	return c.Min - pad, c.Max + pad
+}
+
+// chartArea draws the chart of the asset's value with the coverage bar of its actual data under it. The chart pans and zooms like the Graph; its limits are set when it is first shown, when another asset is chosen and when the user double-clicks it, which fits it to the asset's data.
 func (t *assetsTab) chartArea(id model.AssetID) {
 	imgui.Spacing()
 	imgui.SeparatorText("Value over time")
@@ -496,68 +504,93 @@ func (t *assetsTab) chartArea(id model.AssetID) {
 		errorText(c.Err)
 		return
 	}
-	imgui.TextDisabled("Solid: actual data. Dashed: projected. Faded: default balances.")
+	imgui.TextDisabled("Solid: actual data. Dashed: projected. Faded: default balances. Drag to pan, scroll to zoom, double-click to fit.")
 	h := max(imgui.ContentRegionAvail().Y-imgui.FontSize()*14, imgui.FontSize()*12)
-	var pos, size imgui.Vec2
-	var xMin, xMax float64
-	if implot.BeginPlotV("##assetchart", imgui.NewVec2(-1, h), implot.FlagsNoTitle|implot.FlagsNoLegend|implot.FlagsNoMouseText|implot.FlagsNoInputs) {
+	var geom plotGeom
+	if implot.BeginPlotV("##assetchart", imgui.NewVec2(-1, h), implot.FlagsNoTitle|implot.FlagsNoLegend|implot.FlagsNoMouseText) {
 		implot.SetupAxisV(implot.AxisX1, "", implot.AxisFlagsNoLabel)
 		implot.SetupAxisScalePlotScale(implot.AxisX1, implot.ScaleTime)
 		implot.SetupAxisV(implot.AxisY1, "", implot.AxisFlagsNoLabel)
-		pad := max(c.Max-c.Min, 1) * 0.08
-		xMin, xMax = float64(c.From)*secondsPerDay, float64(c.To)*secondsPerDay
-		implot.SetupAxisLimitsV(implot.AxisX1, xMin, xMax, implot.CondAlways)
-		implot.SetupAxisLimitsV(implot.AxisY1, c.Min-pad, c.Max+pad, implot.CondAlways)
+		constrainTimeAxis()
+		fitLo, fitHi := chartYRange(c)
+		tickLo, tickHi := fitLo, fitHi
+		if t.chartView.usable() {
+			tickLo, tickHi = t.chartView.yMin, t.chartView.yMax
+		}
+		setupMoneyTicks(tickLo, tickHi, h)
+		cond := implot.CondOnce
+		if t.chartLimitsFor != id || t.chartFit {
+			cond = implot.CondAlways
+		}
+		implot.SetupAxisLimitsV(implot.AxisX1, float64(c.From)*secondsPerDay, float64(c.To)*secondsPerDay, cond)
+		implot.SetupAxisLimitsV(implot.AxisY1, fitLo, fitHi, cond)
 		implot.SetupFinish()
-		pos, size = implot.GetPlotPos(), implot.GetPlotSize()
-		t.drawChart(c, pos, size, c.Min-pad, c.Max+pad)
+		t.chartLimitsFor, t.chartFit = id, false
+		geom = readPlotGeom()
+		t.chartView = geom
+		if implot.IsPlotHovered() && imgui.IsMouseDoubleClicked(imgui.MouseButtonLeft) {
+			t.chartFit = true
+		}
+		t.drawChart(c, geom)
 		implot.EndPlot()
+		t.tags.draw()
 	}
-	t.coverageBar(c, pos, size, xMin, xMax)
+	t.coverageBar(c, geom)
 }
 
-// drawChart strokes the chart's runs in the Graph's styles: solid for actual data, dashed for projected, faded for default balances and partly projected.
-func (t *assetsTab) drawChart(c *assetChart, pos, size imgui.Vec2, yMin, yMax float64) {
-	if size.X <= 0 || size.Y <= 0 {
+// drawChart strokes the chart's runs in the Graph's styles: solid for actual data, dashed for projected, faded for default balances and partly projected, and, while the pointer is over the plot, draws the crosshair of the value at its date, queueing its tags and showing its tooltip.
+func (t *assetsTab) drawChart(c *assetChart, geom plotGeom) {
+	if !geom.usable() {
 		return
 	}
-	xOf := func(d model.Date) float32 {
-		return pos.X + float32(float64(d-c.From)/float64(c.To-c.From))*size.X
-	}
-	yOf := func(v float64) float32 { return pos.Y + float32((yMax-v)/(yMax-yMin))*size.Y }
 	dl := implot.GetPlotDrawList()
 	implot.PushPlotClipRect()
-	defer implot.PopPlotClipRect()
-	lo, hi := graph.Pt{X: pos.X, Y: pos.Y}, graph.Pt{X: pos.X + size.X, Y: pos.Y + size.Y}
-	if x := xOf(c.Today); x >= lo.X && x <= hi.X {
+	lo, hi := graph.Pt{X: geom.pos.X, Y: geom.pos.Y}, graph.Pt{X: geom.pos.X + geom.size.X, Y: geom.pos.Y + geom.size.Y}
+	if x := geom.toPx(float64(c.Today)*secondsPerDay, 0).X; x >= lo.X && x <= hi.X {
 		dl.AddLineArgs(imgui.NewVec2(x, lo.Y), imgui.NewVec2(x, hi.Y), u32(rgba(colAccent, 0.5)), uiScale)
 	}
-	color := graph.Color{R: 0x6E, G: 0xA8, B: 0xFE}
 	for _, s := range c.Segs {
 		pts := make([]graph.Pt, len(s.Pts))
 		for i, p := range s.Pts {
-			pts[i] = graph.Pt{X: xOf(p.Date), Y: yOf(p.Amount)}
+			pts[i] = geom.toPx(float64(p.Date)*secondsPerDay, p.Amount)
 		}
-		drawPolyline(dl, pts, segmentClass(s.Status), color, lineWidth*uiScale, lo, hi)
+		drawPolyline(dl, pts, segmentClass(s.Status), assetChartColor, lineWidth*uiScale, lo, hi)
+	}
+	day := dateOf(implot.GetPlotMousePos().X)
+	amount, status, ok := graph.At(c.Samples, day)
+	ok = ok && implot.IsPlotHovered()
+	if ok {
+		drawCrosshair(dl, geom, imgui.MousePos().X, []crosshairPoint{{amount, assetChartColor}})
+	}
+	implot.PopPlotClipRect()
+	if !ok {
+		return
+	}
+	t.tags.crosshair(geom, day, []crosshairPoint{{amount, assetChartColor}})
+	if imgui.BeginTooltip() {
+		imgui.PushStyleColorVec4(imgui.ColText, rgba(colMuted, 1))
+		imgui.TextUnformatted(graph.FormatDate(day))
+		imgui.PopStyleColor()
+		imgui.TextUnformatted(graph.FormatMoney(amount) + "  " + status.String())
+		imgui.EndTooltip()
 	}
 }
 
-// coverageBar draws, under the plot and on its time axis, the dates the asset has actual data for as filled segments with gaps between, and marks the last actual date.
-func (t *assetsTab) coverageBar(c *assetChart, pos, size imgui.Vec2, xMin, xMax float64) {
+// coverageBar draws, under the plot and on its time axis, the dates the asset has actual data for as filled segments with gaps between, and marks the last actual date. Its label has a line of its own above the bar, which the bar cannot overdraw, and the bar follows the plot's current limits.
+func (t *assetsTab) coverageBar(c *assetChart, geom plotGeom) {
 	s := uiScale
+	lineH := imgui.TextLineHeight()
 	barH := imgui.FontSize() * 1.1
 	origin := imgui.CursorScreenPos()
-	imgui.Dummy(imgui.NewVec2(imgui.ContentRegionAvail().X, barH+6*s))
-	if size.X <= 0 || !(xMax > xMin) {
+	imgui.Dummy(imgui.NewVec2(imgui.ContentRegionAvail().X, lineH+barH+6*s))
+	if !geom.usable() {
 		return
 	}
 	dl := imgui.WindowDrawList()
-	left, right := pos.X, pos.X+size.X
-	top := origin.Y + 3*s
-	xOf := func(d model.Date) float32 {
-		return left + float32((float64(d)*secondsPerDay-xMin)/(xMax-xMin))*size.X
-	}
-	dl.AddTextVec2(imgui.NewVec2(origin.X+4*s, top), u32(rgba(colMuted, 1)), "Actual data")
+	left, right := geom.pos.X, geom.pos.X+geom.size.X
+	top := origin.Y + lineH + 3*s
+	xOf := func(d model.Date) float32 { return geom.toPx(float64(d)*secondsPerDay, 0).X }
+	dl.AddTextVec2(imgui.NewVec2(left, origin.Y), u32(rgba(colMuted, 1)), "Actual data")
 	dl.PushClipRectV(imgui.NewVec2(left, top), imgui.NewVec2(right, top+barH), true)
 	dl.AddRectFilled(imgui.NewVec2(left, top), imgui.NewVec2(right, top+barH), u32(rgba(colInput, 1)))
 	for _, sp := range c.Coverage {

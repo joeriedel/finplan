@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/joeriedel/finplan/internal/engine"
@@ -31,8 +32,8 @@ type assetRow struct {
 // memberRow is what the tree and the member list show of one member of an asset.
 type memberRow struct {
 	Member model.Member
-	// Label names the member; Detail says what a rule member matches.
-	Label, Detail string
+	// Label names the member; Detail says what a rule member matches, in full; Summary says how many accounts it matches, for the tree row.
+	Label, Detail, Summary string
 	// Balance is the member's balance today: for a rule, the sum of the accounts it matches.
 	Balance float64
 	// Problem says why the member is left out of the asset's total, else "": it would count an account twice.
@@ -151,10 +152,7 @@ func buildAsset(rec *model.Record, a *model.Asset, resolved map[model.AssetID]*m
 					mr.Balance += todayBalance(rec, model.DefaultAssetID(acct.ID))
 				}
 			}
-			mr.Detail = "matches " + strings.Join(names, ", ")
-			if len(names) == 0 {
-				mr.Detail = "matches no account"
-			}
+			mr.Detail, mr.Summary = ruleMatches(names)
 		default:
 			mr.Balance = todayBalance(rec, model.DefaultAssetID(m.Account))
 		}
@@ -166,6 +164,33 @@ func buildAsset(rec *model.Record, a *model.Asset, resolved map[model.AssetID]*m
 		row.Members = append(row.Members, mr)
 	}
 	return row
+}
+
+// ruleMatches says what a rule member matches, the names in full, and how many accounts that is.
+func ruleMatches(names []string) (detail, summary string) {
+	switch len(names) {
+	case 0:
+		return "matches no account", "no accounts"
+	case 1:
+		return "matches " + names[0], "1 account"
+	}
+	return "matches " + strings.Join(names, ", "), strconv.Itoa(len(names)) + " accounts"
+}
+
+// treeLabel is the member's text in the tree: short, a rule with the number of accounts it matches.
+func (m memberRow) treeLabel() string {
+	if m.Summary == "" {
+		return m.Label
+	}
+	return m.Label + ", " + m.Summary
+}
+
+// fullLabel is the member's whole text: a rule with every account it matches.
+func (m memberRow) fullLabel() string {
+	if m.Detail == "" {
+		return m.Label
+	}
+	return m.Label + " (" + m.Detail + ")"
 }
 
 // chartSeg is a run of chart points of one status; it ends on the first point of the next run, so the runs join.
@@ -188,8 +213,10 @@ type assetChart struct {
 	LastActual model.Date
 	HasActual  bool
 	Min, Max   float64
-	Today      model.Date
-	Err        string
+	// Samples are the values the runs of Segs were cut from, for reading the value at a date.
+	Samples []engine.Sample
+	Today   model.Date
+	Err     string
 }
 
 const (
@@ -223,6 +250,7 @@ func buildChart(rec *model.Record, id model.AssetID) *assetChart {
 		c.Err = err.Error()
 		return c
 	}
+	c.Samples = bal.Samples
 	for i, s := range bal.Samples {
 		if i == 0 || s.Status != c.Segs[len(c.Segs)-1].Status {
 			if i > 0 {
