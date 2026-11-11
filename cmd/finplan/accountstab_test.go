@@ -408,3 +408,27 @@ func TestCloseProblemRefusesABadDate(t *testing.T) {
 		t.Error("a bad close date is allowed")
 	}
 }
+
+func TestLedgerWidths(t *testing.T) {
+	const em = 13
+	for _, tc := range []struct {
+		avail        float32
+		list, detail float32
+	}{
+		{em * 115, em * 40, em * 32},
+		{em * 110, em * 40, em * 27},
+		{em * 105, em * 38, em * 24},
+		{em * 95, em * 28, em * 24},
+		{em * 60, em * 28, em * 24},
+	} {
+		list, detail := ledgerWidths(tc.avail, em)
+		if list != tc.list || detail != tc.detail {
+			t.Errorf("ledgerWidths(%v) = %v, %v, want %v, %v", tc.avail, list, detail, tc.list, tc.detail)
+		}
+	}
+	// A 1280 px window, less its padding, leaves the ledger its minimum.
+	list, detail := ledgerWidths(1255, em)
+	if got := 1255 - list - detail; got < em*ledgerMinEm {
+		t.Errorf("ledger gets %v px, want at least %v", got, em*ledgerMinEm)
+	}
+}

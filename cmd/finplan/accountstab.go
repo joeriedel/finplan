@@ -201,8 +201,16 @@ func (t *acctTab) draw() {
 	if t.sel != "" && a.rec.Account(t.sel) == nil {
 		t.sel = ""
 	}
+	acct := a.rec.Account(t.sel)
+	showLedger := t.ledger && acct != nil
+	em := imgui.FontSize()
+	listWidth, detailWidth := em*40, float32(0)
+	if showLedger {
+		avail := imgui.ContentRegionAvail().X - 2*imgui.CurrentStyle().ItemSpacing().X
+		listWidth, detailWidth = ledgerWidths(avail, em)
+	}
 	imgui.PushStyleColorVec4(imgui.ColChildBg, rgba(colPanel, 1))
-	open := imgui.BeginChildStrV("##acctlist", imgui.NewVec2(imgui.FontSize()*40, 0), imgui.ChildFlagsBorders, 0)
+	open := imgui.BeginChildStrV("##acctlist", imgui.NewVec2(listWidth, 0), imgui.ChildFlagsBorders, 0)
 	imgui.PopStyleColor()
 	if open {
 		t.list()
@@ -210,12 +218,6 @@ func (t *acctTab) draw() {
 	}
 	imgui.EndChild()
 	imgui.SameLine()
-	acct := a.rec.Account(t.sel)
-	showLedger := t.ledger && acct != nil
-	detailWidth := float32(0)
-	if showLedger {
-		detailWidth = imgui.FontSize() * 32
-	}
 	if imgui.BeginChildStrV("##acctdetail", imgui.NewVec2(detailWidth, 0), 0, 0) {
 		if acct != nil {
 			t.detail(acct)
@@ -232,6 +234,23 @@ func (t *acctTab) draw() {
 		imgui.EndChild()
 	}
 }
+
+// ledgerWidths splits avail, the width for the list, detail and ledger panels, in font sizes em, when the ledger is open. The ledger gets at least ledgerMinEm, enough for the history table's fixed columns and its stretch columns; the detail gives up width first, down to detailMinEm, then the list, down to listMinEm.
+func ledgerWidths(avail, em float32) (list, detail float32) {
+	list, detail = em*40, em*32
+	if short := em*ledgerMinEm - (avail - list - detail); short > 0 {
+		cut := min(short, detail-em*detailMinEm)
+		detail -= cut
+		list -= min(short-cut, list-em*listMinEm)
+	}
+	return list, detail
+}
+
+const (
+	ledgerMinEm = 43
+	detailMinEm = 24
+	listMinEm   = 28
+)
 
 // list draws the accounts by group, with balance and the date of the last data; a stale account is marked in red.
 func (t *acctTab) list() {

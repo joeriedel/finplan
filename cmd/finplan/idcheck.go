@@ -137,7 +137,7 @@ type layout struct {
 	// overflow is how far, at most, a window's content reaches past its scroll range, and window names the one it is for.
 	overflow imgui.Vec2
 	window   string
-	// bounded names the windows that hide content by design, such as the lists in popups; the scan cannot reach what they hide.
+	// bounded names the windows that hide content by design, such as the lists in popups and the clipped entries table; the scan cannot reach what they hide.
 	bounded []string
 	// bottom is the lowest y at which any window with no child windows has content.
 	bottom float32
@@ -154,7 +154,7 @@ func windows(ctx *imgui.Context) []*imgui.Window {
 	return wins
 }
 
-// inPopup reports whether w is a popup or a child of one, whose height ImGui caps, so that its list scrolls.
+// inPopup reports whether w is a popup or a child of one, whose height ImGui caps, so that its list scrolls. It and scrollsByDesign decide which windows readLayout treats as bounded.
 func inPopup(w *imgui.Window) bool {
 	for ; w != nil && w.CData != nil; w = w.ParentWindow() {
 		f := w.Flags()
@@ -166,6 +166,11 @@ func inPopup(w *imgui.Window) bool {
 		}
 	}
 	return false
+}
+
+// scrollsByDesign reports whether w is the scrolling window of the entries table, which draws only the visible rows of a ledger that is many screens tall. ImGui names that window "<parent>/<table ID>_<hex ID>".
+func scrollsByDesign(w *imgui.Window) bool {
+	return strings.Contains(w.Name(), "/"+entriesTableID+"_")
 }
 
 // readLayout measures the active windows of the frame just drawn.
@@ -186,7 +191,7 @@ func readLayout(ctx *imgui.Context) layout {
 			continue
 		}
 		if m := w.ScrollMax(); (m.X >= step || m.Y >= step) && w.Flags()&imgui.WindowFlagsMenuBar == 0 {
-			if inPopup(w) {
+			if inPopup(w) || scrollsByDesign(w) {
 				l.bounded = append(l.bounded, fmt.Sprintf("%s (%.0f px)", w.Name(), m.Y))
 			} else {
 				if l.window == "" || m.Y > l.overflow.Y {

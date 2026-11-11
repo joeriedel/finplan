@@ -382,11 +382,14 @@ func (t *acctTab) counterPick(id string, self, cur model.AccountID) model.Accoun
 	return cur
 }
 
+// entriesTableID is the ID of the entries table, whose scrolling window is named after it.
+const entriesTableID = "##entries"
+
 // entryTable draws the entries newest first, only the visible rows, and selects one on a click.
 func (t *acctTab) entryTable(acct *model.Account) {
 	em := imgui.FontSize()
 	u := &t.ent
-	if !imgui.BeginTableV("##entries", 5, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp|imgui.TableFlagsScrollY, imgui.NewVec2(0, em*20), 0) {
+	if !imgui.BeginTableV(entriesTableID, 5, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp|imgui.TableFlagsScrollY, imgui.NewVec2(0, em*20), 0) {
 		return
 	}
 	defer imgui.EndTable()
