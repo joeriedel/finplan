@@ -259,3 +259,25 @@ func TestEmptyEntries(t *testing.T) {
 		t.Errorf("all voided: %q", got)
 	}
 }
+
+func TestEntriesLabel(t *testing.T) {
+	if got := entriesLabel(470, false); got != "Entries (470) >>" {
+		t.Errorf("closed label = %q", got)
+	}
+	if got := entriesLabel(0, true); got != "Entries (0) <<" {
+		t.Errorf("open label = %q", got)
+	}
+}
+
+func TestShotOptionsLedger(t *testing.T) {
+	o, err := newShotOptions("x.png", "Accounts", 10, "1280x800", "Checking", "ledger")
+	if err != nil || o.open != "ledger" {
+		t.Fatalf("ledger with Accounts and --select: %+v, %v", o, err)
+	}
+	if _, err := newShotOptions("x.png", "Accounts", 10, "1280x800", "", "ledger"); err == nil {
+		t.Error("ledger without --select was accepted")
+	}
+	if _, err := newShotOptions("x.png", "Graph", 10, "1280x800", "", "ledger"); err == nil {
+		t.Error("ledger on the Graph tab was accepted")
+	}
+}

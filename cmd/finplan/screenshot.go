@@ -48,6 +48,7 @@ var openNames = []openState{
 	{"budget-item", "Budget", "", false},
 	{"timeline", "Projections", "", true},
 	{"asset-timeline", "Assets", "", true},
+	{"ledger", "Accounts", "", true},
 }
 
 // openRequest is the id of the picker the screenshot asks to be shown open; the tab that draws it opens it on the first frame it does and clears the request.
@@ -138,11 +139,13 @@ func (o *shotOptions) openName() (n openState) {
 	return n
 }
 
-// applyOpen puts the app in the state --open asks for that is not a picker: the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the first Budget item's editor, the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth.
+// applyOpen puts the app in the state --open asks for that is not a picker: the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the first Budget item's editor, the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth, or the selected account's ledger panel (ledger).
 func (o *shotOptions) applyOpen(a *app) error {
 	switch o.open {
 	case "member", "member-form":
 		a.assets.add.kind = memberAccount
+	case "ledger":
+		a.accts.ledger = true
 	case "new-item":
 		a.proj.addNew = true
 	case "budget-item":

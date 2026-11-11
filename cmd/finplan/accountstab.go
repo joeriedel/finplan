@@ -180,6 +180,9 @@ type acctTab struct {
 	add                   newAcctForm
 	snapDate, snapBalance string
 	ent                   entriesUI
+
+	// ledger says whether the ledger panel is folded out to the right of the detail.
+	ledger bool
 	closeOn               string
 	ivFrom, ivTo, ivValue string
 }
@@ -207,14 +210,27 @@ func (t *acctTab) draw() {
 	}
 	imgui.EndChild()
 	imgui.SameLine()
-	if imgui.BeginChildStrV("##acctdetail", imgui.NewVec2(0, 0), 0, 0) {
-		if acct := a.rec.Account(t.sel); acct != nil {
+	acct := a.rec.Account(t.sel)
+	showLedger := t.ledger && acct != nil
+	detailWidth := float32(0)
+	if showLedger {
+		detailWidth = imgui.FontSize() * 32
+	}
+	if imgui.BeginChildStrV("##acctdetail", imgui.NewVec2(detailWidth, 0), 0, 0) {
+		if acct != nil {
 			t.detail(acct)
 		} else {
 			imgui.TextDisabled("Select an account to see and change it.")
 		}
 	}
 	imgui.EndChild()
+	if showLedger {
+		imgui.SameLine()
+		if imgui.BeginChildStrV("##acctledger", imgui.NewVec2(0, 0), imgui.ChildFlagsBorders, 0) {
+			t.ledgerPanel(acct)
+		}
+		imgui.EndChild()
+	}
 }
 
 // list draws the accounts by group, with balance and the date of the last data; a stale account is marked in red.

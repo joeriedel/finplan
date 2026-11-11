@@ -49,7 +49,6 @@ func TestScreenshotSmoke(t *testing.T) {
 	}
 	tmp := t.TempDir()
 
-	// accounts-selected is Home because the entries table of an account with a long record, such as Checking, is thousands of pixels tall and the ID scan, which does not scroll, cannot reach all of it within its frame bound.
 	cases := []struct{ name, tab, sel, open string }{
 		{"graph", "Graph", "", ""},
 		{"projections", "Projections", "", ""},
@@ -59,7 +58,8 @@ func TestScreenshotSmoke(t *testing.T) {
 		{"markets", "Markets", "", ""},
 		// projections-selected also covers the Add modification form, which is the default mode of the add form.
 		{"projections-selected", "Projections", "Base", ""},
-		{"accounts-selected", "Accounts", "Home", ""},
+		{"accounts-selected", "Accounts", "Checking", ""},
+		{"accounts-ledger", "Accounts", "Checking", "ledger"},
 		{"assets-selected", "Assets", "Net worth", ""},
 		{"add-line", "Graph", "", "add-line"},
 		{"target", "Projections", "Base", "target"},

@@ -234,7 +234,7 @@ type entriesUI struct {
 	problems [3]problemCache
 }
 
-// entries draws the add-transaction form, the entries table and the selected entry's correct, void and history.
+// entries reads the rows of the account when they are stale, draws the add-transaction form and the button that folds the ledger out.
 func (t *acctTab) entries(acct *model.Account) {
 	u, a := &t.ent, t.a
 	if u.newTx.kind == "" {
@@ -250,6 +250,22 @@ func (t *acctTab) entries(acct *model.Account) {
 	t.txForm(acct)
 
 	imgui.Spacing()
+	if imgui.Button(entriesLabel(len(u.rows), t.ledger) + "##ledger") {
+		t.ledger = !t.ledger
+	}
+}
+
+// entriesLabel is the text of the button that folds the ledger out: the number of entries listed and which way it opens.
+func entriesLabel(n int, open bool) string {
+	if open {
+		return fmt.Sprintf("Entries (%d) <<", n)
+	}
+	return fmt.Sprintf("Entries (%d) >>", n)
+}
+
+// ledgerPanel draws the Show voided checkbox, the entries table and the selected entry's correct, void and history.
+func (t *acctTab) ledgerPanel(acct *model.Account) {
+	u := &t.ent
 	imgui.SeparatorText("Entries")
 	if imgui.Checkbox("Show voided", &u.voided) {
 		t.loadRows(acct.ID)
@@ -366,38 +382,45 @@ func (t *acctTab) counterPick(id string, self, cur model.AccountID) model.Accoun
 	return cur
 }
 
-// entryTable draws the entries newest first and selects one on a click.
+// entryTable draws the entries newest first, only the visible rows, and selects one on a click.
 func (t *acctTab) entryTable(acct *model.Account) {
 	em := imgui.FontSize()
 	u := &t.ent
-	if !imgui.BeginTableV("##entries", 5, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
+	if !imgui.BeginTableV("##entries", 5, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp|imgui.TableFlagsScrollY, imgui.NewVec2(0, em*20), 0) {
 		return
 	}
 	defer imgui.EndTable()
+	imgui.TableSetupScrollFreeze(0, 1)
 	imgui.TableSetupColumnV("Date", imgui.TableColumnFlagsWidthFixed, em*8, 0)
 	imgui.TableSetupColumnV("Kind", imgui.TableColumnFlagsWidthFixed, em*6, 0)
 	imgui.TableSetupColumnV("Amount", imgui.TableColumnFlagsWidthFixed, em*8, 0)
 	imgui.TableSetupColumnV("Transfer account", 0, 1, 0)
 	imgui.TableSetupColumnV("Memo", 0, 1, 0)
 	imgui.TableHeadersRow()
-	for _, r := range u.rows {
-		imgui.TableNextRowV(0, 0)
-		imgui.TableSetColumnIndex(0)
-		label := r.Date.String()
-		if r.Void {
-			label += " (voided)"
+	clipper := imgui.NewListClipper()
+	defer clipper.Destroy()
+	clipper.Begin(int32(len(u.rows)))
+	for clipper.Step() {
+		for i := clipper.DisplayStart(); i < clipper.DisplayEnd(); i++ {
+			r := u.rows[i]
+			imgui.TableNextRowV(0, 0)
+			imgui.TableSetColumnIndex(0)
+			label := r.Date.String()
+			if r.Void {
+				label += " (voided)"
+			}
+			if imgui.SelectableBoolV(label+"##"+strconv.FormatInt(r.ID, 10), u.sel == r.ID, imgui.SelectableFlagsSpanAllColumns, imgui.NewVec2(0, 0)) {
+				u.sel, u.selRec = r.ID, nil
+			}
+			imgui.TableSetColumnIndex(1)
+			imgui.TextUnformatted(r.Kind)
+			imgui.TableSetColumnIndex(2)
+			imgui.TextUnformatted(formatDollars(r.Amount))
+			imgui.TableSetColumnIndex(3)
+			imgui.TextUnformatted(r.Counter)
+			imgui.TableSetColumnIndex(4)
+			imgui.TextUnformatted(r.Memo)
 		}
-		if imgui.SelectableBoolV(label+"##"+strconv.FormatInt(r.ID, 10), u.sel == r.ID, imgui.SelectableFlagsSpanAllColumns, imgui.NewVec2(0, 0)) {
-			u.sel, u.selRec = r.ID, nil
-		}
-		imgui.TableSetColumnIndex(1)
-		imgui.TextUnformatted(r.Kind)
-		imgui.TableSetColumnIndex(2)
-		imgui.TextUnformatted(formatDollars(r.Amount))
-		imgui.TableSetColumnIndex(3)
-		imgui.TextUnformatted(r.Counter)
-		imgui.TableSetColumnIndex(4)
-		imgui.TextUnformatted(r.Memo)
 	}
 }
 
