@@ -75,10 +75,7 @@ func MoveEnd(s model.Schedule, i int, to model.Date) (model.Schedule, error) {
 	return build(s, segs)
 }
 
-// SetStart sets the start of segment i to exactly the date, as a typed date: unlike MoveStart it never clamps. The date
-// may lie past the segment's own last day, which pushes the segment along (see push). It is refused for a segment from
-// the beginning of time, and where the segment before would be left empty (it touches this one and starts on or after the
-// date) or overlapped (it has an End on or after the date).
+// SetStart sets the start of segment i to exactly the date, as a typed date: unlike MoveStart it never clamps. The date may lie past the segment's own last day, which pushes the segment along (see push). It is refused for a segment from the beginning of time, and where the segment before would be left empty (it touches this one and starts on or after the date) or overlapped (it has an End on or after the date).
 func SetStart(s model.Schedule, i int, to model.Date) (model.Schedule, error) {
 	segs, err := load(s, i)
 	if err != nil {
@@ -100,8 +97,7 @@ func SetStart(s model.Schedule, i int, to model.Date) (model.Schedule, error) {
 	return build(s, segs)
 }
 
-// SetEnd sets the last day of segment i to exactly the date, as a typed date: unlike MoveEnd it never clamps. It is
-// refused before the segment's From. A date on or after the next segment's From pushes the later segments along.
+// SetEnd sets the last day of segment i to exactly the date, as a typed date: unlike MoveEnd it never clamps. It is refused before the segment's From. A date on or after the next segment's From pushes the later segments along.
 func SetEnd(s model.Schedule, i int, to model.Date) (model.Schedule, error) {
 	segs, err := load(s, i)
 	if err != nil {
