@@ -247,10 +247,18 @@ func ledgerWidths(avail, em float32) (list, detail float32) {
 }
 
 const (
-	ledgerMinEm = 43
-	detailMinEm = 24
+	ledgerMinEm = 40
+	detailMinEm = 26
 	listMinEm   = 28
 )
+
+// addFormStackedBelowEm is the list width, in font sizes, that the Add account form's two rows of fields need side by side.
+const addFormStackedBelowEm = 38
+
+// addFormStacked reports whether the Add account form puts each field on its own line because avail, the width inside the list, is too narrow for its rows.
+func addFormStacked(avail, em float32) bool {
+	return avail < em*addFormStackedBelowEm
+}
 
 // list draws the accounts by group, with balance and the date of the last data; a stale account is marked in red.
 func (t *acctTab) list() {
@@ -361,6 +369,8 @@ func (t *acctTab) detail(acct *model.Account) {
 	id := acct.ID
 	imgui.PushIDStr("detail" + string(id))
 	defer imgui.PopID()
+	imgui.PushTextWrapPos()
+	defer imgui.PopTextWrapPos()
 	imgui.SeparatorText(acct.Name)
 
 	t.label("Name")
@@ -545,13 +555,19 @@ func (t *acctTab) addForm() {
 			f.set(field, values[k])
 		}
 	}
+	rowAvail := imgui.ContentRegionAvail().X
+	sameLine := func() {
+		if !addFormStacked(rowAvail, em) {
+			imgui.SameLine()
+		}
+	}
 	input("name", "name", "e.g. TSP", f.name, em*12)
-	imgui.SameLine()
+	sameLine()
 	choose("type", "type", string(f.typ), accountTypeName(f.typ), accountTypes, accountTypeLabels)
-	imgui.SameLine()
+	sameLine()
 	choose("tax", "tax", string(f.tax), taxName(f.tax), taxTreatments, taxLabels)
 	input("owner", "owner", "optional", f.owner, em*10)
-	imgui.SameLine()
+	sameLine()
 	input("rate", "rate per year", "percent, e.g. 3", f.rate, em*6)
 	formButton("Add", newAcctProblem(t.a.st, t.a.rec, *f), f.untouched(), func() {
 		acct, _ := f.account()

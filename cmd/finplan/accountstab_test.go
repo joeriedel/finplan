@@ -416,10 +416,11 @@ func TestLedgerWidths(t *testing.T) {
 		list, detail float32
 	}{
 		{em * 115, em * 40, em * 32},
-		{em * 110, em * 40, em * 27},
-		{em * 105, em * 38, em * 24},
-		{em * 95, em * 28, em * 24},
-		{em * 60, em * 28, em * 24},
+		{em * 110, em * 40, em * 30},
+		{em * 105, em * 39, em * 26},
+		{em * 100, em * 34, em * 26},
+		{em * 95, em * 29, em * 26},
+		{em * 60, em * 28, em * 26},
 	} {
 		list, detail := ledgerWidths(tc.avail, em)
 		if list != tc.list || detail != tc.detail {
@@ -427,8 +428,19 @@ func TestLedgerWidths(t *testing.T) {
 		}
 	}
 	// A 1280 px window, less its padding, leaves the ledger its minimum.
-	list, detail := ledgerWidths(1255, em)
-	if got := 1255 - list - detail; got < em*ledgerMinEm {
+	list, detail := ledgerWidths(1244, em)
+	if got := 1244 - list - detail; got < em*ledgerMinEm {
 		t.Errorf("ledger gets %v px, want at least %v", got, em*ledgerMinEm)
+	}
+}
+
+func TestAddFormStacked(t *testing.T) {
+	const em = 13
+	// The closed list is 40em wide less its 10 px padding.
+	if addFormStacked(em*40-20, em) {
+		t.Error("the form is stacked in the closed list")
+	}
+	if !addFormStacked(373-20, em) {
+		t.Error("the form is not stacked in the ledger's narrow list")
 	}
 }
