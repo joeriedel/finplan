@@ -13,8 +13,6 @@ import (
 	"strings"
 
 	"github.com/AllenDang/cimgui-go/imgui"
-	"github.com/joeriedel/finplan/internal/model"
-	"github.com/joeriedel/finplan/internal/ops"
 )
 
 // shotOptions is screenshot mode: draw a tab for a number of frames, save the last as a PNG and exit.
@@ -140,7 +138,7 @@ func (o *shotOptions) openName() (n openState) {
 	return n
 }
 
-// applyOpen puts the app in the state --open asks for that is not a picker: the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the first Budget item's editor, the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which the demo data gives a schedule if it has none.
+// applyOpen puts the app in the state --open asks for that is not a picker: the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the first Budget item's editor, the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth.
 func (o *shotOptions) applyOpen(a *app) error {
 	switch o.open {
 	case "member", "member-form":
@@ -167,17 +165,8 @@ func (o *shotOptions) applyOpen(a *app) error {
 		return fmt.Errorf("projection %q has no modification with a schedule", p.Name)
 	case "asset-timeline":
 		id := a.assets.sel
-		if k, _ := growthKind(a.rec.Asset(id)); k != growthSchedule {
-			growth := model.MustSchedule(
-				model.Segment{From: model.MinDate, Value: 0.04},
-				model.Segment{From: model.D(2029, 1, 1), Value: 0.06},
-				model.Segment{From: model.D(2035, 1, 1), Value: 0.02},
-			)
-			if !a.edit("set growth", func() (*ops.Result, error) {
-				return ops.SetParam(a.st, a.rec, id, model.PropGrowth, &growth, ops.Options{})
-			}) {
-				return fmt.Errorf("could not give the asset a growth schedule: %v", a.notices)
-			}
+		if k, _ := growthKind(a.rec.Asset(id)); k == growthNone {
+			return fmt.Errorf("asset %q has no growth to edit", a.rec.Asset(id).Name)
 		}
 		a.assets.tl = timelineState{open: true, generation: a.generation, sel: 0}
 		a.assets.tlAsset = id

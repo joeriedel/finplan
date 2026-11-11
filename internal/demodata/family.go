@@ -150,7 +150,11 @@ func Family() *model.Record {
 	}}))
 	must(rec.AddAsset(&model.Asset{ID: Colleges, Name: "529 accounts", Members: []model.Member{
 		model.RuleMember(model.Rule{Tax: []model.TaxTreatment{model.Tax529}}),
-	}}))
+	}, Params: map[string]model.Schedule{model.PropGrowth: model.MustSchedule(
+		model.Segment{From: model.MinDate, Value: 0.04},
+		model.Segment{From: model.D(2029, time.January, 1), Value: 0.06},
+		model.Segment{From: model.D(2035, time.January, 1), Value: 0.02},
+	)}}))
 	must(rec.AddAsset(&model.Asset{ID: NetWorth, Name: "Net worth", Members: []model.Member{
 		model.RuleMember(model.Rule{}),
 	}}))
