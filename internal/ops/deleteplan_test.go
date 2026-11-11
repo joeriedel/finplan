@@ -167,3 +167,27 @@ func TestAccountDeletePlanOfAnAccountWithRecordsIsBlocked(t *testing.T) {
 		t.Errorf("unknown account: %v", err)
 	}
 }
+
+func TestBudgetItemDeletePlanListsTheModsThatWouldTargetNothing(t *testing.T) {
+	st, rec := seed(t)
+	plan, err := BudgetItemDeletePlan(rec, "salary-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Affected{{AffectedOrphan, demodata.ProjNewJob, string(model.PropAmount), EffectOrphaned}}
+	if !slices.Equal(plan.Affected, want) || plan.Blocked != "" {
+		t.Fatalf("plan %+v, want %+v", plan, want)
+	}
+	if plan, err = BudgetItemDeletePlan(rec, "groceries"); err != nil || len(plan.Affected) != 0 {
+		t.Errorf("an item without modifications: %+v, %v", plan, err)
+	}
+	if _, err = BudgetItemDeletePlan(rec, "nope"); !errors.Is(err, ErrUnknownObject) {
+		t.Errorf("unknown item: %v", err)
+	}
+	if _, err := DeleteBudgetItem(st, rec, "salary-a", Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if after := reload(t, st); len(after.Projection(demodata.ProjNewJob).Mods) != 2 {
+		t.Error("the delete removed the modification the plan listed")
+	}
+}

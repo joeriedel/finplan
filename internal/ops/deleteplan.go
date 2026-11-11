@@ -17,12 +17,15 @@ const (
 	AffectedAssetSetting = "asset setting"
 	AffectedModification = "modification"
 	AffectedBudgetItem   = "budget item"
+	AffectedOrphan       = "orphaned modification"
 )
 
 // Effects of a delete on an Affected object.
 const (
 	EffectRemoved = "removed"
 	EffectDeleted = "deleted"
+	// EffectOrphaned is for a modification that stays but targets nothing once its budget item is deleted.
+	EffectOrphaned = "orphaned"
 )
 
 // Affected is one object a delete of an asset or account changes.
@@ -66,6 +69,22 @@ func AccountDeletePlan(st *store.Store, rec *model.Record, id model.AccountID) (
 		return DeletePlan{Blocked: blocked}, err
 	}
 	return DeletePlan{Affected: unlinkAccount(next, id)}, nil
+}
+
+// BudgetItemDeletePlan returns what DeleteBudgetItem would leave behind: the modifications of projections that target the base item, which stay and point at nothing. It is ErrUnknownObject for an item the budget does not have. Nothing is changed.
+func BudgetItemDeletePlan(rec *model.Record, id string) (DeletePlan, error) {
+	if _, err := baseItem(rec, id); err != nil {
+		return DeletePlan{}, err
+	}
+	var out []Affected
+	for _, p := range rec.Projections {
+		for _, m := range p.Mods {
+			if m.Target.Kind == model.KindBudgetItem && m.Target.ID == id {
+				out = append(out, Affected{AffectedOrphan, p.Name, string(m.Property), EffectOrphaned})
+			}
+		}
+	}
+	return DeletePlan{Affected: out}, nil
 }
 
 // accountBlocked returns why the account cannot be deleted: it has record entries, stored or in the record, or is the counter account of a stored entry (voided included). It is empty for an account that can go.
