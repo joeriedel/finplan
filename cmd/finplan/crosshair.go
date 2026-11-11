@@ -81,8 +81,7 @@ func drawCrosshair(dl *imgui.DrawList, p plotGeom, mouseX float32, pts []crossha
 	}
 }
 
-// pendingTag is a crosshair tag with its top-left corner, queued while the plot is being built, to be drawn once
-// ImPlot has finished.
+// pendingTag is a crosshair tag with its top-left corner, queued while the plot is being built, to be drawn once ImPlot has finished.
 type pendingTag struct {
 	at   graph.Pt
 	bg   imgui.Vec4
@@ -131,8 +130,7 @@ func tagSize(text string) graph.Pt {
 	return graph.Pt{X: ts.X + 2*pad.X, Y: ts.Y + 2*pad.Y}
 }
 
-// drawTag draws a filled tag with its top-left corner at p, with text black or white by the background's
-// brightness, as ImPlot does for its own axis tags.
+// drawTag draws a filled tag with its top-left corner at p, with text black or white by the background's brightness, as ImPlot does for its own axis tags.
 func drawTag(dl *imgui.DrawList, p graph.Pt, bg imgui.Vec4, text string) {
 	pad := implot.GetStyle().AnnotationPadding()
 	size := tagSize(text)
