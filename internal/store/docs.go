@@ -29,6 +29,7 @@ const (
 	kindGlobal     = "global"
 	kindProjection = "projection"
 	kindCalendar   = "calendar"
+	kindStock      = "stock"
 )
 
 // The DTOs below are the stored shape of formats 1 to 5. They are separate from the model types so that
@@ -139,6 +140,40 @@ type modDoc struct {
 	Mode     model.Mode     `json:"mode,omitempty"`
 	Values   []segDoc       `json:"values"`
 	Item     *budgetItemDoc `json:"item"`
+	Grant    *focalGrantDoc `json:"grant,omitempty"`
+}
+
+type focalGrantDoc struct {
+	Symbol          string          `json:"symbol"`
+	Value           float64         `json:"value"`
+	Date            model.Date      `json:"date"`
+	Yearly          bool            `json:"yearly"`
+	Last            *model.Date     `json:"last"`
+	Calendar        string          `json:"calendar"`
+	YearPercents    []float64       `json:"year_percents"`
+	CliffMonths     int             `json:"cliff_months"`
+	FirstVestMonths int             `json:"first_vest_months"`
+	Federal         *float64        `json:"federal"`
+	State           *float64        `json:"state"`
+	FICA            *float64        `json:"fica"`
+	Brokerage       model.AccountID `json:"brokerage"`
+}
+
+func focalGrantToDoc(g model.FocalGrant) focalGrantDoc {
+	d := focalGrantDoc{g.Symbol, g.Value, g.Date, g.Yearly, g.Last, g.Calendar, g.YearPercents, g.CliffMonths, g.FirstVestMonths, nil, nil, nil, g.Brokerage}
+	if g.Rates != nil {
+		d.Federal, d.State, d.FICA = &g.Rates.Federal, &g.Rates.State, &g.Rates.FICA
+	}
+	return d
+}
+
+func docFocalGrant(d focalGrantDoc) model.FocalGrant {
+	g := model.FocalGrant{Symbol: d.Symbol, Value: d.Value, Date: d.Date, Yearly: d.Yearly, Last: d.Last, Calendar: d.Calendar,
+		YearPercents: d.YearPercents, CliffMonths: d.CliffMonths, FirstVestMonths: d.FirstVestMonths, Brokerage: d.Brokerage}
+	if d.Federal != nil && d.State != nil && d.FICA != nil {
+		g.Rates = &model.Withholding{Federal: *d.Federal, State: *d.State, FICA: *d.FICA}
+	}
+	return g.Clone()
 }
 
 type assetSettingDoc struct {
@@ -351,6 +386,10 @@ func projectionToDoc(p *model.Projection) projectionDoc {
 				it := itemDoc(*m.Item)
 				d.Item = &it
 			}
+			if m.Grant != nil {
+				g := focalGrantToDoc(m.Grant.Clone())
+				d.Grant = &g
+			}
 			return d
 		}),
 		Shocks: mapSlice(p.Shocks, func(s model.Shock) shockDoc { return shockDoc{s.Class, s.Date, s.Change} }),
@@ -384,6 +423,10 @@ func docProjection(d projectionDoc) (*model.Projection, error) {
 				return nil, fmt.Errorf("projection %q mod %d: %w", d.Name, i, err)
 			}
 			mod.Item = &it
+		}
+		if m.Grant != nil {
+			g := docFocalGrant(*m.Grant)
+			mod.Grant = &g
 		}
 		p.Mods[i] = mod
 	}

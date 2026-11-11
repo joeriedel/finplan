@@ -13,7 +13,7 @@ import (
 // Cause names why a balance changed.
 type Cause string
 
-// Causes. Unexplained is the part of an actual change that snapshots show and transactions do not.
+// Causes. Grant is the value of new RSU grants added to an equity account and Vest the net proceeds of its vests, which leave it for the deposit account; the withholding of a vest is Tax. Unexplained is the part of an actual change that snapshots show and transactions do not.
 // Default is a change that comes from default balances, including a hand-off between defaults and
 // actual data.
 const (
@@ -23,6 +23,8 @@ const (
 	CauseContribution Cause = "contribution"
 	CauseWithdrawal   Cause = "withdrawal"
 	CauseTax          Cause = "tax"
+	CauseGrant        Cause = "grant"
+	CauseVest         Cause = "vest"
 	CauseGrowth       Cause = "growth"
 	CauseOpening      Cause = "opening"
 	CauseUnexplained  Cause = "unexplained"
@@ -34,7 +36,7 @@ const residualTolerance = 1e-6
 
 var causeOrder = []Cause{
 	CauseIncome, CauseExpense, CauseTransfer, CauseContribution, CauseWithdrawal,
-	CauseTax, CauseGrowth, CauseOpening, CauseUnexplained, CauseDefault,
+	CauseGrant, CauseVest, CauseTax, CauseGrowth, CauseOpening, CauseUnexplained, CauseDefault,
 }
 
 // Line is the change attributed to one cause, split by where it came from: Actual is read back from
@@ -153,7 +155,7 @@ func (p *path) breakdown(rec *model.Record, from, to model.Date, acc *accum) {
 }
 
 // breakdownReadBack explains the change over (a, b], all before start. Inside the account's real data
-// span it is its transactions and the unexplained remainder at snapshots; any difference left (dates
+// span it is its transactions and the unexplained remainder at snapshots (for an equity account with grants, its grants, recorded vests and price moves, then what remains); any difference left (dates
 // outside the span, which use defaults) is a default change.
 func (p *path) breakdownReadBack(rec *model.Record, a, b model.Date, acc *accum) {
 	explained := 0.0
@@ -162,6 +164,10 @@ func (p *path) breakdownReadBack(rec *model.Record, a, b model.Date, acc *accum)
 		if hi > lo {
 			for _, t := range p.acct.TransactionsIn(lo, hi) {
 				explained += t.Amount
+				if eq := vestDeposit(rec, p.acct.ID, t); eq != "" {
+					acc.addFlow(CauseTransfer, t.Amount, eq, false)
+					continue
+				}
 				switch t.Kind {
 				case model.TxIncome:
 					acc.addFlow(CauseIncome, t.Amount, "", false)
@@ -175,12 +181,43 @@ func (p *path) breakdownReadBack(rec *model.Record, a, b model.Date, acc *accum)
 					acc.addFlow(transferCause(rec, src, dst), t.Amount, t.Counter, false)
 				}
 			}
-			u := p.acct.UnexplainedIn(lo, hi)
-			explained += u
+			total := p.acct.UnexplainedIn(lo, hi)
+			explained += total
+			u := total
+			if p.acct.HoldsGrants() {
+				ch := p.acct.EquityChange(lo, hi)
+				u -= ch.Grants + ch.Growth
+				acc.add(CauseGrant, ch.Grants, false)
+				acc.add(CauseGrowth, ch.Growth, false)
+				for _, v := range ch.Vests {
+					g, _ := rec.Grant(v.Grant)
+					acc.addFlow(CauseVest, -v.Net(), g.Brokerage, false)
+					acc.add(CauseTax, -v.WithheldAmount(), false)
+					u += v.Gross()
+				}
+				if math.Abs(u) <= residualTolerance {
+					u = 0
+				}
+			}
 			acc.add(CauseUnexplained, u, false)
 		}
 	}
 	if rest := p.readBack(b) - p.readBack(a) - explained; math.Abs(rest) > residualTolerance {
 		acc.add(CauseDefault, rest, false)
 	}
+}
+
+// vestDeposit returns the equity account whose recorded vest is tied to the transaction, which paid its net proceeds into the account, or "" if no vest is or the transaction is a transfer, which names its counter itself.
+func vestDeposit(rec *model.Record, id model.AccountID, t model.Transaction) model.AccountID {
+	if t.Kind == model.TxTransfer || t.Entry == 0 {
+		return ""
+	}
+	for _, a := range rec.Accounts {
+		for _, v := range a.Vests {
+			if g, _ := rec.Grant(v.Grant); g != nil && v.TxEntry == t.Entry && g.Brokerage == id {
+				return a.ID
+			}
+		}
+	}
+	return ""
 }

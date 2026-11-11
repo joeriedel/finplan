@@ -57,6 +57,16 @@ func encodeRecord(r *model.Record) ([]docRow, error) {
 			return nil, err
 		}
 	}
+	symbols := make([]string, 0, len(r.StockGrowth))
+	for s := range r.StockGrowth {
+		symbols = append(symbols, s)
+	}
+	sort.Strings(symbols)
+	for i, s := range symbols {
+		if err := add(kindStock, s, i, scheduleDoc(r.StockGrowth[s])); err != nil {
+			return nil, err
+		}
+	}
 	for i, p := range r.Projections {
 		if err := add(kindProjection, p.Name, i, projectionToDoc(p)); err != nil {
 			return nil, err
@@ -78,6 +88,7 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 		globals = map[string][]segDoc{}
 		projs   []projectionDoc
 		cals    []calendarDoc
+		stocks  = map[string][]segDoc{}
 	)
 	for _, row := range rows {
 		var err error
@@ -108,6 +119,10 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 			var d calendarDoc
 			err = decodeDoc(row, &d)
 			cals = append(cals, d)
+		case kindStock:
+			var d []segDoc
+			err = decodeDoc(row, &d)
+			stocks[row.key] = d
 		case kindProjection:
 			var d projectionDoc
 			err = decodeDoc(row, &d)
@@ -143,6 +158,13 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 	}
 	if err := restoreAccountsAndAssets(rec, accts, assets, entries); err != nil {
 		return nil, err
+	}
+	for sym, segs := range stocks {
+		s, err := docSchedule(segs)
+		if err != nil {
+			return nil, fmt.Errorf("store: stock %q: %w", sym, err)
+		}
+		rec.StockGrowth[sym] = s
 	}
 	for _, d := range cals {
 		c := docCalendar(d)
@@ -335,10 +357,38 @@ func (s *Store) Load() (*model.Record, error) {
 	if err := attachFacts(r, facts); err != nil {
 		return nil, err
 	}
+	linkTies(r, all)
 	s.mu.Lock()
 	s.loaded, s.loadMark = true, mark
 	s.mu.Unlock()
 	return r, nil
+}
+
+// linkTies sets Entry on the transaction of each tied vest's deposit, which is the one with the values of the entry the vest names. Of identical transactions the first not yet linked is the one.
+func linkTies(r *model.Record, entries []Entry) {
+	byID := map[int64]Entry{}
+	for _, e := range entries {
+		byID[e.ID] = e
+	}
+	for _, a := range r.Accounts {
+		for _, v := range a.Vests {
+			e, ok := byID[v.TxEntry]
+			if !ok || e.Kind != KindTransaction {
+				continue
+			}
+			b := r.Account(e.Account)
+			if b == nil {
+				continue
+			}
+			for i := range b.Transactions {
+				t := &b.Transactions[i]
+				if t.Entry == 0 && t.Date == e.Date && t.Amount == e.Amount && t.Kind == e.TxKind && t.Counter == e.Counter && t.Memo == e.Memo {
+					t.Entry = e.ID
+					break
+				}
+			}
+		}
+	}
 }
 
 // attachFacts puts the stored grants, vests and price observations into the record. A grant of an account the record lacks, or a vest of a grant it lacks, is an error.

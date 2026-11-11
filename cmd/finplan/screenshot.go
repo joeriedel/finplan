@@ -15,6 +15,7 @@ import (
 
 	"github.com/AllenDang/cimgui-go/imgui"
 
+	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/ops"
 	"github.com/joeriedel/finplan/internal/store"
@@ -50,6 +51,7 @@ var openNames = []openState{
 	{"member", "Assets", "memberacct", true},
 	{"member-form", "Assets", "", true},
 	{"new-item", "Projections", "", true},
+	{"focal-grant", "Projections", "", true},
 	{"budget-item", "Budget", "", false},
 	{"budget-delete", "Budget", "", false},
 	{"timeline", "Projections", "", true},
@@ -116,8 +118,8 @@ func newShotOptions(out, tab string, frames int, size, sel, open string) (*shotO
 	if !ok || err1 != nil || err2 != nil || o.width < 1 || o.height < 1 {
 		return nil, fmt.Errorf("--size %q is not WxH, such as 1280x800", size)
 	}
-	if sel != "" && o.tab != "Projections" && o.tab != "Assets" && o.tab != "Accounts" {
-		return nil, fmt.Errorf("--select works only with the Projections, Assets and Accounts tabs")
+	if sel != "" && o.tab != "Projections" && o.tab != "Assets" && o.tab != "Accounts" && o.tab != "Graph" {
+		return nil, fmt.Errorf("--select works only with the Projections, Assets, Accounts and Graph tabs")
 	}
 	if open != "" {
 		for _, n := range openNames {
@@ -152,7 +154,7 @@ func (o *shotOptions) openName() (n openState) {
 	return n
 }
 
-// applyOpen puts the app in the state --open asks for that is not a picker: the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the first Budget item's editor (budget-item) or its delete confirmation (budget-delete), the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth, the selected account's ledger panel (ledger), or one of the equity states, which scroll the selected equity account's detail to a section: its grants table (equity-grants), the Add grant form filled in by dollar value (equity-add-grant), the schedule of its first grant with recorded and planned vests (equity-schedule), the Record vest form of that grant's first planned vest with a changed federal rate (equity-vest) or tied to a deposit (equity-tie, with the picker closed), the Prices section (equity-prices) and the vest calendar editor (equity-calendar).
+// applyOpen puts the app in the state --open asks for that is not a picker: the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the Projections Add form on the focal grant kind (focal-grant), the first Budget item's editor (budget-item) or its delete confirmation (budget-delete), the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth, the selected account's ledger panel (ledger), or one of the equity states, which scroll the selected equity account's detail to a section: its grants table (equity-grants), the Add grant form filled in by dollar value (equity-add-grant), the schedule of its first grant with recorded and planned vests (equity-schedule), the Record vest form of that grant's first planned vest with a changed federal rate (equity-vest) or tied to a deposit (equity-tie, with the picker closed), the Prices section (equity-prices) and the vest calendar editor (equity-calendar).
 func (o *shotOptions) applyOpen(a *app) error {
 	switch o.open {
 	case "member", "member-form":
@@ -163,6 +165,8 @@ func (o *shotOptions) applyOpen(a *app) error {
 		return o.openEquity(a)
 	case "new-item":
 		a.proj.addNew = true
+	case "focal-grant":
+		a.proj.addKind = kindFocalGrant
 	case "budget-item":
 		for _, g := range budgetGroups(a.rec) {
 			if len(g.Rows) > 0 {
@@ -276,6 +280,25 @@ func (o *shotOptions) tieDeposit(a *app, g *model.Grant) error {
 	return fmt.Errorf("the brokerage account has no deposit a vest can be tied to")
 }
 
+// showEquityOnGraph shows the projection on the Graph the way the Projections tab's Show on graph does, after drawing the equity accounts and the brokerage accounts their grants deposit into too, so that vests show as a step down of one line and a step up of the other.
+func (a *app) showEquityOnGraph(proj string) {
+	for _, acct := range a.rec.Accounts {
+		if acct.Type != model.TypeEquity {
+			continue
+		}
+		ids := []model.AssetID{model.DefaultAssetID(acct.ID)}
+		for _, g := range acct.Grants {
+			ids = append(ids, model.DefaultAssetID(g.Brokerage))
+		}
+		for _, id := range ids {
+			if !slices.ContainsFunc(a.graph.lines.All(), func(ln graph.Line) bool { return !ln.Pinned && ln.Asset == id }) {
+				a.graph.lines.Add(id, false, "", graph.AssetColor(a.rec, id))
+			}
+		}
+	}
+	a.proj.showOnGraph(proj)
+}
+
 // selectItem selects the projection, asset or account named by --select in the chosen tab.
 func (o *shotOptions) selectItem(a *app) error {
 	if o.sel == "" {
@@ -285,6 +308,11 @@ func (o *shotOptions) selectItem(a *app) error {
 	case "Projections":
 		if a.rec.Projection(o.sel) != nil {
 			a.proj.sel = o.sel
+			return nil
+		}
+	case "Graph":
+		if a.rec.Projection(o.sel) != nil {
+			a.showEquityOnGraph(o.sel)
 			return nil
 		}
 	case "Assets":

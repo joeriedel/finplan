@@ -268,3 +268,38 @@ func TestFamilyDeterministic(t *testing.T) {
 		}
 	}
 }
+
+func TestAcmeScenarios(t *testing.T) {
+	rec := Family()
+	at := func(proj string, id model.AccountID, when model.Date) float64 {
+		t.Helper()
+		res, err := engine.Balances(rec, proj, model.DefaultAssetID(id), []model.Date{when})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Skipped) != 0 {
+			t.Fatalf("%s: skipped %+v", proj, res.Skipped)
+		}
+		return res.Samples[0].Amount
+	}
+	when := d(2028, time.June, 30)
+	baseEquity, baseBrokerage := at(ProjBase, Equity, when), at(ProjBase, Brokerage, when)
+	if baseEquity <= 0 {
+		t.Fatalf("base equity %v", baseEquity)
+	}
+	if up := at(ProjAcmeUp, Equity, when); !(up > baseEquity) {
+		t.Errorf("equity under +15%%: %v, base %v", up, baseEquity)
+	}
+	if up := at(ProjAcmeUp, Brokerage, when); !(up > baseBrokerage) {
+		t.Errorf("brokerage under +15%%: %v, base %v", up, baseBrokerage)
+	}
+	if crash := at(ProjAcmeCrash, Equity, when); !(crash < baseEquity) {
+		t.Errorf("equity under the crash: %v, base %v", crash, baseEquity)
+	}
+	if before := d(2027, time.May, 31); at(ProjAcmeCrash, Equity, before) != at(ProjBase, Equity, before) {
+		t.Error("the crash lowers the equity before its date")
+	}
+	if g := at(ProjAcmeGrants, Equity, when); !(g > baseEquity) {
+		t.Errorf("equity with yearly grants: %v, base %v", g, baseEquity)
+	}
+}

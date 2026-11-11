@@ -640,6 +640,7 @@ func projectionJSON(rec *model.Record, p *model.Projection) any {
 		Mode     string       `json:"mode"`
 		Schedule []jsegment   `json:"schedule"`
 		Item     *jbudgetItem `json:"item"`
+		Grant    *jfocalGrant `json:"grant"`
 		Missing  bool         `json:"missing"`
 		// MissingTarget names the target that does not exist; omitted when the modification's target resolves.
 		MissingTarget string `json:"missing_target,omitempty"`
@@ -664,6 +665,9 @@ func projectionJSON(rec *model.Record, p *model.Projection) any {
 		jm := jmod{Index: i, Target: jtarget{string(m.Target.Kind), m.Target.ID}, Property: m.Property, Mode: string(cmp.Or(m.Mode, model.ModeSet)), Schedule: scheduleJSONOut(m.Values)}
 		if m.Item != nil {
 			jm.Item = model.Ptr(budgetItemJSON(*m.Item, rec.Today))
+		}
+		if m.Grant != nil {
+			jm.Grant = model.Ptr(focalGrantJSON(*m.Grant))
 		}
 		if i < len(missing) && missing[i] != "" {
 			jm.Missing, jm.MissingTarget = true, missing[i]
@@ -879,4 +883,26 @@ func cmdStarts(c *call) (any, error) {
 		}
 	}
 	return out, nil
+}
+
+// jfocalGrant is the JSON shape of the focal grant of an add_grant modification; rates are the withholding rates in effect.
+type jfocalGrant struct {
+	Symbol          string    `json:"symbol"`
+	Value           float64   `json:"value"`
+	Date            jdate     `json:"date"`
+	Yearly          bool      `json:"yearly"`
+	Last            *jdate    `json:"last"`
+	Calendar        string    `json:"calendar"`
+	YearPercents    []float64 `json:"year_percents"`
+	CliffMonths     int       `json:"cliff_months"`
+	FirstVestMonths int       `json:"first_vest_months"`
+	Federal         float64   `json:"federal"`
+	State           float64   `json:"state"`
+	FICA            float64   `json:"fica"`
+	Deposit         string    `json:"deposit"`
+}
+
+func focalGrantJSON(g model.FocalGrant) jfocalGrant {
+	r := g.WithholdingRates()
+	return jfocalGrant{g.Symbol, g.Value, jd(g.Date), g.Yearly, jdp(g.Last), g.Calendar, g.YearPercents, g.CliffMonths, g.FirstVestMonths, r.Federal, r.State, r.FICA, string(g.Brokerage)}
 }

@@ -62,6 +62,12 @@ func TestScreenshotSmoke(t *testing.T) {
 		{"accounts-ledger", "Accounts", "Checking", "ledger"},
 		{"assets-selected", "Assets", "Net worth", ""},
 		{"add-line", "Graph", "", "add-line"},
+		// The Graph under a projection draws the Acme RSUs and Brokerage lines: vests step one down and the other up.
+		{"graph-base", "Graph", "Base", ""},
+		{"graph-acme-up", "Graph", "Acme +15%", ""},
+		{"graph-acme-crash", "Graph", "Acme crash", ""},
+		{"graph-acme-grants", "Graph", "Acme yearly grants", ""},
+		{"projections-focal-grant", "Projections", "Acme yearly grants", "focal-grant"},
 		{"target", "Projections", "Base", "target"},
 		{"member", "Assets", "Net worth", "member"},
 		// An open picker blocks hover in the windows behind it, so these states draw its form with the picker closed.
@@ -126,7 +132,7 @@ func TestScreenshotBadArguments(t *testing.T) {
 	bin := buildBinary(t)
 	for _, args := range [][]string{
 		{"--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Nope"},
-		{"--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Graph", "--select", "Checking"},
+		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Graph", "--select", "Checking"},
 		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Assets", "--select", "No such asset"},
 		{"--tab", "Assets"},
 		{"--demo", "--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Graph", "--open", "nothing"},

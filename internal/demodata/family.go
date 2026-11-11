@@ -55,6 +55,10 @@ const (
 	ProjBase     = "Base"
 	ProjNewJob   = "New job"
 	ProjWithdraw = "Withdraw $100k"
+	// ProjAcmeUp has the Acme stock growing 15% a year, ProjAcmeCrash a 40% drop over the year from 2027-06-01 and ProjAcmeGrants a new grant of Acme units every March from 2027.
+	ProjAcmeUp     = "Acme +15%"
+	ProjAcmeCrash  = "Acme crash"
+	ProjAcmeGrants = "Acme yearly grants"
 )
 
 // netPay is the share of gross pay that lands in an account, matching the engine's placeholder tax.
@@ -201,6 +205,24 @@ func Family() *model.Record {
 	}
 	must(rec.AddProjection(&model.Projection{Name: ProjWithdraw, Parent: ProjBase, Mods: []model.Modification{
 		{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: withdrawal.ID}, Property: model.PropAddItem, Item: &withdrawal},
+	}}))
+	must(rec.AddProjection(&model.Projection{Name: ProjAcmeUp, Parent: ProjBase, Mods: []model.Modification{
+		{Target: model.ObjectRef{Kind: model.KindStock, ID: Symbol}, Property: model.PropGrowth, Values: model.Constant(0.15)},
+	}}))
+	must(rec.AddProjection(&model.Projection{Name: ProjAcmeCrash, Parent: ProjBase, Mods: []model.Modification{
+		{
+			Target:   model.ObjectRef{Kind: model.KindStock, ID: Symbol},
+			Property: model.PropGrowth,
+			Values:   model.MustSchedule(model.Segment{From: model.D(2027, time.June, 1), End: model.Ptr(model.D(2028, time.May, 31)), Value: -0.40}),
+		},
+	}}))
+	must(rec.AddProjection(&model.Projection{Name: ProjAcmeGrants, Parent: ProjBase, Mods: []model.Modification{
+		{
+			Target:   model.ObjectRef{Kind: model.KindAccount, ID: string(Equity)},
+			Property: model.PropAddGrant,
+			Grant: &model.FocalGrant{Symbol: Symbol, Value: 80000, Date: model.D(2027, time.March, 1), Yearly: true, Calendar: CalendarName,
+				YearPercents: []float64{40, 30, 20, 10}, FirstVestMonths: 1, Brokerage: Brokerage},
+		},
 	}}))
 	return rec
 }

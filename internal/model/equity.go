@@ -338,3 +338,70 @@ func (a *Account) equitySpan() Span {
 	}
 	return sp
 }
+
+// HoldsGrants reports whether the account's actual balance comes from its grants and vests (see hasGrants).
+func (a *Account) HoldsGrants() bool { return a.hasGrants() }
+
+// priceFor is the stock's latest price on or before d, or the grant price if it has none yet.
+func (a *Account) priceFor(g *Grant, d Date) float64 {
+	if p, ok := a.prices.At(g.Symbol, d); ok {
+		return p
+	}
+	return g.Price
+}
+
+// EquityChange is the part of an equity account's actual value change over a range that its grants, vests and the stock prices explain.
+type EquityChange struct {
+	// Grants is the value of the shares of the grants dated in the range, at the price on their dates.
+	Grants float64
+	// Growth is the price change of the unvested shares held through the range.
+	Growth float64
+	// Vests are the recorded vests dated in the range.
+	Vests []RecordedVest
+}
+
+// EquityChange explains the change of the account's value over after..upTo (excluding after, including upTo) by its grants, recorded vests and price moves, so that the change equals Grants + Growth less the shares vested at the prices on their dates.
+func (a *Account) EquityChange(after, upTo Date) EquityChange {
+	var out EquityChange
+	for i := range a.Grants {
+		g := &a.Grants[i]
+		if g.Date > upTo {
+			continue
+		}
+		var dates []Date
+		shares := 0
+		if g.Date <= after {
+			shares = g.Shares - a.VestedBy(g.ID, after)
+		} else {
+			dates = append(dates, g.Date)
+		}
+		for _, v := range a.Vests {
+			if v.Grant == g.ID && v.Date > after && v.Date <= upTo {
+				dates = append(dates, v.Date)
+			}
+		}
+		slices.Sort(dates)
+		dates = slices.Compact(dates)
+		cur := after
+		for _, t := range dates {
+			out.Growth += float64(shares) * (a.priceFor(g, t) - a.priceFor(g, cur))
+			cur = t
+			if t == g.Date && g.Date > after {
+				shares += g.Shares
+				out.Grants += float64(g.Shares) * a.priceFor(g, t)
+			}
+			for _, v := range a.Vests {
+				if v.Grant == g.ID && v.Date == t {
+					shares -= v.Shares
+				}
+			}
+		}
+		out.Growth += float64(shares) * (a.priceFor(g, upTo) - a.priceFor(g, cur))
+	}
+	for _, v := range a.Vests {
+		if v.Date > after && v.Date <= upTo && slices.ContainsFunc(a.Grants, func(g Grant) bool { return g.ID == v.Grant && g.Date <= upTo }) {
+			out.Vests = append(out.Vests, v)
+		}
+	}
+	return out
+}

@@ -176,6 +176,21 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 		return nil
 	}
 	infl := rec.Globals[model.PropInflation]
+	var stockSettings []model.Setting[rateLayer]
+	focal := map[model.AccountID][]model.FocalGrant{}
+	// An equity account's value is its shares at the stock's price, whatever else is said of its growth.
+	focalAccts := map[model.AccountID]bool{}
+	for _, p := range chain {
+		for _, m := range p.Mods {
+			if a := rec.Account(model.AccountID(m.Target.ID)); a != nil && m.Target.Kind == model.KindAccount && m.Property == model.PropAddGrant && a.Type == model.TypeEquity {
+				focalAccts[a.ID] = true
+			}
+		}
+	}
+	equityMode := func(id model.AccountID) bool {
+		a := rec.Account(id)
+		return a != nil && (a.HoldsGrants() || focalAccts[id])
+	}
 	items := slices.Clone(rec.Budget.Items)
 	amounts := map[string]model.Schedule{}
 	growths := map[string]model.Schedule{}
@@ -243,6 +258,26 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 				switch {
 				case !found:
 					skip("target not found")
+				case m.Property == model.PropAddGrant:
+					acct := rec.Account(model.AccountID(m.Target.ID))
+					switch {
+					case m.Target.Kind != model.KindAccount:
+						skip("unsupported property")
+					case m.Grant == nil:
+						skip("no grant to add")
+					case acct.Type != model.TypeEquity:
+						skip("account is not an equity account")
+					case rec.Account(m.Grant.Brokerage) == nil:
+						skip("deposit account not found")
+					default:
+						if err := m.Grant.Check(rec.Calendar(m.Grant.Calendar)); err != nil {
+							skip(err.Error())
+						} else {
+							focal[acct.ID] = append(focal[acct.ID], m.Grant.Clone())
+						}
+					}
+				case m.Property == model.PropGrowth && equityAccountOf(m, equityMode) != "":
+					skip("an equity account is worth its shares at the stock's price: change the stock's growth instead")
 				case m.Property == model.PropGrowth:
 					if err := resolveTarget(asset); err != nil {
 						return nil, err
@@ -259,6 +294,15 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 					} else {
 						assetDefaults[asset] = append(assetDefaults[asset], m)
 					}
+				default:
+					skip("unsupported property")
+				}
+			case model.KindStock:
+				switch {
+				case !rec.HasStock(m.Target.ID):
+					skip("stock not found")
+				case m.Property == model.PropGrowth:
+					stockSettings = append(stockSettings, model.Setting[rateLayer]{Asset: model.AssetID(m.Target.ID), Value: rateLayer{m.Values, m.IsScale()}})
 				default:
 					skip("unsupported property")
 				}
@@ -343,10 +387,50 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 			cutoffs[it.ID] = cut
 		}
 	}
+	// Every equity account is planned, in or out of the target, since its vests pay into other accounts.
+	var plans []*equityPlan
+	var equity []*model.Account
+	pathOf := func(id model.AccountID) *path {
+		if p := r.paths[id]; p != nil {
+			return p
+		}
+		if outside[id] == nil {
+			outside[id] = newPath(id)
+		}
+		return outside[id]
+	}
+	for _, a := range rec.Accounts {
+		if equityMode(a.ID) {
+			equity = append(equity, a)
+		}
+	}
+	for _, a := range equity {
+		start := pathOf(a.ID).start
+		pl := newEquityPlan(rec, a, start, horizon, newStockPrices(rec, a, start, focal[a.ID], stockSettings), focal[a.ID])
+		plans = append(plans, pl)
+		if p := r.paths[a.ID]; p != nil {
+			p.plan, p.rate = pl, model.Schedule{}
+		}
+	}
 	for _, id := range res.Accounts {
-		r.paths[id].build(rec, items, cutoffs, amounts, growths, infl, horizon)
+		r.paths[id].build(rec, items, cutoffs, amounts, growths, infl, horizon, plans)
 	}
 	return r, nil
+}
+
+// equityAccountOf returns the account whose growth the modification of an account or default asset changes if equityMode says it is an equity account, else "".
+func equityAccountOf(m model.Modification, equityMode func(model.AccountID) bool) model.AccountID {
+	id := model.AccountID(m.Target.ID)
+	if m.Target.Kind == model.KindAsset {
+		var ok bool
+		if id, ok = model.AccountOfDefaultAsset(model.AssetID(m.Target.ID)); !ok {
+			return ""
+		}
+	}
+	if equityMode(id) {
+		return id
+	}
+	return ""
 }
 
 // rateLayer is a growth schedule, or a modification's values that scale one.
@@ -420,15 +504,19 @@ type path struct {
 	flowsAfter model.Date
 	startVal   float64
 	rate       model.Schedule
-	changes    []change // flows after start, ordered by date then rank
-	points     []point  // balance after each date with a flow, from start
+	// plan is set on an equity account, whose value follows its shares' prices instead of growing at rate.
+	plan    *equityPlan
+	changes []change // flows after start, ordered by date then rank
+	points  []point  // balance after each date with a flow, from start
 }
 
-// Order of flows on one date (docs/design.md, "The engine"): income, expenses, then transfers
+// Order of flows on one date (docs/design.md, "The engine"): income, grants, vests, expenses, then transfers
 // (debt payments, contributions, withdrawals).
 const (
 	rankOpening = iota
 	rankIncome
+	rankGrant
+	rankVest
 	rankExpense
 	rankTransfer
 )
@@ -461,6 +549,9 @@ func (p *path) pointAt(d model.Date) point {
 // valueAt is the extrapolated balance on d, which is after start.
 func (p *path) valueAt(d model.Date) float64 {
 	pt := p.pointAt(d)
+	if p.plan != nil {
+		return pt.bal + p.plan.drift(pt.date, d)
+	}
 	return pt.bal * p.rate.Compound(pt.date, d)
 }
 
@@ -470,10 +561,13 @@ func (p *path) growthAt(d model.Date) float64 {
 		return 0
 	}
 	pt := p.pointAt(d)
+	if p.plan != nil {
+		return pt.cumGrowth + p.plan.drift(pt.date, d)
+	}
 	return pt.cumGrowth + pt.bal*(p.rate.Compound(pt.date, d)-1)
 }
 
-func (p *path) build(rec *model.Record, items []model.BudgetItem, cutoffs map[string]model.Date, amounts, growths map[string]model.Schedule, infl model.Schedule, horizon model.Date) {
+func (p *path) build(rec *model.Record, items []model.BudgetItem, cutoffs map[string]model.Date, amounts, growths map[string]model.Schedule, infl model.Schedule, horizon model.Date, plans []*equityPlan) {
 	p.points = []point{{date: p.start, bal: p.startVal}}
 	if horizon <= p.start {
 		return
@@ -519,6 +613,12 @@ func (p *path) build(rec *model.Record, items []model.BudgetItem, cutoffs map[st
 			p.flows(rec, it, d, amt)
 		}
 	}
+	if p.plan != nil {
+		p.changes = append(p.changes, p.plan.changes()...)
+	}
+	for _, pl := range plans {
+		p.changes = append(p.changes, pl.deposits(p.acct.ID, p.flowsAfter)...)
+	}
 	sort.SliceStable(p.changes, func(i, j int) bool {
 		a, b := p.changes[i], p.changes[j]
 		if a.date != b.date {
@@ -530,6 +630,9 @@ func (p *path) build(rec *model.Record, items []model.BudgetItem, cutoffs map[st
 	for i := 0; i < len(p.changes); {
 		d := p.changes[i].date
 		g := bal*p.rate.Compound(cur, d) - bal
+		if p.plan != nil {
+			g = p.plan.drift(cur, d)
+		}
 		bal += g
 		cum += g
 		cur = d

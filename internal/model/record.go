@@ -23,6 +23,9 @@ type Record struct {
 	Calendars []*VestCalendar
 	Prices    *PriceBook
 
+	// StockGrowth is each stock's base growth schedule by symbol; a stock with none is projected flat.
+	StockGrowth map[string]Schedule
+
 	seq        int
 	accountIdx map[AccountID]int
 	assetIdx   map[AssetID]int
@@ -31,11 +34,12 @@ type Record struct {
 // NewRecord returns an empty record.
 func NewRecord(today Date) *Record {
 	return &Record{
-		Today:      today,
-		Globals:    map[string]Schedule{},
-		Prices:     &PriceBook{},
-		accountIdx: map[AccountID]int{},
-		assetIdx:   map[AssetID]int{},
+		Today:       today,
+		Globals:     map[string]Schedule{},
+		Prices:      &PriceBook{},
+		StockGrowth: map[string]Schedule{},
+		accountIdx:  map[AccountID]int{},
+		assetIdx:    map[AssetID]int{},
 	}
 }
 

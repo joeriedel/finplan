@@ -168,17 +168,24 @@ var writeCommands = []*command{
 		run:    cmdProjectionRemoveAccount,
 	},
 	{
-		Name: "mod add", Summary: "add a modification of an item's amount or growth, an account's or asset's growth or default balance, or inflation to a projection; its target must exist, for an item in the record or added earlier in the chain",
+		Name: "mod add", Summary: "add a modification of an item's amount or growth, an account's or asset's growth or default balance, a stock's growth, inflation, or a focal grant to an equity account, to a projection; its target must exist, for an item in the record or added earlier in the chain",
 		Args: []argDef{{Name: "projection", Description: "projection to change", Required: true}},
-		Flags: []flagDef{
-			{Name: "target", Type: typeString, Required: true, Description: "what to change: item:<id or name>, account:<id or name>, asset:<id or name> or global"},
-			{Name: "property", Type: typeEnum, Required: true, Choices: []string{model.PropAmount, model.PropGrowth, model.PropDefault, model.PropInflation}, Description: "amount or growth (an annual raise) for an item, growth or default (the balance on dates with no actual data) for an account or asset, inflation for global"},
+		Flags: append([]flagDef{
+			{Name: "target", Type: typeString, Required: true, Description: "what to change: item:<id or name>, account:<id or name>, asset:<id or name>, stock:<symbol> or global"},
+			{Name: "property", Type: typeEnum, Required: true, Choices: []string{model.PropAmount, model.PropGrowth, model.PropDefault, model.PropInflation, model.PropAddGrant}, Description: "amount or growth (an annual raise) for an item, growth or default (the balance on dates with no actual data) for an account or asset, growth (the stock's annual price change, projected from its latest price) for a stock, inflation for global, add_grant for an equity account"},
 			{Name: "mode", Type: typeEnum, Choices: modModes, Default: string(model.ModeSet), Description: "set replaces the value beneath; scale multiplies it, so the result follows what lies beneath"},
-			{Name: "value", Type: typeNumber, Description: "a constant value (a rate is a fraction: 0.04 for 4%; with --mode scale a multiplier: 0.7 cuts by 30%); without it the schedule is read as JSON"},
-			{Name: "from", Type: typeDate, Description: "with --value, the date the value starts: " + dateNote + "; always when omitted"},
-			{Name: "end", Type: typeDate, Description: "with --value and --from, the last date the value holds: " + dateNote + "; open-ended when omitted"},
+			{Name: "value", Type: typeNumber, Description: "a constant value (a rate is a fraction: 0.04 for 4%; with --mode scale a multiplier: 0.7 cuts by 30%); without it the schedule is read as JSON. For add_grant the grant's dollar value"},
+			{Name: "from", Type: typeDate, Description: "with --value, the date the value starts: " + dateNote + "; always when omitted. For add_grant the grant date, the first if --yearly"},
+			{Name: "end", Type: typeDate, Description: "with --value and --from, the last date the value holds: " + dateNote + "; open-ended when omitted. For add_grant with --yearly, the last grant date"},
 			{Name: "at", Type: typeInt, Description: "index to insert at; at the end when omitted"},
-		},
+			{Name: "symbol", Type: typeString, Description: "add_grant: the stock's symbol"},
+			{Name: "yearly", Type: typeBool, Default: "false", Description: "add_grant: repeat the grant every year on the month and day of --from"},
+			{Name: "calendar", Type: typeString, Description: "add_grant: name of the vest calendar"},
+			{Name: "year-percents", Type: typeString, Description: "add_grant: the percent vesting in each year from the first vest, as " + percentsNote},
+			{Name: "cliff-months", Type: typeInt, Description: "add_grant: months of the cliff; 0 when omitted"},
+			{Name: "first-vest-months", Type: typeInt, Description: "add_grant: the first vest is the first calendar date at least this many months after the grant date; 0 when omitted"},
+			{Name: "deposit", Type: typeString, Description: "add_grant: account that net proceeds are deposited in: account id or name"},
+		}, rateFlags()...),
 		Input:  "without --value, a schedule: " + scheduleNote,
 		Output: writeOut,
 		run:    cmdModAdd,
@@ -208,6 +215,19 @@ var writeCommands = []*command{
 		},
 		Output: writeOut,
 		run:    cmdModMove,
+	},
+	{
+		Name: "stock growth", Summary: "set a stock's base growth, the annual rate its price is projected with from its latest recorded price when no projection says otherwise (0% when none is set); projections change it with mod add --target stock:<symbol> --property growth",
+		Args: []argDef{{Name: "symbol", Description: "the stock's symbol, as a grant or a price observation names it", Required: true}},
+		Flags: []flagDef{
+			{Name: "clear", Type: typeBool, Default: "false", Description: "remove the stock's growth schedule, so it projects flat"},
+			{Name: "value", Type: typeNumber, Description: "a constant annual rate, a fraction: 0.08 for 8%; without it (and without --clear) the schedule is read as JSON"},
+			{Name: "from", Type: typeDate, Description: "with --value, the date the rate starts: " + dateNote + "; always when omitted"},
+			{Name: "end", Type: typeDate, Description: "with --value and --from, the last date the rate holds: " + dateNote + "; open-ended when omitted"},
+		},
+		Input:  "without --value and --clear, a schedule: " + scheduleNote,
+		Output: "{dry_run, changed, stock, growth: [{from, end, value}]}",
+		run:    cmdStockGrowth,
 	},
 	{
 		Name: "mod remove", Summary: "remove a modification",
@@ -722,12 +742,17 @@ func (c *call) modTarget(p *model.Projection) (model.ObjectRef, error) {
 			return model.ObjectRef{}, usageErr("--target global takes no name")
 		}
 		return model.ObjectRef{Kind: model.KindGlobal}, nil
+	case "stock":
+		if name == "" {
+			return model.ObjectRef{}, usageErr("--target stock needs a symbol: stock:<symbol>")
+		}
+		return model.ObjectRef{Kind: model.KindStock, ID: name}, nil
 	case "item", "account", "asset":
 		if name == "" {
 			return model.ObjectRef{}, usageErr("--target %s needs a name: %s:<id or name>", kind, kind)
 		}
 	default:
-		return model.ObjectRef{}, usageErr("--target %q: use item:<id or name>, account:<id or name>, asset:<id or name> or global", c.str("target"))
+		return model.ObjectRef{}, usageErr("--target %q: use item:<id or name>, account:<id or name>, asset:<id or name>, stock:<symbol> or global", c.str("target"))
 	}
 	view, err := c.rec.For(p.Name)
 	if err != nil {
@@ -777,11 +802,14 @@ func cmdModAdd(c *call) (any, error) {
 	if atSet && (at < 0 || at > len(p.Mods)) {
 		return nil, failErr("invalid", "--at %d is out of range: the projection has %d modifications", at, len(p.Mods))
 	}
-	values, err := c.schedule()
-	if err != nil {
+	m := model.Modification{Target: target, Property: c.str("property"), Mode: model.Mode(c.str("mode"))}
+	if m.Property == model.PropAddGrant {
+		if m.Grant, err = c.focalGrant(); err != nil {
+			return nil, err
+		}
+	} else if m.Values, err = c.schedule(); err != nil {
 		return nil, err
 	}
-	m := model.Modification{Target: target, Property: c.str("property"), Mode: model.Mode(c.str("mode")), Values: values}
 	var res *ops.Result
 	if atSet {
 		res, err = ops.InsertMod(c.st, c.rec, p.Name, at, m, c.options())
@@ -789,6 +817,83 @@ func cmdModAdd(c *call) (any, error) {
 		res, err = ops.AddMod(c.st, c.rec, p.Name, m, c.options())
 	}
 	return c.finish(p.Name, res, err)
+}
+
+// focalGrant reads the focal grant that mod add --property add_grant describes from its flags.
+func (c *call) focalGrant() (*model.FocalGrant, error) {
+	g := &model.FocalGrant{Symbol: c.str("symbol"), Calendar: c.str("calendar"), Yearly: c.str("yearly") == "true"}
+	var ok bool
+	var err error
+	if g.Symbol == "" {
+		return nil, usageErr("--property add_grant needs --symbol, the stock's symbol")
+	}
+	if g.Value, ok, err = c.number("value"); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, usageErr("--property add_grant needs --value, the grant's dollar value")
+	}
+	if g.Date, ok, err = c.date("from"); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, usageErr("--property add_grant needs --from, the grant date")
+	}
+	if end, ok, err := c.date("end"); err != nil {
+		return nil, err
+	} else if ok {
+		g.Last = &end
+	}
+	if g.CliffMonths, _, err = c.integer("cliff-months"); err != nil {
+		return nil, err
+	}
+	if g.FirstVestMonths, _, err = c.integer("first-vest-months"); err != nil {
+		return nil, err
+	}
+	if !c.set["year-percents"] {
+		return nil, usageErr("--property add_grant needs --year-percents")
+	}
+	if g.YearPercents, err = parsePercents("year-percents", c.str("year-percents")); err != nil {
+		return nil, err
+	}
+	if rates, set, err := c.ratesFrom(model.DefaultWithholding); err != nil {
+		return nil, err
+	} else if set {
+		g.Rates = &rates
+	}
+	if !c.set["deposit"] {
+		return nil, usageErr("--property add_grant needs --deposit, the account that net proceeds are deposited in")
+	}
+	if g.Brokerage, err = c.accountNamed(c.str("deposit")); err != nil {
+		return nil, err
+	}
+	return g, nil
+}
+
+func cmdStockGrowth(c *call) (any, error) {
+	st, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	symbol := c.args[0]
+	var growth *model.Schedule
+	if c.str("clear") == "true" {
+		if c.set["value"] || c.set["from"] || c.set["end"] || c.set["json-file"] {
+			return nil, usageErr("--clear cannot be combined with a schedule")
+		}
+	} else {
+		s, err := c.schedule()
+		if err != nil {
+			return nil, err
+		}
+		growth = &s
+	}
+	res, err := ops.SetStockGrowth(st, rec, symbol, growth, c.options())
+	switch {
+	case errors.Is(err, ops.ErrNoChange):
+		return map[string]any{"dry_run": c.options().DryRun, "changed": false, "stock": symbol}, nil
+	case err != nil:
+		return nil, opsError(err)
+	}
+	return map[string]any{"dry_run": c.options().DryRun, "changed": true, "stock": symbol, "growth": scheduleJSONOut(res.Record.StockGrowthOf(symbol))}, nil
 }
 
 func cmdModEdit(c *call) (any, error) {
@@ -802,6 +907,9 @@ func cmdModEdit(c *call) (any, error) {
 	}
 	if p.Mods[i].Property == model.PropAddItem {
 		return nil, failErr("invalid", "modification %d adds an item: change it with item edit", i)
+	}
+	if p.Mods[i].Property == model.PropAddGrant {
+		return nil, failErr("invalid", "modification %d adds a grant: remove it and add it again", i)
 	}
 	if c.set["mode"] && !c.set["value"] && !c.set["from"] && !c.set["end"] && !c.set["json-file"] {
 		res, err := ops.SetModMode(c.st, c.rec, p.Name, i, model.Mode(c.str("mode")), nil, c.options())

@@ -32,8 +32,8 @@ func checkMod(m model.Modification) (model.Modification, error) {
 		m.Mode = ""
 	case "":
 	case model.ModeScale:
-		if m.Property == model.PropAddItem {
-			return m, refuse(ErrInvalidValue, "a modification that adds a budget item cannot scale")
+		if m.Property == model.PropAddItem || m.Property == model.PropAddGrant {
+			return m, refuse(ErrInvalidValue, "a modification that adds a budget item or a grant cannot scale")
 		}
 	default:
 		return m, refuse(ErrInvalidValue, "the mode %q must be set or scale", m.Mode)
@@ -45,8 +45,8 @@ func checkMod(m model.Modification) (model.Modification, error) {
 		switch {
 		case m.IsScale() && seg.Value < 0:
 			return m, refuse(ErrInvalidValue, "a scale of %v must not be negative", seg.Value)
-		case !m.IsScale() && m.Target.Kind == model.KindBudgetItem && m.Property == model.PropGrowth && seg.Value <= -1:
-			return m, refuse(ErrInvalidValue, "a raise of %v must be above -1", seg.Value)
+		case !m.IsScale() && (m.Target.Kind == model.KindBudgetItem || m.Target.Kind == model.KindStock) && m.Property == model.PropGrowth && seg.Value <= -1:
+			return m, refuse(ErrInvalidValue, "a rate of %v must be above -1", seg.Value)
 		}
 	}
 	return m, nil
@@ -111,8 +111,12 @@ func checkTarget(rec *model.Record, p *model.Projection, index int) error {
 	switch m.Target.Kind {
 	case model.KindBudgetItem:
 		want = []string{model.PropAmount, model.PropGrowth}
-	case model.KindAccount, model.KindAsset:
+	case model.KindAccount:
+		want = []string{model.PropGrowth, model.PropDefault, model.PropAddGrant}
+	case model.KindAsset:
 		want = []string{model.PropGrowth, model.PropDefault}
+	case model.KindStock:
+		want = []string{model.PropGrowth}
 	case model.KindGlobal:
 		want = []string{model.PropInflation}
 	default:
@@ -135,8 +139,12 @@ func checkTarget(rec *model.Record, p *model.Projection, index int) error {
 		if err != nil {
 			return err
 		}
-		if view.Account(model.AccountID(m.Target.ID)) == nil {
+		acct := view.Account(model.AccountID(m.Target.ID))
+		if acct == nil {
 			return refuse(ErrUnknownTarget, "there is no account %q", m.Target.ID)
+		}
+		if m.Property == model.PropAddGrant {
+			return checkFocalGrant(rec, view, acct, m.Grant)
 		}
 	case model.KindAsset:
 		view, err := viewOf(rec, p)
@@ -146,6 +154,34 @@ func checkTarget(rec *model.Record, p *model.Projection, index int) error {
 		if view.Asset(model.AssetID(m.Target.ID)) == nil {
 			return refuse(ErrUnknownTarget, "there is no asset %q", m.Target.ID)
 		}
+	case model.KindStock:
+		if !rec.HasStock(m.Target.ID) {
+			return refuse(ErrUnknownTarget, "there is no stock %q: no grant or price names it", m.Target.ID)
+		}
+	}
+	return nil
+}
+
+// checkFocalGrant refuses a focal grant that cannot be added to the equity account: no grant, an account that is not an equity account, an unknown stock or calendar, a deposit account that is not a brokerage account, or a spec that cannot generate grants.
+func checkFocalGrant(rec, view *model.Record, acct *model.Account, g *model.FocalGrant) error {
+	switch {
+	case g == nil:
+		return refuse(ErrInvalidValue, "a modification that adds a grant needs a grant")
+	case acct.Type != model.TypeEquity:
+		return refuse(ErrInvalidValue, "account %q is not an equity account", acct.ID)
+	case !rec.HasStock(g.Symbol):
+		return refuse(ErrUnknownTarget, "there is no stock %q: no grant or price names it", g.Symbol)
+	case rec.Calendar(g.Calendar) == nil:
+		return refuse(ErrUnknownObject, "there is no vest calendar %q", g.Calendar)
+	}
+	if err := checkGrantBrokerage(view, model.Grant{Brokerage: g.Brokerage}); err != nil {
+		return err
+	}
+	if err := checkSchedule(model.Constant(g.Value)); err != nil {
+		return err
+	}
+	if err := g.Check(rec.Calendar(g.Calendar)); err != nil {
+		return refuse(ErrInvalidValue, "focal grant: %v", err)
 	}
 	return nil
 }

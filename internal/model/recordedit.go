@@ -48,6 +48,7 @@ func (r *Record) Clone() *Record {
 	c.Globals = cloneSchedules(r.Globals)
 	c.Classes = slices.Clone(r.Classes)
 	c.Prices = r.Prices.clone()
+	c.StockGrowth = cloneSchedules(r.StockGrowth)
 	c.Calendars = nil
 	for _, cal := range r.Calendars {
 		c.Calendars = append(c.Calendars, cal.Clone())
@@ -189,7 +190,7 @@ func (r *Record) WithDocuments(src *Record) *Record {
 		}
 	}
 	c := r.Clone()
-	c.Budget, c.Projections, c.Calendars = n.Budget, n.Projections, n.Calendars
+	c.Budget, c.Projections, c.Calendars, c.StockGrowth = n.Budget, n.Projections, n.Calendars, n.StockGrowth
 	c.Accounts, c.Assets, c.accountIdx, c.assetIdx, c.seq = n.Accounts, n.Assets, n.accountIdx, n.assetIdx, n.seq
 	for _, a := range c.Accounts {
 		a.prices = c.Prices

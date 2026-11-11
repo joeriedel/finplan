@@ -16,6 +16,7 @@ const (
 	PropInflation = "inflation"
 	PropAmount    = "amount"
 	PropAddItem   = "add_item"
+	PropAddGrant  = "add_grant"
 	PropDefault   = "default"
 )
 

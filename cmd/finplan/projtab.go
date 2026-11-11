@@ -73,6 +73,8 @@ type projTab struct {
 	// addNew switches the form to a new budget item, which addItem holds.
 	addNew  bool
 	addItem itemForm
+	// addGrant is the form of a focal grant, which the Add form offers as a kind of its own.
+	addGrant focalForm
 	// addAcct is the Add account form.
 	addAcct acctForm
 	// addSetting is the Add start setting form.
@@ -656,7 +658,8 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 
 	v, from, editable := constantOf(m.Values)
 	adds := m.Property == model.PropAddItem && m.Item != nil
-	editable = editable && !adds
+	grants := m.Property == model.PropAddGrant && m.Grant != nil
+	editable = editable && !adds && !grants
 	_, ends := ops.EndedOn(m)
 	imgui.TableSetColumnIndex(1)
 	if editable {
@@ -667,6 +670,9 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 		if text, done := t.field("from"+strconv.Itoa(i), "always", start, -1); done {
 			t.commit("from"+strconv.Itoa(i), func() { t.setModStart(p.Name, i, strings.TrimSpace(text)) })
 		}
+	} else if grants {
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted(m.Grant.Date.String())
 	} else {
 		imgui.AlignTextToFramePadding()
 		imgui.TextUnformatted(describeWhen(m.Values))
@@ -679,7 +685,7 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 		t.itemFields("item"+strconv.Itoa(i), formOf(*m.Item, rec.Today), false, func(field, text string) { t.setItemField(p.Name, i, field, text) }, func(field string) { t.openItemTimeline(p.Name, i, field) })
 	case editable:
 		kind, obj, prop := m.Target.Kind, m.Target.ID, rowProperty(m)
-		if k, changed := kindCombo("kind", kind, imgui.FontSize()*7); changed {
+		if k, changed := kindCombo("kind", kind, imgui.FontSize()*7, objectKinds); changed {
 			obj, prop = firstObject(rec, k, p.Name, i), propertiesFor(k)[0]
 			t.setModTarget(p.Name, i, k, obj, prop)
 		} else if kind != model.KindGlobal {
@@ -688,6 +694,9 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 				t.setModTarget(p.Name, i, kind, o, prop)
 			}
 		}
+	case grants:
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted(objectText(effective(rec, p.Name), m.Target) + ": " + focalSummary(*m.Grant))
 	default:
 		imgui.AlignTextToFramePadding()
 		imgui.TextUnformatted(objectText(effective(rec, p.Name), m.Target))
@@ -699,6 +708,9 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 	case adds:
 		imgui.AlignTextToFramePadding()
 		imgui.TextUnformatted("adds item")
+	case grants:
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted("adds grant")
 	case editable:
 		if pr, changed := propertyCombo("property", m.Target.Kind, rowProperty(m), -1); changed {
 			t.setModTarget(p.Name, i, m.Target.Kind, m.Target.ID, pr)
@@ -711,7 +723,7 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 
 	imgui.TableSetColumnIndex(4)
 	switch {
-	case adds:
+	case adds, grants:
 	case editable && !ends:
 		cur := cmp.Or(m.Mode, model.ModeSet)
 		if k := pick("mode", string(cur), -1, modeNames, slices.Index(modeNames, string(cur))); k >= 0 {
@@ -732,7 +744,7 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 		if text, done := t.field("value"+strconv.Itoa(i), "", formatValue(m.Property, m.Mode, v), -1); done {
 			t.commit("value"+strconv.Itoa(i), func() { t.setModValue(p.Name, i, strings.TrimSpace(text)) })
 		}
-	case adds:
+	case adds, grants:
 		imgui.AlignTextToFramePadding()
 		imgui.TextDisabled("see object")
 	default:
@@ -858,6 +870,8 @@ func baseValue(rec *model.Record, proj string, i int, d model.Date) float64 {
 				}
 			}
 		}
+	case model.KindStock:
+		v, _ = rec.StockGrowthOf(m.Target.ID).At(d)
 	case model.KindGlobal:
 		v, _ = rec.Globals[model.PropInflation].At(d)
 	}
@@ -887,6 +901,8 @@ func objectText(rec *model.Record, o model.ObjectRef) string {
 		}
 	case model.KindBudgetItem:
 		return "budget item " + itemName(rec, o.ID)
+	case model.KindStock:
+		return "stock " + o.ID
 	}
 	return string(o.Kind) + " " + o.ID
 }
@@ -896,6 +912,8 @@ func propertiesFor(kind model.ObjectKind) []string {
 	switch kind {
 	case model.KindAccount, model.KindAsset:
 		return []string{model.PropGrowth, model.PropDefault}
+	case model.KindStock:
+		return []string{model.PropGrowth}
 	case model.KindBudgetItem:
 		return []string{model.PropAmount, model.PropGrowth, propEndsOn}
 	case model.KindGlobal:
@@ -923,6 +941,10 @@ func objectsFor(base *model.Record, kind model.ObjectKind, proj string, index in
 				out = append(out, objectChoice{string(a.ID), a.Name})
 			}
 		}
+	case model.KindStock:
+		for _, s := range rec.Symbols() {
+			out = append(out, objectChoice{s, s})
+		}
 	case model.KindBudgetItem:
 		items, _ := ops.ItemsBefore(base, proj, index)
 		for _, it := range items {
@@ -946,7 +968,7 @@ func firstObject(rec *model.Record, kind model.ObjectKind, proj string, index in
 
 // ---- The pickers, which the rows and the Add form share.
 
-var objectKinds = []model.ObjectKind{model.KindAccount, model.KindAsset, model.KindBudgetItem, model.KindGlobal}
+var objectKinds = []model.ObjectKind{model.KindAccount, model.KindAsset, model.KindBudgetItem, model.KindStock, model.KindGlobal}
 
 // pick draws a combo previewing preview with an entry for each label and returns the index of the one chosen, else -1. A width of -1 fills the cell.
 func pick(id, preview string, width float32, labels []string, selected int) int {
@@ -987,13 +1009,13 @@ func pickKinds(id, preview string, previewKind iconKind, width float32, labels [
 	return chosen
 }
 
-func kindCombo(id string, cur model.ObjectKind, width float32) (model.ObjectKind, bool) {
-	labels := make([]string, len(objectKinds))
-	for i, k := range objectKinds {
+func kindCombo(id string, cur model.ObjectKind, width float32, kinds []model.ObjectKind) (model.ObjectKind, bool) {
+	labels := make([]string, len(kinds))
+	for i, k := range kinds {
 		labels[i] = string(k)
 	}
-	if k := pick(id, string(cur), width, labels, slices.Index(objectKinds, cur)); k >= 0 {
-		return objectKinds[k], true
+	if k := pick(id, string(cur), width, labels, slices.Index(kinds, cur)); k >= 0 {
+		return kinds[k], true
 	}
 	return cur, false
 }
@@ -1220,8 +1242,12 @@ func (t *projTab) addForm(p *model.Projection) {
 		t.addKind = model.KindAccount
 	}
 	t.label("Object kind")
-	if k, changed := kindCombo("addkind", t.addKind, imgui.FontSize()*16); changed {
+	if k, changed := kindCombo("addkind", t.addKind, imgui.FontSize()*16, addKinds); changed {
 		t.addKind, t.addObj, t.addProp = k, "", ""
+	}
+	if t.addKind == kindFocalGrant {
+		t.focalFields(p)
+		return
 	}
 	if t.addKind != model.KindGlobal {
 		t.label("Object")

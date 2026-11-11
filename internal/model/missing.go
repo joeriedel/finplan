@@ -41,6 +41,10 @@ func (r *Record) MissingTargets(name string) ([]string, error) {
 				if view.Asset(AssetID(m.Target.ID)) == nil {
 					missing = "asset " + m.Target.ID
 				}
+			case KindStock:
+				if !r.HasStock(m.Target.ID) {
+					missing = "stock " + m.Target.ID
+				}
 			}
 			if p == own {
 				out[i] = missing

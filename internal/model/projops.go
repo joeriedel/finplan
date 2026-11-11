@@ -44,6 +44,10 @@ func (p *Projection) Clone() *Projection {
 			it.Start, it.End = clonePtr(it.Start), clonePtr(it.End)
 			c.Mods[i].Item = &it
 		}
+		if m.Grant != nil {
+			g := m.Grant.Clone()
+			c.Mods[i].Grant = &g
+		}
 	}
 	c.Shocks = slices.Clone(p.Shocks)
 	c.Rebalances = slices.Clone(p.Rebalances)

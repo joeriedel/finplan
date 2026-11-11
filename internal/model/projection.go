@@ -12,6 +12,7 @@ const (
 	KindAccount    ObjectKind = "account"
 	KindAsset      ObjectKind = "asset"
 	KindGlobal     ObjectKind = "global"
+	KindStock      ObjectKind = "stock" // the object is a stock symbol
 )
 
 // ObjectRef names the object of a modification.
@@ -32,13 +33,14 @@ const (
 )
 
 // Modification changes a property of an object on a timetable: the schedule of values says what the
-// property is on each date, or by how much to multiply it when Mode is ModeScale. PropAddItem instead adds Item to the budget, with Target naming the item.
+// property is on each date, or by how much to multiply it when Mode is ModeScale. PropAddItem instead adds Item to the budget, with Target naming the item, and PropAddGrant adds Grant to the equity account Target names.
 type Modification struct {
 	Target   ObjectRef
 	Property string
 	Mode     Mode
 	Values   Schedule
 	Item     *BudgetItem
+	Grant    *FocalGrant
 }
 
 // IsScale reports whether the modification multiplies the value beneath it.

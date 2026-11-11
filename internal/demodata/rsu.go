@@ -110,6 +110,7 @@ func (d *rsuData) addTo(rec *model.Record) {
 				if !next[j] && t == d.deposits[i] {
 					next[j] = true
 					d.vests[i].TxEntry = base + int64(j) + 1
+					a.Transactions[j].Entry = d.vests[i].TxEntry
 					break
 				}
 			}

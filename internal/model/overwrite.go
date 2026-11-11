@@ -94,6 +94,9 @@ func (r *Record) OverwrittenMods(name string) ([]*Overwrite, error) {
 			continue
 		}
 		var ow *Overwrite
+		if early.mod.Property == PropAddGrant {
+			continue
+		}
 		if early.mod.Property == PropDefault {
 			// A default is read per target, not per account under it, so only a modification of the same target replaces it.
 			for _, late := range order[k+1:] {
@@ -105,7 +108,7 @@ func (r *Record) OverwrittenMods(name string) ([]*Overwrite, error) {
 			continue
 		}
 		switch early.mod.Target.Kind {
-		case KindBudgetItem, KindGlobal:
+		case KindBudgetItem, KindGlobal, KindStock:
 			if early.mod.Property == PropAddItem {
 				continue
 			}
@@ -121,7 +124,7 @@ func (r *Record) OverwrittenMods(name string) ([]*Overwrite, error) {
 				var by *modRef
 				for j := k + 1; j < len(order); j++ {
 					late := order[j]
-					if late.mod.IsScale() || late.mod.Property != early.mod.Property || late.mod.Target.Kind == KindBudgetItem || late.mod.Target.Kind == KindGlobal || !late.mod.Values.Covers(early.mod.Values) {
+					if late.mod.IsScale() || late.mod.Property != early.mod.Property || late.mod.Target.Kind == KindBudgetItem || late.mod.Target.Kind == KindGlobal || late.mod.Target.Kind == KindStock || !late.mod.Values.Covers(early.mod.Values) {
 						continue
 					}
 					for _, a := range accounts(late.mod) {

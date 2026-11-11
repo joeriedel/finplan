@@ -1181,6 +1181,29 @@ func TestFactsRoundTripCorrectVoidHistory(t *testing.T) {
 			t.Errorf("vest %d: entry %d = %+v, %v", v.ID, v.TxEntry, e, err)
 		}
 	}
+	// The deposit stays linked to its vest when its entry is corrected to another date and amount.
+	first := got.Account(demodata.Equity).Vests[0]
+	e, err := s.Entry(first.TxEntry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := e.Values
+	moved.Date, moved.Amount = moved.Date.Add(2), moved.Amount+0.37
+	if err := s.Correct(e.ID, moved, "settled"); err != nil {
+		t.Fatal(err)
+	}
+	linked := 0
+	for _, tx := range mustLoad(t, s).Account(demodata.Brokerage).Transactions {
+		if tx.Entry == first.TxEntry && tx.Date == moved.Date && tx.Amount == moved.Amount {
+			linked++
+		}
+	}
+	if linked != 1 {
+		t.Errorf("%d transactions linked to the corrected deposit, want 1", linked)
+	}
+	if err := s.Correct(e.ID, e.Values, "undo"); err != nil {
+		t.Fatal(err)
+	}
 	// A correction supersedes a fact, keeps the original, and a void takes it out of Load.
 	v := got.Account(demodata.Equity).Vests[0]
 	fixed := v
@@ -1243,5 +1266,28 @@ func TestCalendarDocumentRoundTrip(t *testing.T) {
 	rec.Calendars[0].Rules[0] = model.VestRule{Month: time.April, Day: 31}
 	if err := s.Save(rec); err == nil {
 		t.Error("a calendar with a rule on April 31 was saved")
+	}
+}
+
+func TestStockGrowthAndFocalGrantRoundTrip(t *testing.T) {
+	s, _ := openTemp(t)
+	rec := demodata.Family()
+	rec.StockGrowth[demodata.Symbol] = model.MustSchedule(
+		model.Segment{From: model.MinDate, End: model.Ptr(model.D(2028, time.December, 31)), Value: 0.08},
+		model.Segment{From: model.D(2029, time.January, 1), Value: 0.03})
+	g := rec.Projection(demodata.ProjAcmeGrants).Mods[0].Grant
+	g.Last, g.Rates, g.CliffMonths = model.Ptr(model.D(2030, time.March, 1)), &model.Withholding{Federal: 0.24, State: 0.05, FICA: 0.0765}, 3
+	mustSave(t, s, rec)
+	got := mustLoad(t, s)
+	if !reflect.DeepEqual(got, rec) {
+		t.Error("stock growth or focal grants load differently")
+	}
+	if got.Projection(demodata.ProjAcmeUp).Mods[0].Target.Kind != model.KindStock {
+		t.Error("the stock modification lost its kind")
+	}
+	delete(rec.StockGrowth, demodata.Symbol)
+	mustSave(t, s, rec)
+	if got := mustLoad(t, s); len(got.StockGrowth) != 0 {
+		t.Errorf("deleted stock growth is still stored: %v", got.StockGrowth)
 	}
 }
