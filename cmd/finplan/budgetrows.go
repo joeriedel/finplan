@@ -45,7 +45,7 @@ type budgetGroup struct {
 func budgetGroups(rec *model.Record) []budgetGroup {
 	groups := make([]budgetGroup, len(formItemKinds))
 	for i, k := range formItemKinds {
-		groups[i] = budgetGroup{Kind: k, Title: string(k)}
+		groups[i] = budgetGroup{Kind: k, Title: itemKindName(k)}
 	}
 	for _, it := range rec.Budget.Items {
 		for i := range groups {
@@ -78,7 +78,7 @@ func budgetRowOf(rec *model.Record, it model.BudgetItem) budgetRow {
 		row.Growth = formatValue(model.PropGrowth, model.ModeSet, g) + " raise"
 	}
 	if m := it.MonthlyEquivalent(rec.Today); m != 0 {
-		row.Monthly = graph.FormatMoney(m) + " a month"
+		row.Monthly = formatDollars(m)
 	}
 	return row
 }

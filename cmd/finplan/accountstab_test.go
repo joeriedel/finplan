@@ -68,12 +68,12 @@ func TestGroupAccounts(t *testing.T) {
 	for _, g := range groups {
 		titles = append(titles, g.Title)
 		for _, r := range g.Rows {
-			if string(r.Account.Type) != g.Title {
+			if accountTypeName(r.Account.Type) != g.Title {
 				t.Errorf("%s in the group %s", r.Account.ID, g.Title)
 			}
 		}
 	}
-	if titles[0] != string(model.TypeChecking) || slices.Contains(titles, closedGroup) {
+	if titles[0] != "Checking" || slices.Contains(titles, closedGroup) {
 		t.Errorf("groups %v", titles)
 	}
 	n := 0

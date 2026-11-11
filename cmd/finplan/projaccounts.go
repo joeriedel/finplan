@@ -189,8 +189,8 @@ func (t *projTab) accountRow(p *model.Projection, r accountRow) {
 	rate, opening := formatValue(model.PropGrowth, model.ModeSet, r.StatedRate), trimFloat(r.Opening)
 	if !r.Own {
 		text(0, r.Name+" (from "+r.Owner+")")
-		text(1, string(r.Type))
-		text(2, string(r.Tax))
+		text(1, accountTypeName(r.Type))
+		text(2, taxName(r.Tax))
 		text(3, rate)
 		text(4, opening)
 		text(5, r.From.String())
@@ -202,15 +202,15 @@ func (t *projTab) accountRow(p *model.Projection, r accountRow) {
 			t.commit(id+field, func() { t.editAccount(p.Name, r.ID, field, strings.TrimSpace(s)) })
 		}
 	}
-	choose := func(i int, field, cur string, values []string) {
+	choose := func(i int, field, cur, curName string, values, names []string) {
 		cell(i)
-		if k := pick(id+field, cur, -1, values, slices.Index(values, cur)); k >= 0 {
+		if k := pick(id+field, curName, -1, names, slices.Index(values, cur)); k >= 0 {
 			t.editAccount(p.Name, r.ID, field, values[k])
 		}
 	}
 	edit(0, "name", r.Name)
-	choose(1, "type", string(r.Type), accountTypes)
-	choose(2, "tax", string(r.Tax), taxTreatments)
+	choose(1, "type", string(r.Type), accountTypeName(r.Type), accountTypes, accountTypeLabels)
+	choose(2, "tax", string(r.Tax), taxName(r.Tax), taxTreatments, taxLabels)
 	edit(3, "rate", rate)
 	edit(4, "opening", opening)
 	edit(5, "from", r.From.String())
@@ -248,15 +248,15 @@ func (t *projTab) addAccountForm(p *model.Projection) {
 			f.set(field, s)
 		}
 	}
-	choose := func(field, label, cur string, values []string) {
+	choose := func(field, label, cur, curName string, values, names []string) {
 		imgui.AlignTextToFramePadding()
 		imgui.TextDisabled(label)
 		imgui.SameLine()
 		preview := "choose"
 		if cur != "" {
-			preview = cur
+			preview = curName
 		}
-		if k := pick("addacct"+field, preview, em*8, values, slices.Index(values, cur)); k >= 0 {
+		if k := pick("addacct"+field, preview, em*8, names, slices.Index(values, cur)); k >= 0 {
 			f.set(field, values[k])
 		}
 	}
@@ -264,9 +264,9 @@ func (t *projTab) addAccountForm(p *model.Projection) {
 	t.label("Add account")
 	input("name", "name", "e.g. House", f.name, em*12)
 	imgui.SameLine()
-	choose("type", "type", string(f.typ), accountTypes)
+	choose("type", "type", string(f.typ), accountTypeName(f.typ), accountTypes, accountTypeLabels)
 	imgui.SameLine()
-	choose("tax", "tax", string(f.tax), taxTreatments)
+	choose("tax", "tax", string(f.tax), taxName(f.tax), taxTreatments, taxLabels)
 	t.label("")
 	input("rate", "rate per year", "percent, e.g. 3", f.rate, em*6)
 	imgui.SameLine()

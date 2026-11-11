@@ -4,6 +4,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/AllenDang/cimgui-go/imgui"
@@ -128,31 +129,52 @@ func (t *budgetTab) draw() {
 	}
 	defer imgui.EndChild()
 
-	em := imgui.FontSize()
 	income, expenses, net := budgetTotalsText(a.rec)
 	imgui.TextUnformatted("Each month, on " + a.rec.Today.String() + ", in today's dollars:")
 	imgui.TextUnformatted("income " + income + "    expenses " + expenses + "    left over " + net)
 	imgui.TextDisabled("Transfers are in neither total; a one-time item counts for nothing, and an annual item for a twelfth.")
 
 	imgui.TextDisabled("A dash means no start or end date is set. Open an item with Edit to change it.")
-	offsets := []float32{8, 32, 52, 64, 76, 88, 98, 108, 120}
-	for _, g := range budgetGroups(a.rec) {
-		imgui.Spacing()
-		imgui.SeparatorText(g.Title)
+	t.table()
+
+	imgui.Spacing()
+	imgui.SeparatorText("Add a budget item")
+	t.addForm()
+}
+
+// table draws the base budget items as tables with one header row at the top: per kind a group row and the item rows. The editor of an open item sits between two tables, which share their column weights and so their column widths.
+func (t *budgetTab) table() {
+	em := imgui.FontSize()
+	weights := []float32{2, 3, 1.2, 2.5, 1.2, 1.2, 1, 1, 1.2}
+	segment := 0
+	begin := func() bool {
+		segment++
+		if !imgui.BeginTableV("##budgetitems"+strconv.Itoa(segment), int32(len(budgetHeaders)+1), imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
+			return false
+		}
+		imgui.TableSetupColumnV("", imgui.TableColumnFlagsWidthFixed, em*4, 0)
+		for i, h := range budgetHeaders {
+			imgui.TableSetupColumnV(h, 0, weights[i], 0)
+		}
+		if segment == 1 {
+			imgui.TableHeadersRow()
+		}
+		return true
+	}
+	if !begin() {
+		return
+	}
+	for _, g := range budgetGroups(t.a.rec) {
+		groupHeaderRow(g.Title)
 		if len(g.Rows) == 0 {
-			imgui.TextDisabled("No " + g.Title + " items.")
-		} else {
-			for i, h := range budgetHeaders {
-				if i == 0 {
-					imgui.SetCursorPosX(em * offsets[0])
-				} else {
-					imgui.SameLineV(em*offsets[i], -1)
-				}
-				imgui.TextDisabled(h)
-			}
+			imgui.TableNextRowV(0, 0)
+			imgui.TableSetColumnIndex(1)
+			imgui.TextDisabled("No " + strings.ToLower(g.Title) + " items.")
 		}
 		for _, r := range g.Rows {
 			imgui.PushIDStr(r.ID)
+			imgui.TableNextRowV(0, 0)
+			imgui.TableSetColumnIndex(0)
 			label := "Edit"
 			if t.open[r.ID] {
 				label = "Close"
@@ -161,21 +183,25 @@ func (t *budgetTab) draw() {
 				t.open[r.ID] = !t.open[r.ID]
 			}
 			for i, s := range []string{r.Name, r.Schedule, r.Amount, r.Accounts, r.Start, r.End, r.Indexed, r.Growth, r.Monthly} {
-				imgui.SameLineV(em*offsets[i], -1)
+				imgui.TableSetColumnIndex(int32(i + 1))
+				imgui.AlignTextToFramePadding()
 				imgui.TextUnformatted(s)
 			}
+			imgui.PopID()
 			if t.open[r.ID] {
+				imgui.EndTable()
+				imgui.PushIDStr(r.ID)
 				imgui.Indent()
 				t.editor(r.ID)
 				imgui.Unindent()
+				imgui.PopID()
+				if !begin() {
+					return
+				}
 			}
-			imgui.PopID()
 		}
 	}
-
-	imgui.Spacing()
-	imgui.SeparatorText("Add a budget item")
-	t.addForm()
+	imgui.EndTable()
 }
 
 // editor draws the fields of the base item with the id, and its End and Delete actions.

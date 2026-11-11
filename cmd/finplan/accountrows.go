@@ -50,7 +50,7 @@ const closedGroup = "Closed"
 func groupAccounts(rows []listRow) []listGroup {
 	var out []listGroup
 	for _, t := range model.AccountTypes {
-		g := listGroup{Title: string(t)}
+		g := listGroup{Title: accountTypeName(t)}
 		for _, r := range rows {
 			if !r.Account.IsClosed() && r.Account.Type == t {
 				g.Rows = append(g.Rows, r)

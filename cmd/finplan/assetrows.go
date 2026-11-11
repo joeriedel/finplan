@@ -60,23 +60,24 @@ func accountName(rec *model.Record, id model.AccountID) string {
 
 // ruleLabel describes a rule: what it selects by.
 func ruleLabel(r model.Rule) string {
-	var parts []string
-	if len(r.Types) > 0 {
-		parts = append(parts, "types "+joinStrings(r.Types))
-	}
-	if len(r.Tax) > 0 {
-		parts = append(parts, "tax "+joinStrings(r.Tax))
-	}
-	if len(parts) == 0 {
+	if len(r.Types) == 0 && len(r.Tax) == 0 {
 		return "Rule: all accounts"
 	}
-	return "Rule: " + strings.Join(parts, ", ")
+	s := "Rule: accounts"
+	if len(r.Types) > 0 {
+		s += " of type " + joinNames(r.Types, accountTypeName)
+	}
+	if len(r.Tax) > 0 {
+		s += " with tax treatment " + joinNames(r.Tax, taxName)
+	}
+	return s
 }
 
-func joinStrings[T ~string](vs []T) string {
+// joinNames joins the display names of vs with commas.
+func joinNames[T ~string](vs []T, name func(T) string) string {
 	s := make([]string, len(vs))
 	for i, v := range vs {
-		s[i] = string(v)
+		s[i] = name(v)
 	}
 	return strings.Join(s, ", ")
 }

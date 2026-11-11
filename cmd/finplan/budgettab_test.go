@@ -32,10 +32,13 @@ func TestBudgetTabGroupsRowsAndTotals(t *testing.T) {
 	if len(groups[0].Rows) != 2 || len(groups[1].Rows) != 7 || len(groups[2].Rows) != 10 {
 		t.Errorf("rows %d, %d, %d", len(groups[0].Rows), len(groups[1].Rows), len(groups[2].Rows))
 	}
+	if groups[0].Title != "Income" || groups[1].Title != "Expense" || groups[2].Title != "Transfer" {
+		t.Errorf("titles %q, %q, %q", groups[0].Title, groups[1].Title, groups[2].Title)
+	}
 	salary := groups[0].Rows[0]
 	want := budgetRow{
 		ID: "salary-a", Name: "Salary (Parent A)", Schedule: "twice a month, days 15 and 31", Amount: "$5,000",
-		Accounts: accountName(a.rec, demodata.Checking), Start: "-", End: "-", Indexed: "indexed", Monthly: "$10,000 a month",
+		Accounts: accountName(a.rec, demodata.Checking), Start: "-", End: "-", Indexed: "indexed", Monthly: "$10,000",
 	}
 	if salary != want {
 		t.Errorf("salary row %+v, want %+v", salary, want)
@@ -46,13 +49,13 @@ func TestBudgetTabGroupsRowsAndTotals(t *testing.T) {
 			byID[r.ID] = r
 		}
 	}
-	if r := byID["vacation"]; r.Schedule != "annually on June 15" || r.Monthly != "$500 a month" {
+	if r := byID["vacation"]; r.Schedule != "annually on June 15" || r.Monthly != "$500" {
 		t.Errorf("vacation row %+v", r)
 	}
-	if r := byID["salary-b"]; r.Schedule != "every 2 weeks from 2024-11-08" || r.Monthly != "$8,017 a month" {
+	if r := byID["salary-b"]; r.Schedule != "every 2 weeks from 2024-11-08" || r.Monthly != "$8,016.67" {
 		t.Errorf("salary-b row %+v", r)
 	}
-	if r := byID["save-401k"]; r.Accounts != accountName(a.rec, demodata.Checking)+" to "+accountName(a.rec, demodata.K401) || r.Monthly != "$1,000 a month" || r.Growth != "" {
+	if r := byID["save-401k"]; r.Accounts != accountName(a.rec, demodata.Checking)+" to "+accountName(a.rec, demodata.K401) || r.Monthly != "$1,000" || r.Growth != "" {
 		t.Errorf("transfer row %+v", r)
 	}
 

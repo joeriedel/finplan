@@ -115,6 +115,14 @@ func draftOf(e store.Entry) entryDraft {
 	return entryDraft{date: e.Date.String(), amount: trimFloat(e.Amount), memo: e.Memo, kind: e.TxKind, counter: e.Counter}
 }
 
+// counterFor is the counter account the draft saves: only a transfer has one.
+func (d entryDraft) counterFor() model.AccountID {
+	if d.kind != model.TxTransfer {
+		return ""
+	}
+	return d.counter
+}
+
 // draftValues reads the date and amount the draft holds.
 func (d entryDraft) draftValues() (model.Date, float64, error) {
 	date, err := parseDate(strings.TrimSpace(d.date))
@@ -134,7 +142,7 @@ func txProblem(st *store.Store, rec *model.Record, id model.AccountID, d entryDr
 	if d.kind == "" {
 		return "pick a kind"
 	}
-	t := model.Transaction{Date: date, Amount: amount, Kind: d.kind, Counter: d.counter, Memo: d.memo}
+	t := model.Transaction{Date: date, Amount: amount, Kind: d.kind, Counter: d.counterFor(), Memo: d.memo}
 	_, err = ops.AddTransaction(st, rec, id, t, ops.Options{DryRun: true})
 	return reasonOf(err)
 }
@@ -156,8 +164,8 @@ func entryChange(e store.Entry, d entryDraft) (ops.EntryChange, error) {
 		if d.kind != e.TxKind {
 			ch.TxKind = &d.kind
 		}
-		if d.counter != e.Counter {
-			ch.Counter = &d.counter
+		if c := d.counterFor(); c != e.Counter {
+			ch.Counter = &c
 		}
 		if d.memo != e.Memo {
 			ch.Memo = &d.memo
@@ -302,15 +310,17 @@ func (t *acctTab) txForm(acct *model.Account) {
 	imgui.InputTextWithHint("##txamount", "negative for an expense", &d.amount, 0, nil)
 	t.label("Kind")
 	d.kind = t.kindPick("txkind", d.kind)
-	t.label("Counter account")
-	d.counter = t.counterPick("txcounter", acct.ID, d.counter)
+	if d.kind == model.TxTransfer {
+		t.label("Transfer account")
+		d.counter = t.counterPick("txcounter", acct.ID, d.counter)
+	}
 	t.label("Memo")
 	imgui.SetNextItemWidth(em * 16)
 	imgui.InputTextWithHint("##txmemo", "optional", &d.memo, 0, nil)
 	t.label("")
 	formButton("Add##entry", txProblem(t.a.st, t.a.rec, acct.ID, *d), d.untouched(), func() {
 		date, amount, _ := d.draftValues()
-		tx := model.Transaction{Date: date, Amount: amount, Kind: d.kind, Counter: d.counter, Memo: d.memo}
+		tx := model.Transaction{Date: date, Amount: amount, Kind: d.kind, Counter: d.counterFor(), Memo: d.memo}
 		if t.a.addEntry("record transaction", func() (*ops.Result, error) {
 			return ops.AddTransaction(t.a.st, t.a.rec, acct.ID, tx, ops.Options{})
 		}) {
@@ -367,7 +377,7 @@ func (t *acctTab) entryTable(acct *model.Account) {
 	imgui.TableSetupColumnV("Date", imgui.TableColumnFlagsWidthFixed, em*8, 0)
 	imgui.TableSetupColumnV("Kind", imgui.TableColumnFlagsWidthFixed, em*6, 0)
 	imgui.TableSetupColumnV("Amount", imgui.TableColumnFlagsWidthFixed, em*8, 0)
-	imgui.TableSetupColumnV("Counter account", 0, 1, 0)
+	imgui.TableSetupColumnV("Transfer account", 0, 1, 0)
 	imgui.TableSetupColumnV("Memo", 0, 1, 0)
 	imgui.TableHeadersRow()
 	for _, r := range u.rows {
@@ -435,8 +445,10 @@ func (t *acctTab) entryPanel(acct *model.Account) {
 		if e.Kind == store.KindTransaction {
 			t.label("Kind")
 			d.kind = t.kindPick("entkind", d.kind)
-			t.label("Counter account")
-			d.counter = t.counterPick("entcounter", acct.ID, d.counter)
+			if d.kind == model.TxTransfer {
+				t.label("Transfer account")
+				d.counter = t.counterPick("entcounter", acct.ID, d.counter)
+			}
 			t.label("Memo")
 			imgui.SetNextItemWidth(em * 16)
 			imgui.InputTextWithHint("##entmemo", "", &d.memo, 0, nil)
@@ -479,7 +491,7 @@ func (t *acctTab) history(u *entriesUI) {
 	imgui.TableSetupColumnV("Date", imgui.TableColumnFlagsWidthFixed, em*8, 0)
 	imgui.TableSetupColumnV("Kind", imgui.TableColumnFlagsWidthFixed, em*6, 0)
 	imgui.TableSetupColumnV("Amount", imgui.TableColumnFlagsWidthFixed, em*8, 0)
-	imgui.TableSetupColumnV("Counter and memo", 0, 1, 0)
+	imgui.TableSetupColumnV("Transfer account and memo", 0, 1, 0)
 	imgui.TableSetupColumnV("Note", 0, 1, 0)
 	imgui.TableHeadersRow()
 	for _, r := range u.history {

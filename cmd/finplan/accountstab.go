@@ -234,9 +234,7 @@ func (t *acctTab) list() {
 	imgui.TableSetupColumnV("Last data", imgui.TableColumnFlagsWidthFixed, em*9, 0)
 	imgui.TableHeadersRow()
 	for _, g := range groups {
-		imgui.TableNextRowV(0, 0)
-		imgui.TableSetColumnIndex(0)
-		imgui.SeparatorText(g.Title)
+		groupHeaderRow(g.Title)
 		for _, r := range g.Rows {
 			t.listRow(r)
 		}
@@ -256,7 +254,7 @@ func (t *acctTab) listRow(r listRow) {
 		imgui.TableSetColumnIndex(int32(i))
 		imgui.TextUnformatted(s)
 	}
-	text(1, string(r.Account.Tax))
+	text(1, taxName(r.Account.Tax))
 	text(2, graph.FormatMoney(r.Balance))
 	imgui.TableSetColumnIndex(3)
 	switch {
@@ -335,11 +333,11 @@ func (t *acctTab) detail(acct *model.Account) {
 		t.editAttr(id, "name", s)
 	}
 	t.label("Type")
-	if k := pick("type", string(acct.Type), em*16, accountTypes, slices.Index(accountTypes, string(acct.Type))); k >= 0 {
+	if k := pick("type", accountTypeName(acct.Type), em*16, accountTypeLabels, slices.Index(accountTypes, string(acct.Type))); k >= 0 {
 		t.editAttr(id, "type", accountTypes[k])
 	}
 	t.label("Tax treatment")
-	if k := pick("tax", string(acct.Tax), em*16, taxTreatments, slices.Index(taxTreatments, string(acct.Tax))); k >= 0 {
+	if k := pick("tax", taxName(acct.Tax), em*16, taxLabels, slices.Index(taxTreatments, string(acct.Tax))); k >= 0 {
 		t.editAttr(id, "tax", taxTreatments[k])
 	}
 	t.label("Owner")
@@ -500,23 +498,23 @@ func (t *acctTab) addForm() {
 			f.set(field, s)
 		}
 	}
-	choose := func(field, label, cur string, values []string) {
+	choose := func(field, label, cur, curName string, values, names []string) {
 		imgui.AlignTextToFramePadding()
 		imgui.TextDisabled(label)
 		imgui.SameLine()
 		preview := "choose"
 		if cur != "" {
-			preview = cur
+			preview = curName
 		}
-		if k := pick("newacct"+field, preview, em*8, values, slices.Index(values, cur)); k >= 0 {
+		if k := pick("newacct"+field, preview, em*8, names, slices.Index(values, cur)); k >= 0 {
 			f.set(field, values[k])
 		}
 	}
 	input("name", "name", "e.g. TSP", f.name, em*12)
 	imgui.SameLine()
-	choose("type", "type", string(f.typ), accountTypes)
+	choose("type", "type", string(f.typ), accountTypeName(f.typ), accountTypes, accountTypeLabels)
 	imgui.SameLine()
-	choose("tax", "tax", string(f.tax), taxTreatments)
+	choose("tax", "tax", string(f.tax), taxName(f.tax), taxTreatments, taxLabels)
 	input("owner", "owner", "optional", f.owner, em*10)
 	imgui.SameLine()
 	input("rate", "rate per year", "percent, e.g. 3", f.rate, em*6)

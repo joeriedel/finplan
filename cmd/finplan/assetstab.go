@@ -437,27 +437,27 @@ func (t *assetsTab) members(asset *model.Asset, row *assetRow) {
 			f.asset = ids[k]
 		}
 	case memberRule:
-		t.label("Account types")
-		if imgui.BeginComboV("##ruletypes", orAny(joinStrings(f.types)), 0) {
+		t.label("Accounts of type")
+		if imgui.BeginComboV("##ruletypes", orAny(joinNames(f.types, accountTypeName)), 0) {
 			for _, ty := range model.AccountTypes {
 				on := slices.Contains(f.types, ty)
-				if imgui.Checkbox(string(ty), &on) {
+				if imgui.Checkbox(accountTypeName(ty), &on) {
 					f.types = toggle(f.types, ty)
 				}
 			}
 			imgui.EndCombo()
 		}
-		t.label("Tax treatment")
-		if imgui.BeginComboV("##ruletax", orAny(joinStrings(f.tax)), 0) {
+		t.label("with tax treatment")
+		if imgui.BeginComboV("##ruletax", orAny(joinNames(f.tax, taxName)), 0) {
 			for _, tx := range model.TaxTreatments {
 				on := slices.Contains(f.tax, tx)
-				if imgui.Checkbox(string(tx), &on) {
+				if imgui.Checkbox(taxName(tx), &on) {
 					f.tax = toggle(f.tax, tx)
 				}
 			}
 			imgui.EndCombo()
 		}
-		imgui.TextDisabled("A rule takes in every account that matches, including accounts added later.")
+		imgui.TextDisabled("A rule takes in accounts whose type and tax treatment are among those ticked (any when none is ticked), including accounts added later. It never changes an account's type or tax treatment.")
 	}
 	t.label("")
 	formButton("Add##member", memberProblem(t.a.st, t.a.rec, asset.ID, *f), f.untouched(), func() {

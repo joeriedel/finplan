@@ -137,6 +137,43 @@ func TestTxProblem(t *testing.T) {
 	}
 }
 
+// A counter account is kept for a transfer only: any other kind saves none, for a new transaction and for a correction.
+func TestCounterOnlyForTransfers(t *testing.T) {
+	d := entryDraft{kind: model.TxTransfer, counter: demodata.Savings}
+	if got := d.counterFor(); got != demodata.Savings {
+		t.Errorf("transfer counter %q", got)
+	}
+	for _, k := range []model.TxKind{model.TxIncome, model.TxExpense} {
+		d.kind = k
+		if got := d.counterFor(); got != "" {
+			t.Errorf("%s keeps the counter %q", k, got)
+		}
+	}
+
+	a := demoApp(t)
+	id := addTx(t, a, model.D(2031, 3, 9), -42, model.TxTransfer, demodata.Savings)
+	e, _ := a.st.Entry(id)
+	d = draftOf(e)
+	d.kind = model.TxExpense
+	ch, err := entryChange(e, d)
+	if err != nil || ch.TxKind == nil || ch.Counter == nil || *ch.Counter != "" {
+		t.Fatalf("change %+v, %v", ch, err)
+	}
+	if p := correctProblem(a.st, a.rec, e, d); p != "" {
+		t.Fatalf("correct: %q", p)
+	}
+	if _, err := ops.CorrectEntry(a.st, a.rec, e.ID, ch, "not a transfer", ops.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := a.st.Entry(id); got.TxKind != model.TxExpense || got.Counter != "" {
+		t.Errorf("corrected entry %+v", got)
+	}
+
+	if p := txProblem(a.st, a.rec, demodata.Checking, entryDraft{date: "2031-03-10", amount: "-5", kind: model.TxExpense, counter: demodata.Checking}); p != "" {
+		t.Errorf("expense with a leftover counter: %q", p)
+	}
+}
+
 func TestCorrectProblemAndChange(t *testing.T) {
 	a := demoApp(t)
 	id := addTx(t, a, model.D(2031, 3, 9), -42, model.TxExpense, "")

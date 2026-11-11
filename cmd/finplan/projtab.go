@@ -1066,8 +1066,10 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 	}
 	choose := func(field, label, preview string, width float32, values, names []string, cur string) {
 		imgui.AlignTextToFramePadding()
-		imgui.TextDisabled(label)
-		imgui.SameLine()
+		if label != "" {
+			imgui.TextDisabled(label)
+			imgui.SameLine()
+		}
 		if k := pick(id+field, preview, width, names, slices.Index(values, cur)); k >= 0 {
 			set(field, values[k])
 		}
@@ -1110,7 +1112,7 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 	imgui.SameLine()
 	every := strs(len(formRecurrences), func(i int) string { return string(formRecurrences[i].kind) })
 	labels := strs(len(formRecurrences), func(i int) string { return formRecurrences[i].name + ": " + formRecurrences[i].hint })
-	choose("every", "repeats", recurrenceChoiceOf(f.every).name, em*8, every, labels, string(f.every))
+	choose("every", "", recurrenceChoiceOf(f.every).name, em*8, every, labels, string(f.every))
 	switch f.every {
 	case model.OneTime:
 		input("date", "on", dateHint, f.date, em*8)
