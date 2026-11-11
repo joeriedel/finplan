@@ -68,6 +68,8 @@ func TestScreenshotSmoke(t *testing.T) {
 		{"member-form", "Assets", "Net worth", "member-form"},
 		{"projections-new-item", "Projections", "Base", "new-item"},
 		{"budget-item", "Budget", "", "budget-item"},
+		{"projections-timeline", "Projections", "New job", "timeline"},
+		{"assets-timeline", "Assets", "Net worth", "asset-timeline"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

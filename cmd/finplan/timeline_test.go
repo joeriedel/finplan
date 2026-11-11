@@ -5,9 +5,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 
+	"github.com/joeriedel/finplan/internal/demodata"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/ops"
 	"github.com/joeriedel/finplan/internal/store"
@@ -269,5 +271,147 @@ func TestTimelineFollowsMods(t *testing.T) {
 	tab.removed("p", 3)
 	if tab.tl.open {
 		t.Fatal("editor still open after its modification was removed")
+	}
+}
+
+func mustDate(t *testing.T, s string) model.Date {
+	t.Helper()
+	d, err := parseDate(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func coversDate(s model.Schedule, d model.Date) bool {
+	lo, hi := timeline.Span(s, model.D(2026, 1, 1))
+	return lo < d && d < hi
+}
+
+// TestTypedDateReaches2045ThroughCLI types dates in 2045 into the demo schedule, writes the result as the editor does and reads it back through the CLI.
+func TestTypedDateReaches2045ThroughCLI(t *testing.T) {
+	path := seededFile(t)
+	idx, shown := brokerageGrowth(t, path)
+	s := segmentsOf(t, shown)
+	if coversDate(s, mustDate(t, "2045-03-01")) {
+		t.Fatal("the demo schedule already covers 2045")
+	}
+	from, err := typedDate(s, 1, false, " 2045-03-01 ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := from.Segments()[1].From; got != mustDate(t, "2045-03-01") {
+		t.Errorf("segment 2 starts %v", got)
+	}
+	if !coversDate(from, mustDate(t, "2045-03-01")) || len(from.Segments()) != 3 {
+		t.Errorf("span does not cover 2045 or a segment was lost: %v", from.Segments())
+	}
+	to, err := typedDate(s, 2, true, "2045-12-31")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := to.Segments()[2]; last.End == nil || *last.End != mustDate(t, "2045-12-31") || !coversDate(to, *last.End) {
+		t.Errorf("last segment is %+v", last)
+	}
+
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ops.SetModValues(st, rec, "New job", idx, from, ops.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	_, got := brokerageGrowth(t, path)
+	if len(got) != 3 || got[1].From == nil || *got[1].From != "2045-03-01" {
+		t.Errorf("after SetModValues: %+v", got)
+	}
+}
+
+// TestTypedDateOnAssetGrowthUndoesInOneStep edits an asset's growth schedule by typed dates as the editor does, through app.edit, and undoes it in one step.
+func TestTypedDateOnAssetGrowthUndoesInOneStep(t *testing.T) {
+	a := demoApp(t)
+	id := demodata.NetWorth
+	orig := model.MustSchedule(
+		model.Segment{From: model.MinDate, Value: 0.04},
+		model.Segment{From: model.D(2029, 1, 1), Value: 0.06},
+		model.Segment{From: model.D(2035, 1, 1), Value: 0.02},
+	)
+	if !a.edit("set growth", func() (*ops.Result, error) {
+		return ops.SetParam(a.st, a.rec, id, model.PropGrowth, &orig, ops.Options{})
+	}) {
+		t.Fatalf("setup refused: %v", a.notices)
+	}
+	tab := &assetsTab{a: a}
+	commit := tab.growthCommit(id)
+	cur := a.rec.Asset(id).Params[model.PropGrowth]
+	next, err := typedDate(cur, 1, false, "2045-03-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit("set segment start", next)
+	got := a.rec.Asset(id).Params[model.PropGrowth]
+	if !reflect.DeepEqual(got, next) || !coversDate(got, mustDate(t, "2045-03-01")) {
+		t.Fatalf("the growth is %v", got.Segments())
+	}
+	if s, _ := a.history.PeekUndo(); s.Label != "set segment start" {
+		t.Errorf("undo label %q", s.Label)
+	}
+	a.undo()
+	if back := a.rec.Asset(id).Params[model.PropGrowth]; !reflect.DeepEqual(back, orig) {
+		t.Errorf("one undo left %v", back.Segments())
+	}
+}
+
+func TestTypedDatePushesAndRefuses(t *testing.T) {
+	d := model.D
+	s := model.MustSchedule(
+		model.Segment{From: model.MinDate, Value: 0.04},
+		model.Segment{From: d(2029, 1, 1), Value: 0.06},
+		model.Segment{From: d(2035, 1, 1), Value: 0.02},
+	)
+	pushed, err := typedDate(s, 1, true, "2036-06-30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := d(2036, 7, 1); pushed.Segments()[2].From != want {
+		t.Errorf("the next segment starts %v, want %v", pushed.Segments()[2].From, want)
+	}
+	for _, c := range []struct {
+		name, text string
+		i          int
+		end        bool
+	}{
+		{"to before from", "2028-12-31", 1, true},
+		{"from of the beginning segment", "2020-01-01", 0, false},
+		{"from that empties the previous segment", "2029-01-01", 2, false},
+		{"unparseable from", "next year", 1, false},
+		{"unparseable to", "2045", 1, true},
+		{"empty from", "", 1, false},
+		{"empty to of a segment that is not last", "", 1, true},
+		{"no such segment", "2040-01-01", 7, false},
+	} {
+		got, err := typedDate(s, c.i, c.end, c.text)
+		if err == nil || err.Error() == "" {
+			t.Errorf("%s: no refusal", c.name)
+		}
+		if !reflect.DeepEqual(got, s) {
+			t.Errorf("%s: the schedule changed", c.name)
+		}
+	}
+	var bad badDateText
+	if _, err := typedDate(s, 1, false, "x"); !errors.As(err, &bad) {
+		t.Errorf("unparseable text is %v, not a badDateText", err)
+	}
+	if _, err := typedDate(s, 1, true, "2028-12-31"); errors.As(err, &bad) {
+		t.Error("a refused date is reported as unparseable text")
+	}
+	open, err := typedDate(model.MustSchedule(model.Segment{From: d(2030, 1, 1), End: model.Ptr(d(2031, 1, 1)), Value: 1}), 0, true, "")
+	if err != nil || open.Segments()[0].End != nil {
+		t.Errorf("an empty end of the last segment: %v, %v", open.Segments(), err)
 	}
 }

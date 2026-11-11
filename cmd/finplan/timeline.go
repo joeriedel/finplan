@@ -4,10 +4,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
 	"strconv"
+	"strings"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/joeriedel/finplan/internal/model"
@@ -369,14 +371,33 @@ func (d *timelineDrag) preview(boundary model.Date, snap bool) model.Schedule {
 	return next
 }
 
-// controls draws the value field and buttons for the selected segment, and the button that adds one after the last. lo is the axis start, standing in for a segment that begins at the beginning of time.
+// controls draws the From, To and value fields and the buttons for the selected segment, and the button that adds one after the last. lo is the axis start, standing in for a segment that begins at the beginning of time.
 func (t *timelineStrip) controls(values model.Schedule, segs []model.Segment, lo model.Date) {
 	st := t.st
 	if st.sel >= 0 {
 		g := segs[st.sel]
 		last, bounded := timeline.LastDay(segs, st.sel)
 		imgui.AlignTextToFramePadding()
-		imgui.TextUnformatted(fmt.Sprintf("Segment %d, %s. Value", st.sel+1, segmentRange(g.From, last, bounded)))
+		imgui.TextUnformatted(fmt.Sprintf("Segment %d. From", st.sel+1))
+		imgui.SameLine()
+		if g.From == model.MinDate {
+			imgui.AlignTextToFramePadding()
+			imgui.TextDisabled("beginning")
+		} else {
+			t.dateField("tlfrom"+strconv.Itoa(st.sel), dateHint, g.From.String(), "set segment start", values, false)
+		}
+		imgui.SameLine()
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted("To")
+		imgui.SameLine()
+		toText := ""
+		if bounded {
+			toText = last.String()
+		}
+		t.dateField("tlto"+strconv.Itoa(st.sel), "no end", toText, "set segment end", values, true)
+		imgui.SameLine()
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted("Value")
 		imgui.SameLine()
 		id := "tlvalue" + strconv.Itoa(st.sel)
 		if text, done := t.field(id, "", formatValue(t.prop, t.mode, g.Value), imgui.FontSize()*8); done {
@@ -390,7 +411,6 @@ func (t *timelineStrip) controls(values model.Schedule, segs []model.Segment, lo
 				t.dropBuf(id)
 			}
 		}
-		imgui.SameLine()
 		if imgui.Button("Split") {
 			from := g.From
 			if from == model.MinDate {
@@ -435,6 +455,44 @@ func (t *timelineStrip) controls(values model.Schedule, segs []model.Segment, lo
 		t.edit("add segment", values, func(s model.Schedule) (model.Schedule, error) { return timeline.Append(s, at) })
 	}
 	tooltipOn("Add a segment after the last, with the last one's value.")
+}
+
+// dateField draws a date field of the selected segment, committed on done: a text that is no date is shown beside the field, anything else is applied by typedDate as one edit, whose refusal changes nothing.
+func (t *timelineStrip) dateField(id, hint, value, label string, values model.Schedule, end bool) {
+	text, done := t.field(id, hint, value, imgui.FontSize()*8)
+	if !done {
+		return
+	}
+	t.a.unchanged = false
+	next, err := typedDate(values, t.st.sel, end, text)
+	var bad badDateText
+	if errors.As(err, &bad) {
+		t.setErr(id, err.Error())
+	} else {
+		t.edit(label, values, func(model.Schedule) (model.Schedule, error) { return next, err })
+	}
+	if t.a.unchanged {
+		t.dropBuf(id)
+	}
+}
+
+// badDateText is the error for text that is not a date.
+type badDateText struct{ error }
+
+// typedDate returns the schedule with the From (or, if end, the last day) of segment i set to the date typed as text. An empty text for the end of the last segment clears it. Anything the timeline refuses is returned as the error with the schedule unchanged; text that is no date is a badDateText.
+func typedDate(s model.Schedule, i int, end bool, text string) (model.Schedule, error) {
+	text = strings.TrimSpace(text)
+	if end && text == "" && i == len(s.Segments())-1 {
+		return timeline.ClearEnd(s)
+	}
+	d, err := parseDate(text)
+	if err != nil {
+		return s, badDateText{err}
+	}
+	if end {
+		return timeline.SetEnd(s, i, d)
+	}
+	return timeline.SetStart(s, i, d)
 }
 
 // edit applies do to the schedule the strip showed and writes the result through commit, as one edit. A refusal is told to the user and changes nothing.

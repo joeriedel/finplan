@@ -75,6 +75,44 @@ func MoveEnd(s model.Schedule, i int, to model.Date) (model.Schedule, error) {
 	return build(s, segs)
 }
 
+// SetStart sets the start of segment i to exactly the date, as a typed date: unlike MoveStart it never clamps. The date
+// may lie past the segment's own last day, which pushes the segment along (see push). It is refused for a segment from
+// the beginning of time, and where the segment before would be left empty (it touches this one and starts on or after the
+// date) or overlapped (it has an End on or after the date).
+func SetStart(s model.Schedule, i int, to model.Date) (model.Schedule, error) {
+	segs, err := load(s, i)
+	if err != nil {
+		return s, err
+	}
+	if segs[i].From == model.MinDate {
+		return s, ErrFixedStart
+	}
+	if i > 0 {
+		prev := segs[i-1]
+		switch {
+		case prev.End != nil && to <= *prev.End:
+			return s, fmt.Errorf("timeline: segment %d cannot start at %v: segment %d lasts to %v", i+1, to, i, *prev.End)
+		case prev.End == nil && to <= prev.From:
+			return s, fmt.Errorf("timeline: segment %d cannot start at %v: that leaves segment %d empty, it starts at %v", i+1, to, i, prev.From)
+		}
+	}
+	push(segs, i, to)
+	return build(s, segs)
+}
+
+// SetEnd sets the last day of segment i to exactly the date, as a typed date: unlike MoveEnd it never clamps. It is
+// refused before the segment's From. A date on or after the next segment's From pushes the later segments along.
+func SetEnd(s model.Schedule, i int, to model.Date) (model.Schedule, error) {
+	segs, err := load(s, i)
+	if err != nil {
+		return s, err
+	}
+	if to < segs[i].From {
+		return s, fmt.Errorf("timeline: segment %d cannot end at %v: it starts at %v", i+1, to, segs[i].From)
+	}
+	return MoveEnd(s, i, to)
+}
+
 // DropEnd moves the end of segment i as MoveEnd does for an edge dropped on the boundary date (the day after the last
 // day), except that dropping the end of the last segment at or beyond hi, the right edge of the axis, clears it.
 func DropEnd(s model.Schedule, i int, boundary, hi model.Date) (model.Schedule, error) {

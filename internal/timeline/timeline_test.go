@@ -319,6 +319,56 @@ func TestAnchor(t *testing.T) {
 	}
 }
 
+func TestSetStartAndSetEnd(t *testing.T) {
+	begin := model.Segment{From: model.MinDate, Value: 1}
+	four := sched(t, begin, seg(10, none, 2), seg(20, 22, 3), seg(25, none, 4))
+	tests := []struct {
+		name  string
+		in    model.Schedule
+		i     int
+		to    model.Date
+		end   bool
+		want  []model.Segment
+		wantE error
+	}{
+		{name: "start far later pushes the segment and its follower", in: three(t), i: 1, to: day(500), want: []model.Segment{begin, seg(500, none, 2), seg(510, none, 3)}},
+		{name: "start earlier than the previous start plus one is refused", in: three(t), i: 2, to: day(10)},
+		{name: "start inside the segment before", in: three(t), i: 2, to: day(15), want: []model.Segment{begin, seg(10, none, 2), seg(15, none, 3)}},
+		{name: "start of the beginning segment", in: three(t), i: 0, to: day(5), wantE: ErrFixedStart},
+		{name: "start of a missing segment", in: three(t), i: 5, to: day(5), wantE: ErrNoSegment},
+		{name: "start inside a bounded segment before is refused", in: four, i: 3, to: day(22)},
+		{name: "start right after a bounded segment before", in: four, i: 3, to: day(23), want: []model.Segment{begin, seg(10, none, 2), seg(20, 22, 3), seg(23, none, 4)}},
+		{name: "end far later pushes the follower", in: three(t), i: 1, to: day(500), end: true, want: []model.Segment{begin, seg(10, none, 2), seg(501, none, 3)}},
+		{name: "end before the start is refused", in: three(t), i: 1, to: day(5), end: true},
+		{name: "end of the last segment", in: three(t), i: 2, to: day(30), end: true, want: []model.Segment{begin, seg(10, none, 2), seg(20, 30, 3)}},
+		{name: "end of a missing segment", in: three(t), i: -1, to: day(30), end: true, wantE: ErrNoSegment},
+	}
+	for _, c := range tests {
+		t.Run(c.name, func(t *testing.T) {
+			var got model.Schedule
+			var err error
+			if c.end {
+				got, err = SetEnd(c.in, c.i, c.to)
+			} else {
+				got, err = SetStart(c.in, c.i, c.to)
+			}
+			if c.want == nil {
+				if err == nil || (c.wantE != nil && !errors.Is(err, c.wantE)) {
+					t.Fatalf("err = %v, want a refusal", err)
+				}
+				if !reflect.DeepEqual(got, c.in) {
+					t.Fatal("a refused edit changed the schedule")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			equal(t, got, c.want...)
+		})
+	}
+}
+
 // TestEditsKeepEverySegment applies random edits and checks that each is a schedule NewSchedule accepts, that none
 // but Delete drops a segment, and that no edit changes the segments' order or values.
 func TestEditsKeepEverySegment(t *testing.T) {
@@ -330,11 +380,15 @@ func TestEditsKeepEverySegment(t *testing.T) {
 			i, to := rng.Intn(len(before)), day(rng.Intn(120)-20)
 			var got model.Schedule
 			var err error
-			switch rng.Intn(3) {
+			switch rng.Intn(5) {
 			case 0:
 				got, err = MoveStart(s, i, to)
 			case 1:
 				got, err = MoveEnd(s, i, to)
+			case 2:
+				got, err = SetStart(s, i, to)
+			case 3:
+				got, err = SetEnd(s, i, to)
 			default:
 				got, err = ClearEnd(s)
 			}
