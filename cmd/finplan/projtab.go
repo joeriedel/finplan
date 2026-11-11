@@ -1105,7 +1105,8 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 		return out
 	}
 	kinds := strs(len(formItemKinds), func(i int) string { return string(formItemKinds[i]) })
-	choose("kind", "kind", string(f.kind), em*7, kinds, kinds, string(f.kind))
+	kindLabels := strs(len(formItemKinds), func(i int) string { return itemKindName(formItemKinds[i]) })
+	choose("kind", "kind", itemKindName(f.kind), em*7, kinds, kindLabels, string(f.kind))
 	imgui.SameLine()
 	input("name", "name", "name", f.name, em*14)
 	scheduled("amount", "amount", "e.g. 1500", f.amount, em*8, f.amountSched)
@@ -1418,20 +1419,27 @@ func scheduleFrom(v float64, from *model.Date) model.Schedule {
 	return model.MustSchedule(model.Segment{From: *from, Value: v})
 }
 
-// describeWhen says when a schedule has values.
+// describeWhen says when a schedule has values; a start at the beginning of time reads "the beginning", never "-inf".
 func describeWhen(s model.Schedule) string {
 	segs := s.Segments()
-	switch {
-	case len(segs) == 0:
+	if len(segs) == 0 {
 		return "never"
+	}
+	from := "the beginning"
+	if segs[0].From != model.MinDate {
+		from = segs[0].From.String()
+	}
+	switch {
 	case len(segs) == 1 && segs[0].End == nil && segs[0].From == model.MinDate:
 		return "always"
 	case len(segs) == 1 && segs[0].End == nil:
-		return "from " + segs[0].From.String()
+		return "from " + from
+	case len(segs) == 1 && segs[0].From == model.MinDate:
+		return "until " + segs[0].End.String()
 	case len(segs) == 1:
-		return segs[0].From.String() + " to " + segs[0].End.String()
+		return from + " to " + segs[0].End.String()
 	}
-	return fmt.Sprintf("%d periods from %s", len(segs), segs[0].From)
+	return fmt.Sprintf("%d periods from %s", len(segs), from)
 }
 
 // disabledText draws msg in the disabled colour as plain text; TextDisabled takes a format string, which a rate such as "4%" would corrupt.

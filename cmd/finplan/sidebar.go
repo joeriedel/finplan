@@ -338,17 +338,27 @@ func (g *graphTab) row(ln graph.Line) {
 	kind := assetKind(ln.Asset)
 	nameCY := p.Y + pad + imgui.TextLineHeight()/2
 	drawKindIcon(dl, textX, nameCY, kind, iconColor())
-	if hovered {
-		hoverIcon(textX, nameCY, kind)
-	}
-	dl.AddTextVec2(imgui.NewVec2(textX+iconSlot(), p.Y+pad), u32(rgba(colText, 1)), g.assetName(ln.Asset))
+	iconHot := hovered && hoverIcon(textX, nameCY, kind)
+	// Names stop before the pin button, which can be drawn over their end.
+	clipX := pinX - 2*s
+	dl.PushClipRectV(imgui.NewVec2(textX, p.Y), imgui.NewVec2(clipX, end.Y), true)
+	name := g.assetName(ln.Asset)
+	dl.AddTextVec2(imgui.NewVec2(textX+iconSlot(), p.Y+pad), u32(rgba(colText, 1)), name)
 	proj, _ := g.lines.Effective(ln.ID)
 	line2 := imgui.NewVec2(textX, p.Y+pad+imgui.TextLineHeight())
+	projX := float32(0)
 	if ln.Pinned {
+		projX = 14 * s
 		drawPin(dl, imgui.NewVec2(textX+5*s, line2.Y+imgui.TextLineHeight()/2), 11*s, u32(rgba(colMuted, 1)))
-		dl.AddTextVec2(imgui.NewVec2(textX+14*s, line2.Y), u32(rgba(colMuted, 1)), proj)
+		dl.AddTextVec2(imgui.NewVec2(textX+projX, line2.Y), u32(rgba(colMuted, 1)), proj)
 	} else {
 		dl.AddTextVec2(line2, u32(rgba(colAccentLit, 1)), proj)
+	}
+	dl.PopClipRect()
+	room := clipX - textX
+	if clipped := textClipped(iconSlot()+imgui.CalcTextSize(name).X, room) || textClipped(projX+imgui.CalcTextSize(proj).X, room); clipped && hovered && !iconHot && !soloHot && !pinHot && !removeHot &&
+		imgui.IsMouseHoveringRectV(imgui.NewVec2(textX, p.Y), imgui.NewVec2(clipX, end.Y), true) {
+		tooltipText(name + "\n" + proj)
 	}
 
 	if showPin {
@@ -445,7 +455,11 @@ func (g *graphTab) addPopup() {
 		}
 		imgui.EndCombo()
 	}
-	imgui.ColorEdit3V("Colour", &g.addColor, imgui.ColorEditFlagsNoInputs)
+	if g.addAsset == "" {
+		imgui.TextDisabled("Colour: chosen with the asset")
+	} else {
+		imgui.ColorEdit3V("Colour", &g.addColor, imgui.ColorEditFlagsNoInputs)
+	}
 
 	imgui.Separator()
 	imgui.BeginDisabledV(g.addAsset == "")

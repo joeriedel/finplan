@@ -33,10 +33,7 @@ type entryRow struct {
 
 // entryKindLabel names the kind of an entry: snapshot, or the kind of the transaction.
 func entryKindLabel(e store.Entry) string {
-	if e.Kind == store.KindSnapshot {
-		return string(store.KindSnapshot)
-	}
-	return string(e.TxKind)
+	return entryKindName(e.Kind, e.TxKind)
 }
 
 // counterName is the name of the account, else its id if the record no longer has it, and blank for no account.
@@ -83,11 +80,7 @@ func historyRows(st *store.Store, rec *model.Record, e store.Entry) ([]historyRo
 	}
 	rows := make([]historyRow, len(revs))
 	for i, r := range revs {
-		kind := string(store.KindSnapshot)
-		if e.Kind == store.KindTransaction {
-			kind = string(r.TxKind)
-		}
-		rows[i] = historyRow{kind, r.Date, r.Amount, counterName(rec, r.Counter), r.Memo, r.MadeAt.Local(), r.Note, r.Void}
+		rows[i] = historyRow{entryKindName(e.Kind, r.TxKind), r.Date, r.Amount, counterName(rec, r.Counter), r.Memo, r.MadeAt.Local(), r.Note, r.Void}
 	}
 	return rows, nil
 }
@@ -349,9 +342,9 @@ func (t *acctTab) txForm(acct *model.Account) {
 func (t *acctTab) kindPick(id string, cur model.TxKind) model.TxKind {
 	labels := make([]string, len(txKinds))
 	for i, k := range txKinds {
-		labels[i] = string(k)
+		labels[i] = txKindName(k)
 	}
-	if k := pick(id, string(cur), imgui.FontSize()*10, labels, slices.Index(txKinds, cur)); k >= 0 {
+	if k := pick(id, txKindName(cur), imgui.FontSize()*10, labels, slices.Index(txKinds, cur)); k >= 0 {
 		return txKinds[k]
 	}
 	return cur
@@ -385,11 +378,20 @@ func (t *acctTab) counterPick(id string, self, cur model.AccountID) model.Accoun
 // entriesTableID is the ID of the entries table, whose scrolling window is named after it.
 const entriesTableID = "##entries"
 
-// entryTable draws the entries newest first, only the visible rows, and selects one on a click.
+// entryTableHeight is the height of the entries table in a ledger panel with avail left below its heading, in font sizes em: all of it while no entry is selected, else 40% of it so that the selected entry's form and history fit below. It is never under six font sizes, room for the header and a few rows.
+func entryTableHeight(avail, em float32, selected bool) float32 {
+	if selected {
+		avail *= 0.4
+	}
+	return max(avail, em*6)
+}
+
+// entryTable draws the entries newest first, only the visible rows, and selects one on a click. The table fills the room the ledger panel has left, less the selected entry's panel.
 func (t *acctTab) entryTable(acct *model.Account) {
 	em := imgui.FontSize()
 	u := &t.ent
-	if !imgui.BeginTableV(entriesTableID, 5, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp|imgui.TableFlagsScrollY, imgui.NewVec2(0, em*20), 0) {
+	height := entryTableHeight(imgui.ContentRegionAvail().Y, em, u.sel != 0)
+	if !imgui.BeginTableV(entriesTableID, 5, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp|imgui.TableFlagsScrollY, imgui.NewVec2(0, height), 0) {
 		return
 	}
 	defer imgui.EndTable()
@@ -423,6 +425,9 @@ func (t *acctTab) entryTable(acct *model.Account) {
 			imgui.TextUnformatted(r.Counter)
 			imgui.TableSetColumnIndex(4)
 			imgui.TextUnformatted(r.Memo)
+			if r.Memo != "" && imgui.IsItemHoveredV(imgui.HoveredFlagsAllowWhenOverlappedByItem) {
+				tooltipText(r.Memo)
+			}
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/AllenDang/cimgui-go/imgui"
 
 	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/store"
 )
 
 // accountTypeNames, taxNames and kindNames are the display names of the stored values; the stored values themselves never change.
@@ -16,8 +17,9 @@ var (
 		model.Type401k: "401(k)", model.TypeTSP: "TSP", model.TypeIRA: "IRA", model.TypeRothIRA: "Roth IRA", model.TypeHSA: "HSA", model.Type529: "529",
 		model.TypeMortgage: "Mortgage", model.TypeLoan: "Loan", model.TypeEquity: "Equity", model.TypeProperty: "Property",
 	}
-	taxNames  = map[model.TaxTreatment]string{model.Taxable: "Taxable", model.TaxDeferred: "Tax-deferred", model.TaxFree: "Tax-free", model.Tax529: "529"}
-	kindNames = map[model.ItemKind]string{model.ItemIncome: "Income", model.ItemExpense: "Expense", model.ItemTransfer: "Transfer"}
+	taxNames    = map[model.TaxTreatment]string{model.Taxable: "Taxable", model.TaxDeferred: "Tax-deferred", model.TaxFree: "Tax-free", model.Tax529: "529"}
+	kindNames   = map[model.ItemKind]string{model.ItemIncome: "Income", model.ItemExpense: "Expense", model.ItemTransfer: "Transfer"}
+	txKindNames = map[model.TxKind]string{model.TxIncome: "Income", model.TxExpense: "Expense", model.TxTransfer: "Transfer"}
 )
 
 // accountTypeName is the display name of an account type, or the stored value when it has none.
@@ -42,6 +44,22 @@ func itemKindName(k model.ItemKind) string {
 		return n
 	}
 	return string(k)
+}
+
+// txKindName is the display name of a transaction kind, or the stored value when it has none.
+func txKindName(k model.TxKind) string {
+	if n, ok := txKindNames[k]; ok {
+		return n
+	}
+	return string(k)
+}
+
+// entryKindName is the display name of an entry's kind: Snapshot, or the name of the transaction's kind.
+func entryKindName(k store.EntryKind, tx model.TxKind) string {
+	if k == store.KindSnapshot {
+		return "Snapshot"
+	}
+	return txKindName(tx)
 }
 
 // accountTypeLabels and taxLabels are the display names of accountTypes and taxTreatments, in the same order.

@@ -79,11 +79,13 @@ func TestConstantOfAndDescribe(t *testing.T) {
 		t.Error("ended segment is editable")
 	}
 	for s, want := range map[string]model.Schedule{
-		"always":                    model.Constant(1),
-		"from 2027-01-01":           scheduleFrom(1, &d),
-		"2027-01-01 to 2027-01-06":  ended,
-		"2 periods from 2027-01-01": multi,
-		"never":                     {},
+		"always":                       model.Constant(1),
+		"from 2027-01-01":              scheduleFrom(1, &d),
+		"2027-01-01 to 2027-01-06":     ended,
+		"2 periods from 2027-01-01":    multi,
+		"never":                        {},
+		"3 periods from the beginning": model.MustSchedule(model.Segment{From: model.MinDate, End: model.Ptr(d.Add(5)), Value: 1}, model.Segment{From: d.Add(6), End: model.Ptr(d.Add(9)), Value: 2}, model.Segment{From: d.Add(10), Value: 3}),
+		"until 2027-01-06":             model.MustSchedule(model.Segment{From: model.MinDate, End: model.Ptr(d.Add(5)), Value: 1}),
 	} {
 		if got := describeWhen(want); got != s {
 			t.Errorf("describeWhen = %q, want %q", got, s)

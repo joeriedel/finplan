@@ -52,13 +52,13 @@ func TestEntryRowsNewestFirstWithKindAndCounter(t *testing.T) {
 	if err != nil || len(rows) < 4 {
 		t.Fatalf("%d rows, %v", len(rows), err)
 	}
-	if rows[0].Kind != "snapshot" || rows[0].Amount != 777 || rows[0].Counter != "" {
+	if rows[0].Kind != "Snapshot" || rows[0].Amount != 777 || rows[0].Counter != "" {
 		t.Errorf("first row %+v", rows[0])
 	}
 	if rows[1].ID != transfer || rows[2].ID != income {
 		t.Errorf("same-day order %d, %d; want %d, %d", rows[1].ID, rows[2].ID, transfer, income)
 	}
-	if rows[1].Kind != "transfer" || rows[1].Counter != a.rec.Account(demodata.Savings).Name || rows[2].Kind != "income" || rows[2].Counter != "" {
+	if rows[1].Kind != "Transfer" || rows[1].Counter != a.rec.Account(demodata.Savings).Name || rows[2].Kind != "Income" || rows[2].Counter != "" {
 		t.Errorf("rows %+v, %+v", rows[1], rows[2])
 	}
 	if !slices.IsSortedFunc(rows, func(x, y entryRow) int { return int(y.Date) - int(x.Date) }) {
@@ -279,5 +279,23 @@ func TestShotOptionsLedger(t *testing.T) {
 	}
 	if _, err := newShotOptions("x.png", "Graph", 10, "1280x800", "", "ledger"); err == nil {
 		t.Error("ledger on the Graph tab was accepted")
+	}
+}
+
+func TestEntryTableHeight(t *testing.T) {
+	const em = 13
+	for _, tc := range []struct {
+		avail    float32
+		selected bool
+		want     float32
+	}{
+		{500, false, 500},
+		{500, true, 200},
+		{100, true, em * 6},
+		{40, false, em * 6},
+	} {
+		if got := entryTableHeight(tc.avail, em, tc.selected); got != tc.want {
+			t.Errorf("entryTableHeight(%v, selected %v) = %v, want %v", tc.avail, tc.selected, got, tc.want)
+		}
 	}
 }

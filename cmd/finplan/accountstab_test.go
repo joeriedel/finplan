@@ -454,3 +454,26 @@ func TestFitsBeside(t *testing.T) {
 		t.Error("fitsBeside does not compare the text to the room")
 	}
 }
+
+func TestLedgerListShowsEveryAccountName(t *testing.T) {
+	const em, pad = 13, 8
+	// A 1280 px window, less its padding, with the ledger open.
+	list, _ := ledgerWidths(1244, em)
+	if got := accountNameWidth(list, pad, em, false); got < em*listNameEm {
+		t.Errorf("the Account column is %v px, want at least %v", got, em*listNameEm)
+	}
+	if got := accountNameWidth(list, pad, em, true); got >= em*listNameEm {
+		t.Errorf("the Account column fits the names with the Tax column too (%v px); the Tax column need not be dropped", got)
+	}
+	if got := accountNameWidth(em*40, pad, em, true); got < em*listNameEm {
+		t.Errorf("the closed list's Account column is %v px", got)
+	}
+}
+
+func TestGroupHasHeader(t *testing.T) {
+	one := listGroup{Title: "Checking", Rows: make([]listRow, 1)}
+	two := listGroup{Title: "529", Rows: make([]listRow, 2)}
+	if groupHasHeader(one) || !groupHasHeader(two) || groupHasHeader(listGroup{}) {
+		t.Error("only a group of two or more accounts has a header")
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/store"
 )
 
 func TestDisplayNames(t *testing.T) {
@@ -28,6 +29,14 @@ func TestDisplayNames(t *testing.T) {
 		if got := itemKindName(k); got != want {
 			t.Errorf("%q is %q, want %q", k, got, want)
 		}
+	}
+	for k, want := range map[model.TxKind]string{model.TxIncome: "Income", model.TxExpense: "Expense", model.TxTransfer: "Transfer"} {
+		if got := entryKindName(store.KindTransaction, k); got != want {
+			t.Errorf("transaction kind %q is %q, want %q", k, got, want)
+		}
+	}
+	if got := entryKindName(store.KindSnapshot, ""); got != "Snapshot" {
+		t.Errorf("a snapshot is %q", got)
 	}
 	if accountTypeName("odd") != "odd" || taxName("odd") != "odd" || itemKindName("odd") != "odd" {
 		t.Error("an unknown value is not shown as it is")

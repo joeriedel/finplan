@@ -215,7 +215,7 @@ func (t *acctTab) draw() {
 	open := imgui.BeginChildStrV("##acctlist", imgui.NewVec2(listWidth, 0), imgui.ChildFlagsBorders, 0)
 	imgui.PopStyleColor()
 	if open {
-		t.list()
+		t.list(!showLedger)
 		t.addForm()
 	}
 	imgui.EndChild()
@@ -254,6 +254,26 @@ const (
 	listMinEm   = 28
 )
 
+// List column widths in font sizes. listNameEm is the room the Account column keeps for the demo's longest name, "529 youngest".
+const (
+	listTaxEm     = 6
+	listBalanceEm = 6
+	listLastEm    = 9
+	listNameEm    = 9
+)
+
+// accountNameWidth is the width the Account column of the list gets in a list panel listWidth wide with padding pad on each side. The Tax column is left out while the ledger is open, which leaves the account names room that the narrow list would not.
+func accountNameWidth(listWidth, pad, em float32, withTax bool) float32 {
+	fixed := listBalanceEm + listLastEm
+	if withTax {
+		fixed += listTaxEm
+	}
+	return listWidth - 2*pad - em*float32(fixed)
+}
+
+// groupHasHeader reports whether the list titles the group: one account stands on its own, two or more are grouped under their title.
+func groupHasHeader(g listGroup) bool { return len(g.Rows) > 1 }
+
 // addFormStackedBelowEm is the list width, in font sizes, that the Add account form's two rows of fields need side by side: the longer row is about 481 px at 13 px, its labels, fields and spacing.
 const addFormStackedBelowEm = 37
 
@@ -262,32 +282,40 @@ func addFormStacked(avail, em float32) bool {
 	return avail < em*addFormStackedBelowEm
 }
 
-// list draws the accounts by group, with balance and the date of the last data; a stale account is marked in red.
-func (t *acctTab) list() {
+// list draws the accounts by group, with balance and the date of the last data; a stale account is marked in red. withTax says whether the tax treatment is shown.
+func (t *acctTab) list(withTax bool) {
 	em := imgui.FontSize()
 	groups := groupAccounts(t.rows)
 	if len(groups) == 0 {
 		imgui.TextDisabled("No accounts yet.")
 		return
 	}
-	if !imgui.BeginTableV("##accounts", 4, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
+	cols, id := int32(3), "##accountsnarrow"
+	if withTax {
+		cols, id = 4, "##accounts"
+	}
+	if !imgui.BeginTableV(id, cols, imgui.TableFlagsBordersInnerV|imgui.TableFlagsPadOuterX|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
 		return
 	}
 	imgui.TableSetupColumnV("Account", 0, 2, 0)
-	imgui.TableSetupColumnV("Tax", imgui.TableColumnFlagsWidthFixed, em*6, 0)
-	imgui.TableSetupColumnV("Balance", imgui.TableColumnFlagsWidthFixed, em*6, 0)
-	imgui.TableSetupColumnV("Last data", imgui.TableColumnFlagsWidthFixed, em*9, 0)
+	if withTax {
+		imgui.TableSetupColumnV("Tax", imgui.TableColumnFlagsWidthFixed, em*listTaxEm, 0)
+	}
+	imgui.TableSetupColumnV("Balance", imgui.TableColumnFlagsWidthFixed, em*listBalanceEm, 0)
+	imgui.TableSetupColumnV("Last data", imgui.TableColumnFlagsWidthFixed, em*listLastEm, 0)
 	imgui.TableHeadersRow()
 	for _, g := range groups {
-		groupHeaderRow(g.Title)
+		if groupHasHeader(g) {
+			groupHeaderRow(g.Title)
+		}
 		for _, r := range g.Rows {
-			t.listRow(r)
+			t.listRow(r, withTax)
 		}
 	}
 	imgui.EndTable()
 }
 
-func (t *acctTab) listRow(r listRow) {
+func (t *acctTab) listRow(r listRow, withTax bool) {
 	imgui.PushIDStr("acct" + string(r.Account.ID))
 	defer imgui.PopID()
 	imgui.TableNextRowV(0, 0)
@@ -299,9 +327,13 @@ func (t *acctTab) listRow(r listRow) {
 		imgui.TableSetColumnIndex(int32(i))
 		imgui.TextUnformatted(s)
 	}
-	text(1, taxName(r.Account.Tax))
-	text(2, graph.FormatMoney(r.Balance))
-	imgui.TableSetColumnIndex(3)
+	col := 1
+	if withTax {
+		text(col, taxName(r.Account.Tax))
+		col++
+	}
+	text(col, graph.FormatMoney(r.Balance))
+	imgui.TableSetColumnIndex(int32(col + 1))
 	switch {
 	case r.Account.IsClosed():
 		imgui.TextDisabled("closed " + r.Account.Closed.String())
