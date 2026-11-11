@@ -52,3 +52,8 @@ func (f itemForm) untouched() bool {
 func modUntouched(obj, value, start, end string) bool {
 	return obj == "" && allBlank(value, start, end)
 }
+
+// untouched reports whether nothing has been typed or picked in the Add grant form that the user starts: the amount, price, date, percents and cliff are blank and no first vest is picked. The stock, the calendar and deposit account (those of the account's latest grant), the choice of value or shares and the rates start filled.
+func (f grantForm) untouched() bool {
+	return allBlank(f.amount, f.price, f.date, f.years, f.cliff) && f.first == 0
+}

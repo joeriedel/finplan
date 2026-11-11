@@ -9,10 +9,15 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/AllenDang/cimgui-go/imgui"
+
+	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/ops"
+	"github.com/joeriedel/finplan/internal/store"
 )
 
 // shotOptions is screenshot mode: draw a tab for a number of frames, save the last as a PNG and exit.
@@ -50,6 +55,13 @@ var openNames = []openState{
 	{"timeline", "Projections", "", true},
 	{"asset-timeline", "Assets", "", true},
 	{"ledger", "Accounts", "", true},
+	{"equity-grants", "Accounts", "", true},
+	{"equity-add-grant", "Accounts", "", true},
+	{"equity-schedule", "Accounts", "", true},
+	{"equity-vest", "Accounts", "", true},
+	{"equity-tie", "Accounts", "", true},
+	{"equity-prices", "Accounts", "", true},
+	{"equity-calendar", "Accounts", "", true},
 }
 
 // openRequest is the id of the picker the screenshot asks to be shown open; the tab that draws it opens it on the first frame it does and clears the request.
@@ -140,13 +152,15 @@ func (o *shotOptions) openName() (n openState) {
 	return n
 }
 
-// applyOpen puts the app in the state --open asks for that is not a picker: the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the first Budget item's editor (budget-item) or its delete confirmation (budget-delete), the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth, or the selected account's ledger panel (ledger).
+// applyOpen puts the app in the state --open asks for that is not a picker: the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the first Budget item's editor (budget-item) or its delete confirmation (budget-delete), the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth, the selected account's ledger panel (ledger), or one of the equity states, which scroll the selected equity account's detail to a section: its grants table (equity-grants), the Add grant form filled in by dollar value (equity-add-grant), the schedule of its first grant with recorded and planned vests (equity-schedule), the Record vest form of that grant's first planned vest with a changed federal rate (equity-vest) or tied to a deposit (equity-tie, with the picker closed), the Prices section (equity-prices) and the vest calendar editor (equity-calendar).
 func (o *shotOptions) applyOpen(a *app) error {
 	switch o.open {
 	case "member", "member-form":
 		a.assets.add.kind = memberAccount
 	case "ledger":
 		a.accts.ledger = true
+	case "equity-grants", "equity-add-grant", "equity-schedule", "equity-vest", "equity-tie", "equity-prices", "equity-calendar":
+		return o.openEquity(a)
 	case "new-item":
 		a.proj.addNew = true
 	case "budget-item":
@@ -184,6 +198,82 @@ func (o *shotOptions) applyOpen(a *app) error {
 		a.assets.tlAsset = id
 	}
 	return nil
+}
+
+// openEquity puts the selected equity account's sections in the state the equity open state asks for.
+func (o *shotOptions) openEquity(a *app) error {
+	acct := a.rec.Account(a.accts.sel)
+	if acct.Type != model.TypeEquity {
+		return fmt.Errorf("account %q is not an equity account", acct.Name)
+	}
+	u := &a.accts.eq
+	*u = equityUI{acct: acct.ID, grant: newGrantForm(acct), grantInit: true}
+	switch o.open {
+	case "equity-grants":
+		u.scroll = "grants"
+	case "equity-prices":
+		u.scroll = "prices"
+	case "equity-calendar":
+		u.scroll = "calendars"
+	case "equity-add-grant":
+		f := &u.grant
+		f.amount, f.price, f.date, f.years = "75000", "210", a.rec.Today.String(), "25/25/25/25"
+		choices := firstVestChoices(a.rec, f.calendar, f.date)
+		if len(choices) == 0 {
+			return fmt.Errorf("the account's grants name no vest calendar with dates")
+		}
+		f.first = choices[0]
+		u.scroll = "addgrant"
+	case "equity-schedule", "equity-vest", "equity-tie":
+		for _, g := range acct.Grants {
+			_, rows, err := ops.GrantSchedule(a.rec, g.ID)
+			if err != nil {
+				return err
+			}
+			i := slices.IndexFunc(rows, func(r ops.ScheduleRow) bool { return r.Vest == nil })
+			if i <= 0 {
+				continue
+			}
+			u.sel, u.scroll = g.ID, "schedule"
+			if o.open != "equity-schedule" {
+				u.vest, u.scroll = newVestForm(a.rec, &g, rows[i]), "vest"
+				u.vest.fed = "24"
+			}
+			if o.open == "equity-tie" {
+				return o.tieDeposit(a, &g)
+			}
+			return nil
+		}
+		return fmt.Errorf("account %q has no grant with both recorded and planned vests", acct.Name)
+	}
+	return nil
+}
+
+// tieDeposit ties the open vest form to the newest deposit of the grant's brokerage account, dated on or after the grant, that no vest is tied to and that the vest can be recorded on, dating the vest to it.
+func (o *shotOptions) tieDeposit(a *app, g *model.Grant) error {
+	es, err := ops.ListEntries(a.st, g.Brokerage, false)
+	if err != nil {
+		return err
+	}
+	for _, e := range es {
+		if e.Kind != store.KindTransaction || e.Amount <= 0 || e.Date < g.Date {
+			continue
+		}
+		deps, err := unmatchedDeposits(a.st, a.rec, g.Brokerage, e.Date)
+		if err != nil {
+			return err
+		}
+		if !slices.ContainsFunc(deps, func(d store.Entry) bool { return d.ID == e.ID }) {
+			continue
+		}
+		f := *a.accts.eq.vest
+		f.date, f.tie, f.tx = e.Date.String(), true, e.ID
+		if vestProblem(a.st, a.rec, f) == "" {
+			*a.accts.eq.vest = f
+			return nil
+		}
+	}
+	return fmt.Errorf("the brokerage account has no deposit a vest can be tied to")
 }
 
 // selectItem selects the projection, asset or account named by --select in the chosen tab.

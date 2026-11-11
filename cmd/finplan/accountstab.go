@@ -180,6 +180,8 @@ type acctTab struct {
 	add                   newAcctForm
 	snapDate, snapBalance string
 	ent                   entriesUI
+	// eq is the state of the equity sections of an equity account.
+	eq equityUI
 
 	// ledger says whether the ledger panel is folded out to the right of the detail.
 	ledger  bool
@@ -427,7 +429,11 @@ func (t *acctTab) detail(acct *model.Account) {
 		t.editAttr(id, "rate", s)
 	}
 
-	t.snapshots(acct)
+	if acct.Type == model.TypeEquity {
+		t.equity(acct)
+	} else {
+		t.snapshots(acct)
+	}
 	t.entries(acct)
 	t.defaults(acct)
 	t.lifecycle(acct)

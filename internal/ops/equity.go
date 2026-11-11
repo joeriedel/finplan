@@ -123,12 +123,9 @@ func checkRates(w model.Withholding) error {
 
 // checkGrant refuses a grant that cannot be: an account that is not an open equity account, a symbol or numbers that are not valid, an unknown calendar, a first vest the calendar does not have, percents that do not add up to 100, a brokerage that is not a brokerage account, shares fewer than the grant has already vested.
 func checkGrant(rec *model.Record, g model.Grant) error {
-	a := rec.Account(g.Account)
-	if a == nil {
-		return unknownAccount(g.Account)
-	}
-	if a.Type != model.TypeEquity {
-		return refuse(ErrInvalidValue, "account %q is a %s account: a grant needs an equity account", g.Account, a.Type)
+	a, err := grantEquityAccount(rec, g)
+	if err != nil {
+		return err
 	}
 	if err := checkOpenOn(a, g.Date); err != nil {
 		return err
@@ -149,18 +146,38 @@ func checkGrant(rec *model.Record, g model.Grant) error {
 	if _, err := g.Plan(cal); err != nil {
 		return refuse(ErrInvalidValue, "%v", err)
 	}
-	b := rec.Account(g.Brokerage)
-	if b == nil {
-		return unknownAccount(g.Brokerage)
-	}
-	if b.Type != model.TypeBrokerage {
-		return refuse(ErrInvalidValue, "account %q is a %s account: proceeds go to a brokerage account", g.Brokerage, b.Type)
+	if err := checkGrantBrokerage(rec, g); err != nil {
+		return err
 	}
 	if err := checkRates(g.Rates); err != nil {
 		return err
 	}
 	if v := a.VestedBy(g.ID, model.MaxDate); g.ID != 0 && g.Shares < v {
 		return refuse(ErrInvalidValue, "grant %d has already vested %d shares: it cannot have %d", g.ID, v, g.Shares)
+	}
+	return nil
+}
+
+// grantEquityAccount is the grant's account, or an error if it is missing or not an equity account.
+func grantEquityAccount(rec *model.Record, g model.Grant) (*model.Account, error) {
+	a := rec.Account(g.Account)
+	if a == nil {
+		return nil, unknownAccount(g.Account)
+	}
+	if a.Type != model.TypeEquity {
+		return nil, refuse(ErrInvalidValue, "account %q is a %s account: a grant needs an equity account", g.Account, a.Type)
+	}
+	return a, nil
+}
+
+// checkGrantBrokerage refuses a grant whose proceeds account is missing or not a brokerage account.
+func checkGrantBrokerage(rec *model.Record, g model.Grant) error {
+	b := rec.Account(g.Brokerage)
+	if b == nil {
+		return unknownAccount(g.Brokerage)
+	}
+	if b.Type != model.TypeBrokerage {
+		return refuse(ErrInvalidValue, "account %q is a %s account: proceeds go to a brokerage account", g.Brokerage, b.Type)
 	}
 	return nil
 }

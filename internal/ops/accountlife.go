@@ -92,7 +92,7 @@ func checkNotCounter(st *store.Store, id model.AccountID) error {
 	return nil
 }
 
-// RestoreDocuments replaces the record's accounts, assets, base budget and projections with copies of those of src, an earlier state of this record: how an editor undoes and redoes an edit of them. Record entries are not restored: an account keeps the entries it has, and one that has entries, or is the counter account of any, cannot be removed (ErrInUse), so such a restore saves nothing.
+// RestoreDocuments replaces the record's accounts, assets, base budget and projections with copies of those of src, an earlier state of this record: how an editor undoes and redoes an edit of them. Record entries are not restored: an account keeps the entries it has, and one that has entries, or is the counter account of any, cannot be removed (ErrInUse), so such a restore saves nothing. A restore after which a live grant has no vest calendar, one that no longer plans its vests, an account that is not an equity account, or a proceeds account that is missing or not a brokerage account, is ErrInUse too.
 func RestoreDocuments(st *store.Store, rec *model.Record, src *model.Record, o Options) (*Result, error) {
 	next := rec.WithDocuments(src)
 	for _, a := range rec.Accounts {
@@ -108,6 +108,24 @@ func RestoreDocuments(st *store.Store, rec *model.Record, src *model.Record, o O
 		}
 		if err := checkNotCounter(st, a.ID); err != nil {
 			return nil, err
+		}
+	}
+	for _, a := range next.Accounts {
+		for i := range a.Grants {
+			g := &a.Grants[i]
+			if _, err := grantEquityAccount(next, *g); err != nil {
+				return nil, refuse(ErrInUse, "grant %d: %v", g.ID, err)
+			}
+			if err := checkGrantBrokerage(next, *g); err != nil {
+				return nil, refuse(ErrInUse, "grant %d: %v", g.ID, err)
+			}
+			cal := next.Calendar(g.Calendar)
+			if cal == nil {
+				return nil, refuse(ErrInUse, "grant %d uses vest calendar %q, which the restored state does not have", g.ID, g.Calendar)
+			}
+			if _, err := g.Plan(cal); err != nil {
+				return nil, refuse(ErrInUse, "grant %d would no longer have its planned vests under vest calendar %q: %v", g.ID, g.Calendar, err)
+			}
 		}
 	}
 	return commit(st, next, Result{}, o)
