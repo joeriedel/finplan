@@ -19,6 +19,9 @@ type Record struct {
 	Globals     map[string]Schedule
 	Classes     []MarketClass
 	Projections []*Projection
+	// Calendars are the employers' vest calendars; Prices the stock price observations that equity accounts are valued at.
+	Calendars []*VestCalendar
+	Prices    *PriceBook
 
 	seq        int
 	accountIdx map[AccountID]int
@@ -30,6 +33,7 @@ func NewRecord(today Date) *Record {
 	return &Record{
 		Today:      today,
 		Globals:    map[string]Schedule{},
+		Prices:     &PriceBook{},
 		accountIdx: map[AccountID]int{},
 		assetIdx:   map[AssetID]int{},
 	}
@@ -51,6 +55,40 @@ func (r *Record) Asset(id AssetID) *Asset {
 	return nil
 }
 
+// Calendar returns the vest calendar with the name, or nil.
+func (r *Record) Calendar(name string) *VestCalendar {
+	for _, c := range r.Calendars {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+// Grant returns the grant with the stored id and the account it is in, or nil.
+func (r *Record) Grant(id int64) (*Grant, *Account) {
+	for _, a := range r.Accounts {
+		for i := range a.Grants {
+			if a.Grants[i].ID == id {
+				return &a.Grants[i], a
+			}
+		}
+	}
+	return nil, nil
+}
+
+// Vest returns the recorded vest with the stored id and the account it is in, or nil.
+func (r *Record) Vest(id int64) (*RecordedVest, *Account) {
+	for _, a := range r.Accounts {
+		for i := range a.Vests {
+			if a.Vests[i].ID == id {
+				return &a.Vests[i], a
+			}
+		}
+	}
+	return nil, nil
+}
+
 // Projection returns the projection with the name, or nil.
 func (r *Record) Projection(name string) *Projection {
 	for _, p := range r.Projections {
@@ -68,6 +106,7 @@ func (r *Record) AddAccount(a *Account) error {
 	}
 	r.accountIdx[a.ID] = len(r.Accounts)
 	r.Accounts = append(r.Accounts, a)
+	a.prices = r.Prices
 	return r.addAsset(&Asset{
 		ID:      DefaultAssetID(a.ID),
 		Name:    a.Name,

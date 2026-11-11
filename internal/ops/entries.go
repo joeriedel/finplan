@@ -40,7 +40,7 @@ func checkOpenOn(a *model.Account, date model.Date) error {
 	return nil
 }
 
-// AddSnapshot records the balance of the account at the end of the day. A date after the account's close date is ErrInvalidValue. An account that already has a snapshot on the date is ErrInvalidValue: a recorded balance is changed by CorrectEntry, never replaced.
+// AddSnapshot records the balance of the account at the end of the day. An equity account has no snapshots: its balance is derived from its grants. A date after the account's close date is ErrInvalidValue. An account that already has a snapshot on the date is ErrInvalidValue: a recorded balance is changed by CorrectEntry, never replaced.
 func AddSnapshot(st *store.Store, rec *model.Record, account model.AccountID, date model.Date, balance float64, o Options) (*Result, error) {
 	res, err := editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		a := next.Account(account)
@@ -52,6 +52,9 @@ func AddSnapshot(st *store.Store, rec *model.Record, account model.AccountID, da
 		}
 		if err := checkOpenOn(a, date); err != nil {
 			return Result{}, err
+		}
+		if a.Type == model.TypeEquity {
+			return Result{}, refuse(ErrInvalidValue, "account %q is an equity account: its balance comes from its grants, vests and stock prices, not snapshots", account)
 		}
 		if slices.ContainsFunc(a.Snapshots, func(s model.Snapshot) bool { return s.Date == date }) {
 			return Result{}, refuse(ErrInvalidValue, "account %q already has a snapshot on %v: correct that entry instead", account, date)

@@ -30,6 +30,14 @@ const (
 	College1  model.AccountID = "529-oldest"
 	College2  model.AccountID = "529-middle"
 	College3  model.AccountID = "529-youngest"
+	// Equity holds the restricted stock units of an invented employer, Acme Corp, whose ticker is Symbol.
+	Equity model.AccountID = "equity"
+)
+
+// The invented employer's stock and vest calendar.
+const (
+	Symbol       = "ACME"
+	CalendarName = "Acme Corp"
 )
 
 // Asset ids of the Family record.
@@ -120,14 +128,15 @@ func familyBudget() model.Budget {
 	}}
 }
 
-// Family returns an invented record for a family of six: twelve accounts with two years of history,
+// Family returns an invented record for a family of six: thirteen accounts with two years of history,
 // a basic budget, aggregate assets and three projections. Every number is invented. The TSP is
 // entered by hand, so its data ends months before the synced accounts', and the home has only
-// occasional valuations. The Liquid asset contains an overlapping member.
+// occasional valuations. One parent's employer pays in restricted stock units: the equity account has two grants, seven vests recorded with their brokerage deposits, and a price history. The Liquid asset contains an overlapping member.
 func Family() *model.Record {
 	rec := model.NewRecord(FamilyToday)
 	rec.Globals[model.PropInflation] = model.Constant(0.025)
 	rec.Budget = familyBudget()
+	rsu := familyRSU()
 
 	for _, s := range accountSpecs {
 		a := &model.Account{ID: s.id, Name: s.name, Type: s.typ, Tax: s.tax, Owner: s.owner, StatedRate: s.rate}
@@ -135,6 +144,11 @@ func Family() *model.Record {
 			a.Default.Intervals = []model.Interval{{From: model.MinDate, To: model.Ptr(historyOpen.Add(-1)), Value: 70000}}
 		}
 		must(rec.AddAccount(a))
+		if s.id == Brokerage {
+			for _, d := range rsu.deposits {
+				must(a.AddTransaction(d))
+			}
+		}
 		generateHistory(rec, a, s)
 	}
 	home := &model.Account{ID: Home, Name: "Home", Type: model.TypeProperty, Tax: model.Taxable, Owner: "Joint", StatedRate: 0.03}
@@ -142,6 +156,7 @@ func Family() *model.Record {
 	home.AddSnapshot(model.D(2025, time.September, 20), 535000)
 	home.AddSnapshot(model.D(2026, time.May, 10), 548000)
 	must(rec.AddAccount(home))
+	rsu.addTo(rec)
 
 	cash := []model.AccountType{model.TypeChecking, model.TypeSavings}
 	must(rec.AddAsset(&model.Asset{ID: AllCash, Name: "All cash", Members: []model.Member{model.RuleMember(model.Rule{Types: cash})}}))

@@ -28,6 +28,7 @@ const (
 	kindClass      = "class"
 	kindGlobal     = "global"
 	kindProjection = "projection"
+	kindCalendar   = "calendar"
 )
 
 // The DTOs below are the stored shape of formats 1 to 5. They are separate from the model types so that
@@ -183,6 +184,38 @@ type projectionDoc struct {
 	Mods            []modDoc          `json:"mods"`
 	Shocks          []shockDoc        `json:"shocks"`
 	Rebalances      []rebalanceDoc    `json:"rebalances"`
+}
+
+type vestRuleDoc struct {
+	Month   int `json:"month"`
+	Day     int `json:"day"`
+	Nth     int `json:"nth"`
+	Weekday int `json:"weekday"`
+}
+
+type overrideDoc struct {
+	From model.Date `json:"from"`
+	To   model.Date `json:"to"`
+}
+
+type calendarDoc struct {
+	Name      string        `json:"name"`
+	Rules     []vestRuleDoc `json:"rules"`
+	Overrides []overrideDoc `json:"overrides"`
+}
+
+func calendarToDoc(c *model.VestCalendar) calendarDoc {
+	return calendarDoc{c.Name,
+		mapSlice(c.Rules, func(r model.VestRule) vestRuleDoc { return vestRuleDoc{int(r.Month), r.Day, r.Nth, int(r.Weekday)} }),
+		mapSlice(c.Overrides, func(o model.DateOverride) overrideDoc { return overrideDoc{o.From, o.To} })}
+}
+
+func docCalendar(d calendarDoc) *model.VestCalendar {
+	return &model.VestCalendar{Name: d.Name,
+		Rules: mapSlice(d.Rules, func(r vestRuleDoc) model.VestRule {
+			return model.VestRule{Month: time.Month(r.Month), Day: r.Day, Nth: r.Nth, Weekday: time.Weekday(r.Weekday)}
+		}),
+		Overrides: mapSlice(d.Overrides, func(o overrideDoc) model.DateOverride { return model.DateOverride{From: o.From, To: o.To} })}
 }
 
 // docRow is one row of the documents table.

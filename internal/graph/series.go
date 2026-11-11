@@ -102,7 +102,7 @@ func At(samples []engine.Sample, d model.Date) (float64, engine.Status, bool) {
 	return a.Amount + (b.Amount-a.Amount)*t, a.Status, true
 }
 
-// DataStart returns the earliest snapshot or transaction date in the record, or today if there is none.
+// DataStart returns the earliest snapshot, transaction or grant date in the record, or today if there is none.
 func DataStart(rec *model.Record) model.Date {
 	start, found := rec.Today, false
 	for _, a := range rec.Accounts {
@@ -114,6 +114,11 @@ func DataStart(rec *model.Record) model.Date {
 		for _, t := range a.Transactions {
 			if !found || t.Date < start {
 				start, found = t.Date, true
+			}
+		}
+		for _, g := range a.Grants {
+			if !found || g.Date < start {
+				start, found = g.Date, true
 			}
 		}
 	}

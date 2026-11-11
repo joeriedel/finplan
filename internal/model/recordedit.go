@@ -47,6 +47,11 @@ func (r *Record) Clone() *Record {
 	}
 	c.Globals = cloneSchedules(r.Globals)
 	c.Classes = slices.Clone(r.Classes)
+	c.Prices = r.Prices.clone()
+	c.Calendars = nil
+	for _, cal := range r.Calendars {
+		c.Calendars = append(c.Calendars, cal.Clone())
+	}
 	c.Accounts = make([]*Account, len(r.Accounts))
 	for i, a := range r.Accounts {
 		ca := *a
@@ -54,6 +59,14 @@ func (r *Record) Clone() *Record {
 		ca.Closed = clonePtr(a.Closed)
 		ca.Snapshots = slices.Clone(a.Snapshots)
 		ca.Transactions = slices.Clone(a.Transactions)
+		ca.Grants, ca.Vests = nil, nil
+		for _, g := range a.Grants {
+			ca.Grants = append(ca.Grants, g.Clone())
+		}
+		for _, v := range a.Vests {
+			ca.Vests = append(ca.Vests, v.Clone())
+		}
+		ca.prices = c.Prices
 		c.Accounts[i] = &ca
 	}
 	c.Assets = make([]*Asset, len(r.Assets))
@@ -169,13 +182,17 @@ func (r *Record) RemoveAccount(id AccountID) error {
 func (r *Record) WithDocuments(src *Record) *Record {
 	n := src.Clone()
 	for _, a := range n.Accounts {
-		a.Snapshots, a.Transactions = nil, nil
+		a.Snapshots, a.Transactions, a.Grants, a.Vests = nil, nil, nil, nil
 		if live := r.Account(a.ID); live != nil {
 			a.Snapshots, a.Transactions = slices.Clone(live.Snapshots), slices.Clone(live.Transactions)
+			a.Grants, a.Vests = slices.Clone(live.Grants), slices.Clone(live.Vests)
 		}
 	}
 	c := r.Clone()
-	c.Budget, c.Projections = n.Budget, n.Projections
+	c.Budget, c.Projections, c.Calendars = n.Budget, n.Projections, n.Calendars
 	c.Accounts, c.Assets, c.accountIdx, c.assetIdx, c.seq = n.Accounts, n.Assets, n.accountIdx, n.assetIdx, n.seq
+	for _, a := range c.Accounts {
+		a.prices = c.Prices
+	}
 	return c
 }

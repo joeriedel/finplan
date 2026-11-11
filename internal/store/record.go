@@ -52,6 +52,11 @@ func encodeRecord(r *model.Record) ([]docRow, error) {
 			return nil, err
 		}
 	}
+	for i, c := range r.Calendars {
+		if err := add(kindCalendar, c.Name, i, calendarToDoc(c)); err != nil {
+			return nil, err
+		}
+	}
 	for i, p := range r.Projections {
 		if err := add(kindProjection, p.Name, i, projectionToDoc(p)); err != nil {
 			return nil, err
@@ -72,6 +77,7 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 		classes []classDoc
 		globals = map[string][]segDoc{}
 		projs   []projectionDoc
+		cals    []calendarDoc
 	)
 	for _, row := range rows {
 		var err error
@@ -98,6 +104,10 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 			var d []segDoc
 			err = decodeDoc(row, &d)
 			globals[row.key] = d
+		case kindCalendar:
+			var d calendarDoc
+			err = decodeDoc(row, &d)
+			cals = append(cals, d)
 		case kindProjection:
 			var d projectionDoc
 			err = decodeDoc(row, &d)
@@ -133,6 +143,13 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 	}
 	if err := restoreAccountsAndAssets(rec, accts, assets, entries); err != nil {
 		return nil, err
+	}
+	for _, d := range cals {
+		c := docCalendar(d)
+		if err := c.Validate(); err != nil {
+			return nil, fmt.Errorf("store: %w", err)
+		}
+		rec.Calendars = append(rec.Calendars, c)
 	}
 	for _, d := range projs {
 		p, err := docProjection(d)
@@ -311,10 +328,44 @@ func (s *Store) Load() (*model.Record, error) {
 	if err != nil {
 		return nil, err
 	}
+	facts, err := queryFacts(tx, false, ``)
+	if err != nil {
+		return nil, err
+	}
+	if err := attachFacts(r, facts); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	s.loaded, s.loadMark = true, mark
 	s.mu.Unlock()
 	return r, nil
+}
+
+// attachFacts puts the stored grants, vests and price observations into the record. A grant of an account the record lacks, or a vest of a grant it lacks, is an error.
+func attachFacts(r *model.Record, facts []Fact) error {
+	for _, f := range facts {
+		switch f.Kind {
+		case FactPrice:
+			r.Prices.Add(*f.Price)
+		case FactGrant:
+			a := r.Account(f.Grant.Account)
+			if a == nil {
+				return fmt.Errorf("store: grant %d is of unknown account %q", f.ID, f.Grant.Account)
+			}
+			a.Grants = append(a.Grants, *f.Grant)
+		}
+	}
+	for _, f := range facts {
+		if f.Kind != FactVest {
+			continue
+		}
+		if _, a := r.Grant(f.Vest.Grant); a != nil {
+			a.Vests = append(a.Vests, *f.Vest)
+		} else {
+			return fmt.Errorf("store: vest %d is of grant %d, which is not stored or is voided", f.ID, f.Vest.Grant)
+		}
+	}
+	return nil
 }
 
 // changedSinceLoad returns, for entries voided or corrected after the most recent Load (all corrected entries
@@ -375,16 +426,32 @@ func checkRestorable(r *model.Record) ([]docRow, error) {
 // not stored yet are appended. Voided entries count as absent, but a model entry equal to any revision of an entry voided or corrected since the most recent Load on this Store is a stale copy and fails the same way. If a stored entry (with its corrections applied) is missing from or
 // changed in the model, or an account with stored entries is gone, Save writes nothing and returns
 // an error matching ErrRecordChanged.
-func (s *Store) Save(r *model.Record) error {
-	docs, err := checkRestorable(r)
-	if err != nil {
-		return err
-	}
+func (s *Store) Save(r *model.Record) error { return s.save(r, nil) }
+
+func (s *Store) save(r *model.Record, then func(FactTx) error) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if r != nil {
+		if err := s.saveRecord(tx, r); err != nil {
+			return err
+		}
+	}
+	if then != nil {
+		if err := then(FactTx{s, tx}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) saveRecord(tx *sql.Tx, r *model.Record) error {
+	docs, err := checkRestorable(r)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM documents`); err != nil {
 		return err
 	}
@@ -419,5 +486,5 @@ func (s *Store) Save(r *model.Record) error {
 	for id := range byAccount {
 		return fmt.Errorf("%w: account %q is absent from the record", ErrRecordChanged, id)
 	}
-	return tx.Commit()
+	return s.syncFacts(tx, r)
 }

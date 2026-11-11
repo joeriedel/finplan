@@ -237,7 +237,7 @@ The engine must be fast: goal solving and Monte Carlo rerun it thousands of time
 
 Details the build settled, and the placeholders it uses until the real rules arrive.
 
-**Layout.** Model types and asset rules are in `internal/model`; the engine is in `internal/engine` and imports the model. The invented family-of-six dataset (`demodata.Family()`, reference date 2026-11-08) is in `internal/demodata`; the older `demodata.Generate` is gone.
+**Layout.** Model types and asset rules are in `internal/model`; the engine is in `internal/engine` and imports the model. The invented family-of-six dataset (`demodata.Family()`, reference date 2026-11-08; 13 accounts, among them the equity account `equity`, see "Equity: RSU grants") is in `internal/demodata`; the older `demodata.Generate` is gone.
 
 **Dates and growth.** Dates have day resolution. Growth compounds annually over exactly days/365.25.
 
@@ -251,15 +251,31 @@ Details the build settled, and the placeholders it uses until the real rules arr
 
 **Overlap.** The later-added member (by a record-wide sequence) is invalid as a whole, rule members included, is named with its duplicate and is left out of sums. It is checked on every resolve. A rule matching no accounts contributes 0; an empty rule matches every account. Default asset ids are `acct:<id>`.
 
-**Actual data span.** From the earliest to the latest snapshot or transaction; an account needs at least one snapshot. Between snapshots the balance is the earlier snapshot plus transactions; before the first snapshot it is counted back from it.
+**Actual data span.** From the earliest to the latest snapshot or transaction; an account needs at least one snapshot. An equity account with grants is the exception: its span runs from its first grant to its latest grant, vest, price observation of a stock it holds, or transaction (see "Equity: RSU grants"). Between snapshots the balance is the earlier snapshot plus transactions; before the first snapshot it is counted back from it.
 
-**Breakdown.** `engine.Breakdown(record, projection, target, from, to)` covers (from, to]. Lines are split by cause and by actual (read back) versus projected. Causes: income, expense, transfer, contribution, withdrawal, tax, growth, opening (a projection account's opening balance), unexplained (snapshot jumps not covered by transactions) and default. A `default` cause absorbs changes from default balances so the lines always total the balance change; residues under 1e-6 are dropped. Transfers with both sides inside the target cancel.
+**Breakdown.** `engine.Breakdown(record, projection, target, from, to)` covers (from, to]. Lines are split by cause and by actual (read back) versus projected. Causes: income, expense, transfer, contribution, withdrawal, tax, growth, opening (a projection account's opening balance), unexplained (snapshot jumps not covered by transactions; for now also the change in an equity account's value from vests and prices, which has no cause of its own yet) and default. A `default` cause absorbs changes from default balances so the lines always total the balance change; residues under 1e-6 are dropped. Transfers with both sides inside the target cancel.
 
 **Transfer classification.** Unsheltered to sheltered (tax-deferred, tax-free, 529) is a contribution, sheltered to unsheltered a withdrawal, anything else a transfer. A transfer to an account outside the target's scope counts as money leaving.
 
 **Placeholder rules.** Tax is 25% of gross on income flows; a withdrawal from a tax-deferred account also charges 32% tax on top, to the source, with no penalty. On one date the engine applies income, expenses, then transfers (the full order under The engine is not yet modelled). Indexed budget items scale by the global inflation schedule compounded from `Record.Today` to the flow date; history is never indexed. An item's amount is its resolved amount (after amount modifications) times its raise factor times, if indexed, the inflation compound (`raiseFactor`, `path.build`). The raise factor multiplies `1+g` for each anniversary after the later of the anchor and `Record.Today`, up to the flow date, using the growth in effect on that anniversary; a step factor is clamped at 0, and a Feb 29 anchor falls on Feb 28 in other years.
 
 **Modifications supported.** A budget item's `amount` and `growth` schedules (each set or scale), an account or asset `growth` schedule, an account or asset `default` schedule (see Default balances), global `inflation` (set or scale), and `add_item` (adds a whole budget item). Unsupported properties and dangling targets are skipped and reported in the result's diagnostics.
+
+### Equity: RSU grants
+
+Subtask 1 of 3 (model, storage, shared operations and CLI) is built. Not built yet: the Equity UI (the Accounts tab still shows a Snapshots section for an equity account), the engine's projection of vests and focal grants, W as tax paid toward the year, and attribution in the breakdown of vest-driven changes (shown as unexplained). Feed and transaction matching remain unbuilt.
+
+**Vest calendars** (`model.VestCalendar`) are named documents (kind `calendar`) shared by the grants of one employer. A calendar has one rule per month, either a fixed day of the month or the 1st to 4th or last weekday, and overrides that each move one generated date to another. `Validate` refuses a month outside 1 to 12, two rules for a month, a rule that does not set exactly one of day and Nth weekday, a fixed day that does not exist in every year (so February at most 28, and 31 in a 30-day month), an override whose From is not a generated date, an override that does not move its date, and a date overridden twice. `Dates(from, to)` lists the generated dates with overrides applied.
+
+**Grants** (`model.Grant`, held on the equity account) have a symbol, a date, a share count (entered as shares, or as a dollar value that buys the whole shares at the grant price, rounded down), a reference grant price (each vest is valued at the price on its vest date, not this), a calendar, a first vest date (a date of the calendar), year percents, an optional cliff, a vest percent for each planned vest, withholding rates and a brokerage account. Each year's percent is split equally over that year's calendar vests (`GeneratePercents`); the percents of the vests before the cliff, measured in calendar months from the first vest's month, are merged into the first vest on or after it, as one planned vest on that date (`PlanDates`). The per-vest percents can be edited and must sum to 100. `Grant.Plan` turns them into planned vests: shares are rounded down with the remainder on the last vest. Withholding rates default to 22% federal, 5.75% Virginia and 7.65% FICA (`DefaultWithholding`).
+
+**Recorded vests** (`model.RecordedVest`) say that a planned vest happened, on its date and with its shares or on others: value V is shares times the price, W the withholding (V times the rates, or an amount entered), and net N = V - W. `ops.RecordVest` saves, together, the vest, a price observation of the stock on that date (unless one with the same price is there) and a transfer of N into the grant's brokerage account with the equity account as counter; with an existing brokerage entry id (tied) it records the vest against that deposit and no second one (`checkTied`). A planned vest is recorded once. A vest is refused before its grant's date or when it has more shares than the grant has left (`checkVest`). Correcting or voiding a vest does not touch its deposit or its price observation; those are corrected or voided on their own.
+
+**Stock prices** (`model.PriceObservation`, in `Record.Prices`) are a symbol, a date and a price.
+
+**Equity balance.** An equity account with grants has no snapshots: its balance on a date is, for each grant dated on or before it, the unvested shares (granted less those vested by then) times the stock's latest price observation on or before it, or the grant price before any observation (`Account.equityAt`). It replaces snapshots for the account: `AddSnapshot` refuses an equity account, but an equity account with no grants still reads any legacy snapshots. Readers get the value through the same `Account.ActualAt`, `Span` and `LastEntry` path as for any account.
+
+**Rules `ops` enforces.** Voiding a grant is refused while it has non-void vests. Correcting a grant that has recorded vests is refused (`in_use`) if it would change the plan's dates, percents or length, or move the grant date after a vest. Deleting a calendar is refused while a non-void grant uses it, and editing one is refused if that would break a grant's plan. An account with grants, or the brokerage account of a grant, cannot change type and cannot be deleted.
 
 ## Analysis tools
 
@@ -326,7 +342,7 @@ All app data lives in SQLite outside the repository (the app uses `$XDG_DATA_HOM
 - triggers that reject UPDATE and DELETE on both tables.
 - `documents`: kind, key, ordinal, format version and JSON body.
 
-Migration 2 adds `presets`, kept apart because `Save` replaces the documents wholesale. Migration 3 adds `corrections.void`.
+Migration 2 adds `presets`, kept apart because `Save` replaces the documents wholesale. Migration 3 adds `corrections.void`. Migration 4 (schema version 4) adds `facts` and `fact_corrections` for the equity facts: grants, recorded vests and price observations. They are append-only like entries (triggers reject UPDATE and DELETE). A fact's body is JSON; a correction carries the whole new body, a note and a void flag, the latest correction wins and the history stays (`Store.CorrectFact`, `VoidFact`, `FactHistory`). Vest calendars are not facts but documents.
 
 **Saving the record.** `Save` replaces every document and appends the model's entries that are not yet stored. It matches the stored entries of each account (with corrections applied) against the model's as a multiset of values. If a stored entry was changed or removed in the model, or an account that has stored entries is gone, `Save` fails with `ErrRecordChanged` and writes nothing. Changes to stored entries go through corrections.
 
@@ -340,7 +356,7 @@ Migration 2 adds `presets`, kept apart because `Save` replaces the documents who
 
 **View presets.** `PutPreset`, `Preset`, `Presets` and `DeletePreset` store opaque bytes under a name with a format version owned by the writer. The store does not interpret them and does not import `internal/graph`. The app stores them as JSON in `PresetFormat` 1 (`graph.EncodePreset`, `graph.DecodePreset`; an unknown format is an error). `Restore` skips lines the record no longer has and the bands that use them, and falls back to another switcher if the saved projection is gone.
 
-**Not done yet.** There is no delete correction (entries can be voided); and holdings, life events and a manual-versus-synced distinction have no storage because the model has no types for them yet.
+**Not done yet.** There is no delete correction (entries can be voided); and holdings (other than the equity facts above), life events and a manual-versus-synced distinction have no storage because the model has no types for them yet.
 
 ## CLI and agent access
 
@@ -442,6 +458,8 @@ Commands are data: `cmd/finplan/cliread.go` holds the read command table and `cm
 **Modification targets.** The operations check that the property suits the target (amount or growth for a budget item, growth or default for an account or asset, inflation for global) and that the target resolves at the modification's position (`checkTarget`): a record budget item, an item added by an ancestor's `add_item` modification, or one added by an earlier row of the same projection; otherwise `unknown_target`. `mod add` cannot add an item. Every edit then checks (`checkNoNewDangling`) that no modification which resolved before stops resolving, which refuses moves, removals, parent changes and removals of added items that would orphan a modification; modifications already dangling do not block an edit, including rename and clone.
 
 Record writes are the `entry` commands: snapshots and transactions are appended, and changes to them go through corrections (`entry correct`, `entry void`).
+
+Equity writes (`cmd/finplan/cliequity.go`) go through `ops` as well: `calendar new|edit|delete`, `grant add|correct|void`, `vest record|correct|void` and `price add|correct|void`, each with `--dry-run`. Calendar rules are written like `mar=3mon`, `jun=lastfri`, `feb=15` and overrides as `2027-03-15=2027-03-16`. Rates are fractions (`0.22`); year and vest percents are percent units (`25,25,25,25`). The reads are `calendar list`, `calendar dates`, `account grants`, `grant schedule`, `grant history`, `vest history`, `price history` (`--voided`) and `price revisions`. Grants, vests and prices share one id numbering.
 
 The agent (Claude) has full access: it reads the record, assets, budgets, projections and engine output, and writes through the write commands: projections (settings, modifications and added budget items), assets, accounts, the base budget and record entries. Changes to recorded entries go through corrections, like the GUI's. Whatever the agent reads is sent to its model provider.
 

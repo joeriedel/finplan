@@ -97,6 +97,11 @@ type Account struct {
 
 	Snapshots    []Snapshot
 	Transactions []Transaction
+	// Grants and Vests are an equity account's restricted stock units. Once it has a grant, the account's actual balance is derived from them and the stock prices instead of from snapshots.
+	Grants []Grant
+	Vests  []RecordedVest
+
+	prices *PriceBook // the record's stock prices; set by the record the account is in
 }
 
 // IsClosed reports whether the account has been closed.
@@ -129,9 +134,12 @@ func (a *Account) AddTransaction(t Transaction) error {
 	return nil
 }
 
-// Span returns the account's real data span: from its earliest snapshot or transaction to its latest.
+// Span returns the account's real data span: from its earliest snapshot or transaction to its latest, or for an equity account with grants from its first grant to its latest grant, vest or price.
 // An account with no snapshot has no actual data, because transactions alone cannot anchor a balance.
 func (a *Account) Span() (Span, bool) {
+	if a.hasGrants() {
+		return a.equitySpan(), true
+	}
 	if len(a.Snapshots) == 0 {
 		return Span{}, false
 	}
@@ -143,12 +151,18 @@ func (a *Account) Span() (Span, bool) {
 	return sp, true
 }
 
-// LastEntry returns the date of the account's latest snapshot or transaction, and false if it has neither.
+// LastEntry returns the date of the account's latest snapshot, transaction, grant or vest, and false if it has neither.
 func (a *Account) LastEntry() (Date, bool) {
 	var last Date
 	ok := false
+	for _, g := range a.Grants {
+		last, ok = max(last, g.Date), true
+	}
+	for _, v := range a.Vests {
+		last, ok = max(last, v.Date), true
+	}
 	if n := len(a.Snapshots); n > 0 {
-		last, ok = a.Snapshots[n-1].Date, true
+		last, ok = max(last, a.Snapshots[n-1].Date), true
 	}
 	if n := len(a.Transactions); n > 0 {
 		last, ok = max(last, a.Transactions[n-1].Date), true
@@ -174,13 +188,16 @@ func (a *Account) txSum(after, upTo Date) float64 {
 	return sum
 }
 
-// ActualAt returns the balance on d from real data, and false outside the data span. Between snapshots
+// ActualAt returns the balance on d from real data, and false outside the data span. An equity account with grants is worth the shares it holds at the stock's price (see equityAt). Between snapshots
 // the balance is filled from transactions, never from defaults. Before the first snapshot it is
 // counted back from that snapshot through the transactions.
 func (a *Account) ActualAt(d Date) (float64, bool) {
 	sp, ok := a.Span()
 	if !ok || d < sp.From || d > sp.To {
 		return 0, false
+	}
+	if a.hasGrants() {
+		return a.equityAt(d), true
 	}
 	i := sort.Search(len(a.Snapshots), func(i int) bool { return a.Snapshots[i].Date > d }) - 1
 	if i < 0 {
@@ -192,8 +209,11 @@ func (a *Account) ActualAt(d Date) (float64, bool) {
 }
 
 // UnexplainedIn returns the part of the actual balance change over after..upTo that the transactions
-// do not explain: at each snapshot, the snapshot minus the previous snapshot plus the transactions between.
+// do not explain: at each snapshot, the snapshot minus the previous snapshot plus the transactions between; for an equity account with grants, the change in its value less the transactions.
 func (a *Account) UnexplainedIn(after, upTo Date) float64 {
+	if a.hasGrants() {
+		return a.equityAt(upTo) - a.equityAt(after) - a.txSum(after, upTo)
+	}
 	sum := 0.0
 	for i := 1; i < len(a.Snapshots); i++ {
 		cur, prev := a.Snapshots[i], a.Snapshots[i-1]

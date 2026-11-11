@@ -65,7 +65,7 @@ func DeleteAccount(st *store.Store, rec *model.Record, id model.AccountID, o Opt
 		if a == nil {
 			return Result{}, unknownAccount(id)
 		}
-		blocked, err := accountBlocked(st, a)
+		blocked, err := accountBlocked(st, next, a)
 		if err != nil {
 			return Result{}, err
 		}
@@ -103,7 +103,7 @@ func RestoreDocuments(st *store.Store, rec *model.Record, src *model.Record, o O
 		if err != nil {
 			return nil, fmt.Errorf("could not read the entries of account %q: %w", a.ID, err)
 		}
-		if stored || len(a.Snapshots) > 0 || len(a.Transactions) > 0 {
+		if stored || len(a.Snapshots) > 0 || len(a.Transactions) > 0 || len(a.Grants) > 0 {
 			return nil, refuse(ErrInUse, "account %q has record entries and cannot be removed", a.ID)
 		}
 		if err := checkNotCounter(st, a.ID); err != nil {

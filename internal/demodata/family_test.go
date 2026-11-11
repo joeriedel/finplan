@@ -20,8 +20,8 @@ func TestFamilyStructure(t *testing.T) {
 	if rec.Today != FamilyToday {
 		t.Errorf("today: got %v", rec.Today)
 	}
-	if len(rec.Accounts) != 12 {
-		t.Errorf("accounts: got %d, want 12", len(rec.Accounts))
+	if len(rec.Accounts) != 13 {
+		t.Errorf("accounts: got %d, want 13", len(rec.Accounts))
 	}
 	for _, a := range rec.Accounts {
 		if rec.Asset(model.DefaultAssetID(a.ID)) == nil {
@@ -36,7 +36,7 @@ func TestFamilyStructure(t *testing.T) {
 	if got := rec.Projection(ProjNewJob); got.Parent != ProjBase || len(got.Mods) != 2 {
 		t.Errorf("New job: got %+v", got)
 	}
-	wantAccounts := map[model.AssetID]int{AllCash: 2, Retirement: 3, Colleges: 3, NetWorth: 12, Liquid: 3}
+	wantAccounts := map[model.AssetID]int{AllCash: 2, Retirement: 3, Colleges: 3, NetWorth: 13, Liquid: 3}
 	for id, n := range wantAccounts {
 		res, err := rec.Resolve(id)
 		if err != nil {

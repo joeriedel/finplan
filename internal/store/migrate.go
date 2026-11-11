@@ -60,6 +60,30 @@ var migrations = []string{
 	);`,
 	// 3: a correction can void its entry, taking it out of the record without deleting it.
 	`ALTER TABLE corrections ADD COLUMN void INTEGER NOT NULL DEFAULT 0;`,
+	// 4: equity facts (grants, recorded vests, stock price observations), append-only like entries. A fact's body is a JSON document of its kind; a correction carries the whole new body, and the latest correction wins.
+	`CREATE TABLE facts (
+		id      INTEGER PRIMARY KEY AUTOINCREMENT,
+		kind    TEXT    NOT NULL CHECK (kind IN ('grant', 'vest', 'price')),
+		body    BLOB    NOT NULL,
+		made_at INTEGER NOT NULL
+	);
+	CREATE TABLE fact_corrections (
+		id      INTEGER PRIMARY KEY AUTOINCREMENT,
+		fact    INTEGER NOT NULL REFERENCES facts (id),
+		body    BLOB    NOT NULL,
+		note    TEXT    NOT NULL DEFAULT '',
+		void    INTEGER NOT NULL DEFAULT 0,
+		made_at INTEGER NOT NULL
+	);
+	CREATE INDEX fact_corrections_fact ON fact_corrections (fact, id);
+	CREATE TRIGGER facts_no_update BEFORE UPDATE ON facts
+		BEGIN SELECT RAISE(ABORT, 'facts are append-only'); END;
+	CREATE TRIGGER facts_no_delete BEFORE DELETE ON facts
+		BEGIN SELECT RAISE(ABORT, 'facts are append-only'); END;
+	CREATE TRIGGER fact_corrections_no_update BEFORE UPDATE ON fact_corrections
+		BEGIN SELECT RAISE(ABORT, 'fact corrections are append-only'); END;
+	CREATE TRIGGER fact_corrections_no_delete BEFORE DELETE ON fact_corrections
+		BEGIN SELECT RAISE(ABORT, 'fact corrections are append-only'); END;`,
 }
 
 // migrate brings the database up to schema version target in one transaction. It fails, changing

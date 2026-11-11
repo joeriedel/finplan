@@ -83,7 +83,17 @@ func EditAccount(st *store.Store, rec *model.Record, id model.AccountID, ch Acco
 			a.Name = name
 			next.Asset(model.DefaultAssetID(id)).Name = a.Name
 		}
-		if ch.Type != nil {
+		if ch.Type != nil && *ch.Type != a.Type {
+			if len(a.Grants) > 0 {
+				return Result{}, refuse(ErrInUse, "account %q has grants: its type cannot change", id)
+			}
+			for _, o := range next.Accounts {
+				for _, g := range o.Grants {
+					if g.Brokerage == id {
+						return Result{}, refuse(ErrInUse, "account %q is the brokerage account of grant %d: its type cannot change", id, g.ID)
+					}
+				}
+			}
 			a.Type = *ch.Type
 		}
 		if ch.Tax != nil {

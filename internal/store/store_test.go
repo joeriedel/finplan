@@ -369,6 +369,7 @@ func TestMigrateFromVersion1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	copyFacts(t, s, srcPath)
 	s.db.QueryRow(`PRAGMA user_version`).Scan(&v)
 	if v != len(migrations) {
 		t.Errorf("user_version = %d, want %d", v, len(migrations))
@@ -626,15 +627,92 @@ func TestMigrateFromVersion2(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	copyFacts(t, s, srcPath)
 	var v int
 	s.db.QueryRow(`PRAGMA user_version`).Scan(&v)
-	if v != 3 {
-		t.Errorf("user_version = %d, want 3", v)
+	if v != len(migrations) {
+		t.Errorf("user_version = %d, want %d", v, len(migrations))
 	}
 	if got := mustLoad(t, s); !reflect.DeepEqual(got, want) {
 		t.Error("migrated database loads differently")
 	}
 	if err := s.Void(es[0].ID, ""); err != nil {
+		t.Error(err)
+	}
+}
+
+// copyFacts copies the equity facts of the database at srcPath into s, whose older schema the migration brought up to date: the older schemas had no facts, so the test of a migration supplies them afterwards.
+func copyFacts(t *testing.T, s *Store, srcPath string) {
+	t.Helper()
+	for _, q := range []string{
+		`ATTACH DATABASE '` + srcPath + `' AS srcfacts`,
+		`INSERT INTO facts SELECT * FROM srcfacts.facts`,
+		`INSERT INTO fact_corrections SELECT * FROM srcfacts.fact_corrections`,
+		`DETACH DATABASE srcfacts`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestMigrateFromVersion3(t *testing.T) {
+	// A current database supplies the rows for the version 3 one: the entries and documents, which the version 4 migration leaves alone.
+	src, srcPath := openTemp(t)
+	mustSave(t, src, demodata.Family())
+	es, _ := src.Entries(demodata.Home)
+	if err := src.Correct(es[1].ID, Values{Date: es[1].Date, Amount: 111}, "typo"); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := src.Facts(FactPrice)
+	if err != nil || len(facts) == 0 {
+		t.Fatalf("demo prices: %v, %v", len(facts), err)
+	}
+	if err := src.CorrectFact(facts[0].ID, FactValue{Price: &model.PriceObservation{Symbol: "ACME", Date: facts[0].Price.Date, Price: 1.5}}, "typo"); err != nil {
+		t.Fatal(err)
+	}
+	want := mustLoad(t, src)
+	src.Close()
+
+	path := filepath.Join(t.TempDir(), "v3.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := migrate(db, 3); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`ATTACH DATABASE '` + srcPath + `' AS src`,
+		`INSERT INTO documents SELECT * FROM src.documents`,
+		`INSERT INTO entries SELECT * FROM src.entries`,
+		`INSERT INTO corrections SELECT * FROM src.corrections`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`SELECT * FROM main.facts`); err == nil {
+		t.Fatal("facts table exists at version 3")
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var v int
+	s.db.QueryRow(`PRAGMA user_version`).Scan(&v)
+	if v != 4 {
+		t.Errorf("user_version = %d, want 4", v)
+	}
+	copyFacts(t, s, srcPath)
+	if got := mustLoad(t, s); !reflect.DeepEqual(got, want) {
+		t.Error("migrated database loads differently")
+	}
+	if err := s.VoidFact(facts[1].ID, "gone"); err != nil {
 		t.Error(err)
 	}
 }
@@ -1084,5 +1162,86 @@ func TestCheckSave(t *testing.T) {
 	s, _ := openTemp(t)
 	if err := s.Save(rec); err == nil || !strings.Contains(err.Error(), "cannot be restored") {
 		t.Errorf("Save: %v", err)
+	}
+}
+
+func TestFactsRoundTripCorrectVoidHistory(t *testing.T) {
+	s, _ := openTemp(t)
+	want := demodata.Family()
+	mustSave(t, s, want)
+	got := mustLoad(t, s)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatal("Family with its grants, vests and prices loads differently")
+	}
+	// Each demo vest names the brokerage transfer of its net proceeds.
+	for _, v := range got.Account(demodata.Equity).Vests {
+		e, err := s.Entry(v.TxEntry)
+		if err != nil || e.Account != demodata.Brokerage || e.Kind != KindTransaction || e.TxKind != model.TxTransfer ||
+			e.Counter != demodata.Equity || e.Amount != v.Net() || e.Date != v.Date {
+			t.Errorf("vest %d: entry %d = %+v, %v", v.ID, v.TxEntry, e, err)
+		}
+	}
+	// A correction supersedes a fact, keeps the original, and a void takes it out of Load.
+	v := got.Account(demodata.Equity).Vests[0]
+	fixed := v
+	fixed.Price = 1
+	if err := s.CorrectFact(v.ID, FactValue{Vest: &fixed}, "typo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CorrectFact(v.ID, FactValue{Price: &model.PriceObservation{}}, ""); !errors.Is(err, ErrInvalidEntry) {
+		t.Errorf("correct with another kind: %v", err)
+	}
+	if err := s.VoidFact(v.ID, "gone"); err != nil {
+		t.Fatal(err)
+	}
+	if after := mustLoad(t, s); len(after.Account(demodata.Equity).Vests) != len(got.Account(demodata.Equity).Vests)-1 {
+		t.Error("a voided vest is still loaded")
+	}
+	revs, err := s.FactHistory(v.ID)
+	if err != nil || len(revs) != 3 || revs[0].Vest.Price != v.Price || revs[1].Vest.Price != 1 || revs[1].Note != "typo" || !revs[2].Void {
+		t.Fatalf("history: %+v, %v", revs, err)
+	}
+	if err := s.CorrectFact(v.ID, FactValue{Vest: &fixed}, "back"); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := s.Fact(v.ID); err != nil || f.Void || f.Vest.Price != 1 {
+		t.Errorf("restored fact: %+v, %v", f, err)
+	}
+	if _, err := s.Fact(9999); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown fact: %v", err)
+	}
+	// Facts are append-only.
+	if _, err := s.db.Exec(`UPDATE facts SET body = x'00'`); err == nil {
+		t.Error("a fact was updated")
+	}
+	if _, err := s.db.Exec(`DELETE FROM fact_corrections`); err == nil {
+		t.Error("a fact correction was deleted")
+	}
+	// A record that lacks a stored fact, or has a changed one, is stale.
+	if err := s.Save(got); !errors.Is(err, ErrRecordChanged) {
+		t.Errorf("stale record with a corrected vest: %v", err)
+	}
+	// A new fact in the record that has no id is left to FactTx.Add.
+	fresh := mustLoad(t, s)
+	fresh.Prices.Add(model.PriceObservation{Symbol: "ACME", Date: 1, Price: 3})
+	if err := s.Save(fresh); err != nil {
+		t.Errorf("save with a pending price: %v", err)
+	}
+	if n := len(mustLoad(t, s).Prices.All()); n != len(fresh.Prices.All())-1 {
+		t.Errorf("a price without an id was stored: %d", n)
+	}
+}
+
+func TestCalendarDocumentRoundTrip(t *testing.T) {
+	s, _ := openTemp(t)
+	rec := demodata.Family()
+	rec.Calendars[0].Overrides = []model.DateOverride{{From: model.D(2027, time.March, 15), To: model.D(2027, time.March, 16)}}
+	mustSave(t, s, rec)
+	if got := mustLoad(t, s); !reflect.DeepEqual(got, rec) {
+		t.Error("calendar with an override loads differently")
+	}
+	rec.Calendars[0].Rules[0] = model.VestRule{Month: time.April, Day: 31}
+	if err := s.Save(rec); err == nil {
+		t.Error("a calendar with a rule on April 31 was saved")
 	}
 }

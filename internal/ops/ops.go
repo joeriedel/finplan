@@ -107,6 +107,12 @@ type Result struct {
 	Item *model.BudgetItem
 	// Entry is the entry an entry operation added, corrected or voided, with its values after the operation. Its ID is 0 for an entry added in a dry run. Record is the reloaded record for a correction and a void, and nil for their dry run.
 	Entry *store.Entry
+	// Calendar is the vest calendar a calendar operation changed or added, in Record; for a delete, the calendar as it was.
+	Calendar *model.VestCalendar
+	// Grant, Vest and Price are the equity fact an operation added, corrected or voided, with its values after the operation. Its ID is 0 for a fact added in a dry run. Record is the reloaded record for a correction and a void, and nil for their dry run.
+	Grant *model.Grant
+	Vest  *model.RecordedVest
+	Price *model.PriceObservation
 	// Removed is the name of the projection or id of the asset or account a delete removed.
 	Removed string
 	// Rename is set when the edit renamed a projection.

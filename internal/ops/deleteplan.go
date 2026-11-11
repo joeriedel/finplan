@@ -64,7 +64,7 @@ func AccountDeletePlan(st *store.Store, rec *model.Record, id model.AccountID) (
 	if a == nil {
 		return DeletePlan{}, unknownAccount(id)
 	}
-	blocked, err := accountBlocked(st, a)
+	blocked, err := accountBlocked(st, next, a)
 	if err != nil || blocked != "" {
 		return DeletePlan{Blocked: blocked}, err
 	}
@@ -87,14 +87,21 @@ func BudgetItemDeletePlan(rec *model.Record, id string) (DeletePlan, error) {
 	return DeletePlan{Affected: out}, nil
 }
 
-// accountBlocked returns why the account cannot be deleted: it has record entries, stored or in the record, or is the counter account of a stored entry (voided included). It is empty for an account that can go.
-func accountBlocked(st *store.Store, a *model.Account) (string, error) {
+// accountBlocked returns why the account cannot be deleted: it has record entries (grants included), is the brokerage account of a grant, stored or in the record, or is the counter account of a stored entry (voided included). It is empty for an account that can go.
+func accountBlocked(st *store.Store, rec *model.Record, a *model.Account) (string, error) {
 	stored, err := st.HasEntries(a.ID)
 	if err != nil {
 		return "", fmt.Errorf("could not read the entries of account %q: %w", a.ID, err)
 	}
-	if stored || len(a.Snapshots) > 0 || len(a.Transactions) > 0 {
+	if stored || len(a.Snapshots) > 0 || len(a.Transactions) > 0 || len(a.Grants) > 0 {
 		return fmt.Sprintf("account %q has record entries: close it instead", a.ID), nil
+	}
+	for _, o := range rec.Accounts {
+		for _, g := range o.Grants {
+			if g.Brokerage == a.ID {
+				return fmt.Sprintf("account %q is the brokerage account of grant %d of account %q: close it instead", a.ID, g.ID, o.ID), nil
+			}
+		}
 	}
 	naming, err := st.EntriesNaming(a.ID)
 	if err != nil {
