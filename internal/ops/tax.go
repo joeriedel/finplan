@@ -4,6 +4,8 @@
 package ops
 
 import (
+	"slices"
+
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/store"
 	"github.com/joeriedel/finplan/internal/tax"
@@ -49,4 +51,32 @@ func RevertStateTable(st *store.Store, rec *model.Record, name string, year int,
 		return nil, refuse(ErrUnknownObject, "there is no shipped state table %q for %d", name, year)
 	}
 	return SetStateTable(st, rec, shipped, o)
+}
+
+// CopyStateTables adds the state name with a copy of every year of the state from, so a household can name it. An unknown source is ErrUnknownObject, a name that a state already has is ErrNameTaken, and a name that is not valid (see tax.State.Validate) is ErrInvalidValue.
+func CopyStateTables(st *store.Store, rec *model.Record, from, name string, o Options) (*Result, error) {
+	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
+		if !next.Tax.HasState(from) {
+			return Result{}, refuse(ErrUnknownObject, "there is no state tax table %q", from)
+		}
+		if next.Tax.HasState(name) {
+			return Result{}, refuse(ErrNameTaken, "there is already a state tax table %q", name)
+		}
+		var first *tax.State
+		for _, s := range slices.Clone(next.Tax.State) {
+			if s.Name != from {
+				continue
+			}
+			s = s.Clone()
+			s.Name = name
+			if err := s.Validate(); err != nil {
+				return Result{}, refuse(ErrInvalidValue, "state table %q: %v", name, err)
+			}
+			next.Tax.SetState(s)
+			if first == nil {
+				first = &s
+			}
+		}
+		return Result{State: first}, nil
+	})
 }

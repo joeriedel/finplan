@@ -91,3 +91,52 @@ func TestSetTableRefusals(t *testing.T) {
 		t.Error("a refused edit changed the store")
 	}
 }
+
+func TestCopyStateTables(t *testing.T) {
+	st, rec := seed(t)
+	res, err := CopyStateTables(st, rec, "VA", "COPY", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := reload(t, st)
+	for _, y := range []int{2024, 2025, 2026} {
+		va, _ := stored.Tax.StateYear("VA", y)
+		got, ok := stored.Tax.StateYear("COPY", y)
+		va.Name = "COPY"
+		if !ok || !reflect.DeepEqual(got, va) {
+			t.Errorf("%d: copy %+v, %v", y, got, ok)
+		}
+	}
+	if res.State == nil || res.State.Name != "COPY" || !stored.Tax.HasState("VA") {
+		t.Errorf("result %+v", res.State)
+	}
+	// The copy owns its brackets.
+	edited, _ := stored.Tax.StateYear("COPY", 2025)
+	edited.Brackets[0].Rate = 0.5
+	if va, _ := stored.Tax.StateYear("VA", 2025); va.Brackets[0].Rate == 0.5 {
+		t.Error("the copy shares brackets with its source")
+	}
+	// A household can name the copy.
+	name := "COPY"
+	if _, err := SetHousehold(st, res.Record, HouseholdChange{State: &name}, Options{}); err != nil {
+		t.Errorf("naming the copy: %v", err)
+	}
+
+	if _, err := CopyStateTables(st, res.Record, "VA", "COPY", Options{}); !errors.Is(err, ErrNameTaken) {
+		t.Errorf("a name in use: %v", err)
+	}
+	if _, err := CopyStateTables(st, res.Record, "VA", "VA", Options{}); !errors.Is(err, ErrNameTaken) {
+		t.Errorf("copying onto itself: %v", err)
+	}
+	if _, err := CopyStateTables(st, res.Record, "ZZ", "OTHER", Options{}); !errors.Is(err, ErrUnknownObject) {
+		t.Errorf("an unknown source: %v", err)
+	}
+	for _, bad := range []string{"", " X", "X "} {
+		if _, err := CopyStateTables(st, res.Record, "VA", bad, Options{}); !errors.Is(err, ErrInvalidValue) {
+			t.Errorf("name %q: %v", bad, err)
+		}
+	}
+	if _, err := CopyStateTables(st, rec, "VA", "DRY", Options{DryRun: true}); err != nil || reload(t, st).Tax.HasState("DRY") {
+		t.Errorf("dry run: %v", err)
+	}
+}

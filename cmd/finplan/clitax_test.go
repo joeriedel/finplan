@@ -369,3 +369,38 @@ func TestCLITaxYearEarlyWithdrawalAndErrors(t *testing.T) {
 		t.Errorf("unknown projection: code %q", code)
 	}
 }
+
+// A copy of Virginia added through tax table copy is a state a household can name; the command refuses a name in use and an unknown source.
+func TestCLITaxTableCopy(t *testing.T) {
+	path := seededFile(t)
+	before := dbSnapshot(t, path)
+	var w struct {
+		DryRun  bool `json:"dry_run"`
+		Changed bool
+		State   string
+		Years   []int
+	}
+	cliJSON(t, &w, "--db", path, "tax", "table", "copy", "--state", "VA", "--name", "COPY", "--dry-run")
+	if !w.DryRun || !w.Changed || w.State != "COPY" || !reflect.DeepEqual(before, dbSnapshot(t, path)) {
+		t.Fatalf("dry run: %+v", w)
+	}
+	cliJSON(t, &w, "--db", path, "tax", "table", "copy", "--state", "VA", "--name", "COPY")
+	if w.DryRun || !w.Changed || !reflect.DeepEqual(w.Years, []int{2024, 2025, 2026}) {
+		t.Fatalf("copy: %+v", w)
+	}
+	var s tax.State
+	cliJSON(t, &s, "--db", path, "tax", "table", "show", "--state", "COPY", "--year", "2025")
+	if va, _ := tax.Defaults().StateYear("VA", 2025); s.Name != "COPY" || !reflect.DeepEqual(s.Brackets, va.Brackets) {
+		t.Errorf("copied table %+v", s)
+	}
+	virginia := computeTax(t, path, "--year", "2025", "--wages", "200000")
+	var h struct{ Household thousehold }
+	cliJSON(t, &h, "--db", path, "household", "set", "--state", "COPY")
+	if got := computeTax(t, path, "--year", "2025", "--wages", "200000"); got.State != "COPY" || got.StateTax != virginia.StateTax {
+		t.Errorf("computed %+v, Virginia %+v", got, virginia)
+	}
+	refusedWrite(t, path, "", exitFailure, "name_taken", "tax", "table", "copy", "--state", "VA", "--name", "COPY")
+	refusedWrite(t, path, "", exitFailure, "not_found", "tax", "table", "copy", "--state", "ZZ", "--name", "OTHER")
+	refusedWrite(t, path, "", exitFailure, "invalid", "tax", "table", "copy", "--state", "VA", "--name", " X")
+	cliFail(t, exitUsage, "--db", path, "tax", "table", "copy", "--state", "VA")
+}

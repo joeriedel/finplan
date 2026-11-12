@@ -16,7 +16,7 @@ import (
 	"github.com/joeriedel/finplan/internal/tax"
 )
 
-// The commands for the household and the tax tables: household show, household set, household member add|edit|remove, tax table show|set|revert, tax compute and tax year.
+// The commands for the household and the tax tables: household show, household set, household member add|edit|remove, tax table show|set|revert|copy, tax compute and tax year.
 
 const (
 	householdOut = "{dry_run, changed, household: as household show prints it, after the edit}"
@@ -133,6 +133,15 @@ var taxCommands = []*command{
 		},
 		Output: "{dry_run, changed, federal or state: the table, as tax table show prints it}",
 		run:    cmdTaxTableRevert,
+	},
+	{
+		Name: "tax table copy", Summary: "add the state tax table --name as a copy of every year of the state table --state, which a household can then name and the tables can be edited to differ from",
+		Flags: []flagDef{
+			{Name: "state", Type: typeString, Required: true, Description: "the name of the state tax table to copy"},
+			{Name: "name", Type: typeString, Required: true, Description: "the name of the new state table; no state may have it"},
+		},
+		Output: "{dry_run, changed, state: the new name, years: [the years copied]}",
+		run:    cmdTaxTableCopy,
 	},
 }
 
@@ -388,6 +397,24 @@ func cmdTaxTableRevert(c *call) (any, error) {
 	}
 	res, err := ops.RevertFederalTable(st, rec, year, c.options())
 	return c.taxTableResult(res, err, "", year)
+}
+
+func cmdTaxTableCopy(c *call) (any, error) {
+	st, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	res, err := ops.CopyStateTables(st, rec, c.str("state"), c.str("name"), c.options())
+	if err != nil {
+		return nil, opsError(err)
+	}
+	years := []int{}
+	for _, s := range res.Record.Tax.State {
+		if s.Name == c.str("name") {
+			years = append(years, s.Year)
+		}
+	}
+	return map[string]any{"dry_run": c.options().DryRun, "changed": true, "state": c.str("name"), "years": years}, nil
 }
 
 func cmdTaxCompute(c *call) (any, error) {

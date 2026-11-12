@@ -34,6 +34,8 @@ type budgetTab struct {
 	// tax is the Taxes view's selection and memo; showTaxes selects that view on the next frame.
 	tax       taxState
 	showTaxes bool
+	// tables is the tax tables editor of the Taxes view.
+	tables taxTablesUI
 }
 
 func newBudgetTab(a *app) *budgetTab {

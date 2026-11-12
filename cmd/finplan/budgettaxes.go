@@ -212,6 +212,12 @@ func (t *budgetTab) taxes() {
 		a.showHousehold()
 	}
 	tooltipOn("Open the household editor on the Accounts tab")
+	imgui.SameLine()
+	if imgui.Button("Tax tables...##taxtables") {
+		t.tables.show = !t.tables.show
+	}
+	tooltipOn("Show or hide the editor of the brackets, deductions and limits the tax is computed from")
+	defer t.taxTables()
 
 	if v.Err != "" {
 		imgui.Spacing()
