@@ -21,7 +21,7 @@ func demoApp(t *testing.T) *app {
 		t.Fatal(err)
 	}
 	t.Cleanup(cleanup)
-	a, err := newApp(st)
+	a, err := newApp(st, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,5 +358,53 @@ func TestSetInflation(t *testing.T) {
 	pt.setInflation(demodata.ProjBase, "lots")
 	if a.rec != before || len(pt.errs) == 0 {
 		t.Error("bad input was accepted")
+	}
+}
+
+// netWorthSamples returns the Graph's sampled values of the net worth line over the next three years.
+func netWorthSamples(t *testing.T, a *app) []float64 {
+	t.Helper()
+	today := a.rec.Today
+	grid := graph.Grid{Step: 30, First: today, Last: today.Add(30 * 36)}
+	for _, v := range a.graph.visible(grid) {
+		if v.line.Asset == demodata.NetWorth {
+			out := make([]float64, len(v.samples))
+			for i, s := range v.samples {
+				out[i] = s.Amount
+			}
+			return out
+		}
+	}
+	t.Fatal("no net worth line")
+	return nil
+}
+
+func TestGraphSamplesFollowEditUndoRedoWithoutReload(t *testing.T) {
+	a := demoApp(t)
+	before := netWorthSamples(t, a)
+	var item model.BudgetItem
+	for _, it := range a.rec.Budget.Items {
+		if it.ID == "salary-a" {
+			item = it
+		}
+	}
+	amount, _ := item.Amount.At(a.rec.Today)
+	item.Amount = model.Constant(amount * 2)
+	if !a.edit("edit budget item", func() (*ops.Result, error) {
+		return ops.EditBudgetItem(a.st, a.rec, item.ID, item, ops.Options{})
+	}) {
+		t.Fatalf("edit refused: %v", a.notices)
+	}
+	edited := netWorthSamples(t, a)
+	if reflect.DeepEqual(before, edited) {
+		t.Fatal("the Graph still shows the values from before the edit")
+	}
+	a.undo()
+	if got := netWorthSamples(t, a); !reflect.DeepEqual(got, before) {
+		t.Error("undo did not bring back the original values")
+	}
+	a.redo()
+	if got := netWorthSamples(t, a); !reflect.DeepEqual(got, edited) {
+		t.Error("redo did not re-apply the edited values")
 	}
 }

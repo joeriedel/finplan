@@ -44,10 +44,10 @@ type wasset struct {
 }
 
 type waccount struct {
-	ID, Name, Type, Tax, Owner string
-	StatedRate                 float64 `json:"stated_rate"`
-	Default                    []winterval
-	Closed                     *string
+	ID, Name, Type, Tax string
+	StatedRate          float64 `json:"stated_rate"`
+	Default             []winterval
+	Closed              *string
 }
 
 type wentry struct {
@@ -292,9 +292,9 @@ func TestCLIAssetRefusals(t *testing.T) {
 
 func TestCLIAccountCommands(t *testing.T) {
 	path := seededFile(t)
-	w := data(t, path, "", "account", "new", "College fund", "--type", "529", "--tax", "529", "--owner", "Child 4", "--rate", "0.05")
+	w := data(t, path, "", "account", "new", "College fund", "--type", "529", "--tax", "529", "--rate", "0.05")
 	a := w.Account
-	if !w.Changed || a.ID != "college-fund" || a.Name != "College fund" || a.Type != "529" || a.Tax != "529" || a.Owner != "Child 4" || a.StatedRate != 0.05 || a.Default == nil {
+	if !w.Changed || a.ID != "college-fund" || a.Name != "College fund" || a.Type != "529" || a.Tax != "529" || a.StatedRate != 0.05 || a.Default == nil {
 		t.Errorf("new: %+v", a)
 	}
 	if w.Asset == nil || w.Asset.ID != "acct:college-fund" || len(w.Asset.Members) != 1 {
@@ -311,9 +311,9 @@ func TestCLIAccountCommands(t *testing.T) {
 		t.Errorf("a new account has entries: %+v", ents)
 	}
 
-	w = data(t, path, "", "account", "edit", "College fund", "--name", "Fund", "--type", "savings", "--tax", "taxable", "--owner", "", "--rate", "0.01")
+	w = data(t, path, "", "account", "edit", "College fund", "--name", "Fund", "--type", "savings", "--tax", "taxable", "--rate", "0.01")
 	a = w.Account
-	if a.ID != "college-fund" || a.Name != "Fund" || a.Type != "savings" || a.Tax != "taxable" || a.Owner != "" || a.StatedRate != 0.01 {
+	if a.ID != "college-fund" || a.Name != "Fund" || a.Type != "savings" || a.Tax != "taxable" || a.StatedRate != 0.01 {
 		t.Errorf("edit: %+v", a)
 	}
 	if got := listAssets(t, path)["acct:college-fund"].Name; got != "Fund" {

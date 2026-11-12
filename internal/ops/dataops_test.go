@@ -374,13 +374,13 @@ func TestSetParam(t *testing.T) {
 }
 
 func TestNewAccount(t *testing.T) {
-	acct := model.Account{Name: "Kid's Roth", Type: model.TypeRothIRA, Tax: model.TaxFree, Owner: " Child 1 ", StatedRate: 0.05}
+	acct := model.Account{Name: "Kid's Roth", Type: model.TypeRothIRA, Tax: model.TaxFree, StatedRate: 0.05}
 	st, res := dataDryRun(t, func(st *store.Store, rec *model.Record, o Options) (*Result, error) {
 		return NewAccount(st, rec, acct, o)
 	})
 	got := reload(t, st)
 	a := got.Account("kid-s-roth")
-	if a == nil || a.Name != "Kid's Roth" || a.Owner != "Child 1" || a.StatedRate != 0.05 || a.Type != model.TypeRothIRA || res.Account.ID != a.ID {
+	if a == nil || a.Name != "Kid's Roth" || a.StatedRate != 0.05 || a.Type != model.TypeRothIRA || res.Account.ID != a.ID {
 		t.Fatalf("account %+v", a)
 	}
 	d := got.Asset("acct:kid-s-roth")
@@ -424,13 +424,13 @@ func TestNewAccount(t *testing.T) {
 }
 
 func TestEditAccount(t *testing.T) {
-	ch := AccountChange{Name: model.Ptr(" Main checking "), Type: model.Ptr(model.TypeSavings), Tax: model.Ptr(model.TaxDeferred), Owner: model.Ptr(""), StatedRate: model.Ptr(0.02)}
+	ch := AccountChange{Name: model.Ptr(" Main checking "), Type: model.Ptr(model.TypeSavings), Tax: model.Ptr(model.TaxDeferred), StatedRate: model.Ptr(0.02)}
 	st, res := dataDryRun(t, func(st *store.Store, rec *model.Record, o Options) (*Result, error) {
 		return EditAccount(st, rec, demodata.Checking, ch, o)
 	})
 	got := reload(t, st)
 	a := got.Account(demodata.Checking)
-	if a.Name != "Main checking" || a.Type != model.TypeSavings || a.Tax != model.TaxDeferred || a.Owner != "" || a.StatedRate != 0.02 || res.Account.Name != a.Name {
+	if a.Name != "Main checking" || a.Type != model.TypeSavings || a.Tax != model.TaxDeferred || a.StatedRate != 0.02 || res.Account.Name != a.Name {
 		t.Errorf("account %+v", a)
 	}
 	if got.Asset("acct:checking").Name != "Main checking" {

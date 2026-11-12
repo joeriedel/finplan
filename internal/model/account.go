@@ -83,11 +83,10 @@ type Span struct {
 
 // Account is naked data: a balance history, a transaction history and descriptive attributes.
 type Account struct {
-	ID    AccountID
-	Name  string
-	Type  AccountType
-	Tax   TaxTreatment
-	Owner string
+	ID   AccountID
+	Name string
+	Type AccountType
+	Tax  TaxTreatment
 	// StatedRate is an annual rate that serves only as the default growth when the account is projected.
 	StatedRate float64
 	// Default is the fallback balance for dates with no actual data.

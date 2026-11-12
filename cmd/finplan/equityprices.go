@@ -114,7 +114,7 @@ func (t *acctTab) pricesSection(acct *model.Account) {
 	imgui.SetNextItemWidth(em * 10)
 	imgui.InputTextWithHint("##pprice", "per share", &u.price.price, 0, nil)
 	t.label("")
-	formButton("Add price", priceProblem(a.st, a.rec, u.sym, u.price), allBlank(u.price.date, u.price.price), func() {
+	formButton("Add price", u.priceCheck.get(problemKey(a.rec, u.sym, u.price), func() string { return priceProblem(a.st, a.rec, u.sym, u.price) }), allBlank(u.price.date, u.price.price), func() {
 		d, p, _ := u.price.read()
 		if a.addEntry("add price", func() (*ops.Result, error) {
 			return ops.AddPrice(a.st, a.rec, u.sym, d, p, ops.Options{})

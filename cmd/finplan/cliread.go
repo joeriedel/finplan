@@ -36,7 +36,7 @@ var commands = []*command{
 	},
 	{
 		Name: "account list", Summary: "list the accounts",
-		Output: "[{id, name, type, tax, owner, stated_rate (a fraction per year), default: [{from, to, value}], closed, balance, last_data, stale}]; default is the default balance intervals in the order added, the last added winning where they overlap; closed is the date the account was closed, null while it is open, and it reads 0 after that date; balance is the balance on the record's today (0 once today is after the account's close date); last_data is the date of the latest record entry, null without a snapshot; stale is true for an open account whose last_data is more than 45 days before the record's today, as the Graph labels it",
+		Output: "[{id, name, type, tax, stated_rate (a fraction per year), default: [{from, to, value}], closed, balance, last_data, stale}]; default is the default balance intervals in the order added, the last added winning where they overlap; closed is the date the account was closed, null while it is open, and it reads 0 after that date; balance is the balance on the record's today (0 once today is after the account's close date); last_data is the date of the latest record entry, null without a snapshot; stale is true for an open account whose last_data is more than 45 days before the record's today, as the Graph labels it",
 		run:    cmdAccountList,
 	},
 	{
@@ -269,7 +269,6 @@ type jaccount struct {
 	Name       string      `json:"name"`
 	Type       string      `json:"type"`
 	Tax        string      `json:"tax"`
-	Owner      string      `json:"owner"`
 	StatedRate float64     `json:"stated_rate"`
 	Default    []jinterval `json:"default"`
 	Closed     *jdate      `json:"closed"`
@@ -285,7 +284,7 @@ type jaccountRow struct {
 
 // accountJSON is the JSON shape of an account, as account list prints it and the write commands print the account they changed.
 func accountJSON(a *model.Account) jaccount {
-	return jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.Owner, a.StatedRate, defaultJSON(a.Default), jdp(a.Closed)}
+	return jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.StatedRate, defaultJSON(a.Default), jdp(a.Closed)}
 }
 
 func cmdAccountList(c *call) (any, error) {

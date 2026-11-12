@@ -208,9 +208,24 @@ func (a *app) redo() {
 }
 
 // setRecord switches the Graph tab to a record that differs from the current one in its editable documents, keeping
-// the lines, the preset and the visible range. A switcher naming a projection that is gone moves to the first one.
+// the lines, the preset and the visible range. The first accounts added to an empty record, with no lines and no preset, get the default lines. A switcher naming a projection that is gone moves to the first one.
 func (g *graphTab) setRecord(rec *model.Record) {
+	seed := false
+	if len(g.rec.Accounts) == 0 && len(rec.Accounts) > 0 && g.preset < 0 {
+		// Lines left from accounts that were undone or deleted name assets the incoming record lacks.
+		for _, l := range g.lines.All() {
+			if rec.Asset(l.Asset) == nil {
+				g.lines.Remove(l.ID)
+			}
+		}
+		seed = len(g.lines.All()) == 0
+	}
 	g.rec, g.cache, g.dataStart = rec, newDataCache(rec), graph.DataStart(rec)
+	if seed {
+		for _, id := range defaultLines(rec, g.demo) {
+			g.lines.Add(id, false, "", graph.AssetColor(rec, id))
+		}
+	}
 	if sw := g.lines.Switcher(); sw != "" && rec.Projection(sw) == nil && len(rec.Projections) > 0 {
 		g.lines.SetSwitcher(rec.Projections[0].Name)
 	}

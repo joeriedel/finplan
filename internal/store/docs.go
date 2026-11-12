@@ -56,7 +56,6 @@ type accountDoc struct {
 	Name       string             `json:"name"`
 	Type       model.AccountType  `json:"type"`
 	Tax        model.TaxTreatment `json:"tax"`
-	Owner      string             `json:"owner"`
 	StatedRate float64            `json:"stated_rate"`
 	Default    []intervalDoc      `json:"default"`
 	Closed     *model.Date        `json:"closed,omitempty"`

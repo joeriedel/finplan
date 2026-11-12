@@ -31,7 +31,7 @@ func encodeRecord(r *model.Record) ([]docRow, error) {
 		return nil, err
 	}
 	for i, a := range r.Accounts {
-		d := accountDoc{a.ID, a.Name, a.Type, a.Tax, a.Owner, a.StatedRate, defaultDoc(a.Default), a.Closed}
+		d := accountDoc{a.ID, a.Name, a.Type, a.Tax, a.StatedRate, defaultDoc(a.Default), a.Closed}
 		if err := add(kindAccount, string(a.ID), i, d); err != nil {
 			return nil, err
 		}
@@ -290,7 +290,7 @@ func restoreAccountsAndAssets(rec *model.Record, accts []accountDoc, assets []as
 }
 
 func buildAccount(d accountDoc, entries []Entry) (*model.Account, error) {
-	a := &model.Account{ID: d.ID, Name: d.Name, Type: d.Type, Tax: d.Tax, Owner: d.Owner,
+	a := &model.Account{ID: d.ID, Name: d.Name, Type: d.Type, Tax: d.Tax,
 		StatedRate: d.StatedRate, Default: docDefault(d.Default), Closed: d.Closed}
 	for _, e := range entries {
 		switch e.Kind {
@@ -350,6 +350,12 @@ func (s *Store) Load() (*model.Record, error) {
 	if err != nil {
 		return nil, err
 	}
+	defaulted := r.Today == 0
+	if defaulted {
+		// A stored zero (or no record document) means the date was never set: it follows the clock, and a save writes zero back.
+		y, m, d := s.now().Date()
+		r.Today = model.D(y, m, d)
+	}
 	facts, err := queryFacts(tx, false, ``)
 	if err != nil {
 		return nil, err
@@ -360,6 +366,10 @@ func (s *Store) Load() (*model.Record, error) {
 	linkTies(r, all)
 	s.mu.Lock()
 	s.loaded, s.loadMark = true, mark
+	s.todayDefaulted = defaulted
+	if defaulted {
+		s.defaultedToday = r.Today
+	}
 	s.mu.Unlock()
 	return r, nil
 }
@@ -502,10 +512,18 @@ func (s *Store) saveRecord(tx *sql.Tx, r *model.Record) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	keepUnset := s.todayDefaulted && r.Today == s.defaultedToday
+	s.mu.Unlock()
 	if _, err := tx.Exec(`DELETE FROM documents`); err != nil {
 		return err
 	}
 	for _, d := range docs {
+		if d.kind == kindRecord && keepUnset {
+			if d.body, err = json.Marshal(recordDoc{}); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec(`INSERT INTO documents (kind, key, ordinal, format, body) VALUES (?, ?, ?, ?, ?)`,
 			d.kind, d.key, d.ordinal, d.format, d.body); err != nil {
 			return fmt.Errorf("store: save %s %q: %w", d.kind, d.key, err)

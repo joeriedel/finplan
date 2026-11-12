@@ -74,7 +74,6 @@ type accountSpec struct {
 	name    string
 	typ     model.AccountType
 	tax     model.TaxTreatment
-	owner   string
 	rate    float64
 	opening float64
 	// end is the last date of real data; zero means FamilyToday.
@@ -82,17 +81,17 @@ type accountSpec struct {
 }
 
 var accountSpecs = []accountSpec{
-	{Checking, "Checking", model.TypeChecking, model.Taxable, "Joint", 0, 18000, 0},
-	{Savings, "Savings", model.TypeSavings, model.Taxable, "Joint", 0.04, 40000, 0},
-	{Card, "Credit card", model.TypeCreditCard, model.Taxable, "Joint", 0, -2700, 0},
-	{Brokerage, "Brokerage", model.TypeBrokerage, model.Taxable, "Joint", 0.06, 120000, 0},
-	{K401, "401k", model.Type401k, model.TaxDeferred, "Parent A", 0.06, 310000, 0},
-	{Roth, "Roth IRA", model.TypeRothIRA, model.TaxFree, "Parent A", 0.06, 85000, 0},
-	{TSP, "TSP", model.TypeTSP, model.TaxDeferred, "Parent B", 0.055, 140000, tspEnd},
-	{Mortgage, "Mortgage", model.TypeMortgage, model.Taxable, "Joint", 0.06, -412000, 0},
-	{College1, "529 oldest", model.Type529, model.Tax529, "Child 1", 0.05, 38000, 0},
-	{College2, "529 middle", model.Type529, model.Tax529, "Child 2", 0.05, 26000, 0},
-	{College3, "529 youngest", model.Type529, model.Tax529, "Child 3", 0.05, 14000, 0},
+	{Checking, "Checking", model.TypeChecking, model.Taxable, 0, 18000, 0},
+	{Savings, "Savings", model.TypeSavings, model.Taxable, 0.04, 40000, 0},
+	{Card, "Credit card", model.TypeCreditCard, model.Taxable, 0, -2700, 0},
+	{Brokerage, "Brokerage", model.TypeBrokerage, model.Taxable, 0.06, 120000, 0},
+	{K401, "401k", model.Type401k, model.TaxDeferred, 0.06, 310000, 0},
+	{Roth, "Roth IRA", model.TypeRothIRA, model.TaxFree, 0.06, 85000, 0},
+	{TSP, "TSP", model.TypeTSP, model.TaxDeferred, 0.055, 140000, tspEnd},
+	{Mortgage, "Mortgage", model.TypeMortgage, model.Taxable, 0.06, -412000, 0},
+	{College1, "529 oldest", model.Type529, model.Tax529, 0.05, 38000, 0},
+	{College2, "529 middle", model.Type529, model.Tax529, 0.05, 26000, 0},
+	{College3, "529 youngest", model.Type529, model.Tax529, 0.05, 14000, 0},
 }
 
 func monthly(day int) model.Recurrence {
@@ -143,7 +142,7 @@ func Family() *model.Record {
 	rsu := familyRSU()
 
 	for _, s := range accountSpecs {
-		a := &model.Account{ID: s.id, Name: s.name, Type: s.typ, Tax: s.tax, Owner: s.owner, StatedRate: s.rate}
+		a := &model.Account{ID: s.id, Name: s.name, Type: s.typ, Tax: s.tax, StatedRate: s.rate}
 		if s.id == Roth {
 			a.Default.Intervals = []model.Interval{{From: model.MinDate, To: model.Ptr(historyOpen.Add(-1)), Value: 70000}}
 		}
@@ -155,7 +154,7 @@ func Family() *model.Record {
 		}
 		generateHistory(rec, a, s)
 	}
-	home := &model.Account{ID: Home, Name: "Home", Type: model.TypeProperty, Tax: model.Taxable, Owner: "Joint", StatedRate: 0.03}
+	home := &model.Account{ID: Home, Name: "Home", Type: model.TypeProperty, Tax: model.Taxable, StatedRate: 0.03}
 	home.AddSnapshot(model.D(2024, time.December, 15), 520000)
 	home.AddSnapshot(model.D(2025, time.September, 20), 535000)
 	home.AddSnapshot(model.D(2026, time.May, 10), 548000)

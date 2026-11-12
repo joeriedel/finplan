@@ -59,7 +59,7 @@ func TestPresetsSurviveRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	a, err := newApp(st)
+	a, err := newApp(st, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestPresetsSurviveRestart(t *testing.T) {
 	if len(a.notices) != 0 {
 		t.Fatalf("notices: %v", a.notices)
 	}
-	b, err := newApp(st)
+	b, err := newApp(st, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestReloadKeepsView(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	a, err := newApp(st)
+	a, err := newApp(st, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestReloadRemapsSelectionAndBands(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	a, err := newApp(st)
+	a, err := newApp(st, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestReloadFromEmptyRecordUsesDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	a, err := newApp(st)
+	a, err := newApp(st, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestReloadReportsProblemsOnce(t *testing.T) {
 	if err := st.PutPreset("broken", graph.PresetFormat, []byte("{")); err != nil {
 		t.Fatal(err)
 	}
-	a, err := newApp(st)
+	a, err := newApp(st, true)
 	if err != nil {
 		t.Fatal(err)
 	}

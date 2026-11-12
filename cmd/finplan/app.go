@@ -44,8 +44,8 @@ type app struct {
 	reported map[string]bool
 }
 
-// newApp loads the record and the view presets from the database.
-func newApp(st *store.Store) (*app, error) {
+// newApp loads the record and the view presets from the database; demo reports whether the record is the demo's.
+func newApp(st *store.Store, demo bool) (*app, error) {
 	rec, err := st.Load()
 	if err != nil {
 		return nil, err
@@ -56,7 +56,7 @@ func newApp(st *store.Store) (*app, error) {
 	}
 	a := &app{st: st, rec: rec, reported: map[string]bool{}}
 	a.notifyOnce(problems)
-	a.graph = newGraphTab(rec, presets, st, a.notify)
+	a.graph = newGraphTab(rec, presets, st, a.notify, demo)
 	a.proj = &projTab{a: a}
 	a.assets = &assetsTab{a: a}
 	a.accts = &acctTab{a: a}

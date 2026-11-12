@@ -191,7 +191,7 @@ func TestAccountAttributeAndIntervalEditsAreUndoable(t *testing.T) {
 	a := demoApp(t)
 	orig := a.rec.Account(demodata.Checking)
 	name, typ, tax, rate := orig.Name, orig.Type, orig.Tax, orig.StatedRate
-	for _, c := range [][2]string{{"name", "Everyday"}, {"type", string(model.TypeSavings)}, {"tax", string(model.TaxFree)}, {"owner", "Me"}, {"rate", "2.5"}} {
+	for _, c := range [][2]string{{"name", "Everyday"}, {"type", string(model.TypeSavings)}, {"tax", string(model.TaxFree)}, {"rate", "2.5"}} {
 		ch, err := accountChange(c[0], c[1])
 		if err != nil {
 			t.Fatal(err)
@@ -203,7 +203,7 @@ func TestAccountAttributeAndIntervalEditsAreUndoable(t *testing.T) {
 		}
 	}
 	got := a.rec.Account(demodata.Checking)
-	if got.Name != "Everyday" || got.Type != model.TypeSavings || got.Tax != model.TaxFree || got.Owner != "Me" || got.StatedRate != 0.025 {
+	if got.Name != "Everyday" || got.Type != model.TypeSavings || got.Tax != model.TaxFree || got.StatedRate != 0.025 {
 		t.Fatalf("after the edits: %+v", got)
 	}
 	if _, err := accountChange("rate", "x"); err == nil {
@@ -231,12 +231,12 @@ func TestAccountAttributeAndIntervalEditsAreUndoable(t *testing.T) {
 		t.Fatal(a.notices)
 	}
 
-	// Seven edits back out, each saved.
-	for range 7 {
+	// Six edits back out, each saved.
+	for range 6 {
 		a.undo()
 	}
 	got = a.rec.Account(demodata.Checking)
-	if got.Name != name || got.Type != typ || got.Tax != tax || got.StatedRate != rate || got.Owner != orig.Owner || len(got.Default.Intervals) != 0 {
+	if got.Name != name || got.Type != typ || got.Tax != tax || got.StatedRate != rate || len(got.Default.Intervals) != 0 {
 		t.Errorf("after the undos: %+v", got)
 	}
 	if a.rec.Asset(model.DefaultAssetID(demodata.Checking)).Name != name {

@@ -150,7 +150,6 @@ var dataCommands = []*command{
 		Flags: []flagDef{
 			{Name: "type", Type: typeEnum, Required: true, Choices: accountTypes, Description: "account type"},
 			{Name: "tax", Type: typeEnum, Required: true, Choices: taxTreatments, Description: "tax treatment"},
-			{Name: "owner", Type: typeString, Description: "who owns the account"},
 			{Name: "rate", Type: typeNumber, Description: "stated rate, the default growth when the account is projected: a fraction per year between -1 and 1; 0 when omitted"},
 			{Name: "id", Type: typeString, Description: "the account's id; made from the name when omitted. It must differ from every account and asset id"},
 		},
@@ -164,7 +163,6 @@ var dataCommands = []*command{
 			{Name: "name", Type: typeString, Description: "the account's name"},
 			{Name: "type", Type: typeEnum, Choices: accountTypes, Description: "account type"},
 			{Name: "tax", Type: typeEnum, Choices: taxTreatments, Description: "tax treatment"},
-			{Name: "owner", Type: typeString, Description: "who owns the account; empty clears it"},
 			{Name: "rate", Type: typeNumber, Description: "stated rate: a fraction per year between -1 and 1"},
 		},
 		Output: accountOut,
@@ -603,7 +601,7 @@ func cmdAccountNew(c *call) (any, error) {
 	}
 	acct := model.Account{
 		ID: model.AccountID(c.str("id")), Name: c.args[0], Type: model.AccountType(c.str("type")),
-		Tax: model.TaxTreatment(c.str("tax")), Owner: c.str("owner"), StatedRate: rate,
+		Tax: model.TaxTreatment(c.str("tax")), StatedRate: rate,
 	}
 	res, err := ops.NewAccount(st, rec, acct, c.options())
 	if err != nil {
@@ -630,16 +628,13 @@ func cmdAccountEdit(c *call) (any, error) {
 	if c.set["tax"] {
 		ch.Tax = model.Ptr(model.TaxTreatment(c.str("tax")))
 	}
-	if c.set["owner"] {
-		ch.Owner = model.Ptr(c.str("owner"))
-	}
 	if v, ok, err := c.number("rate"); err != nil {
 		return nil, err
 	} else if ok {
 		ch.StatedRate = &v
 	}
 	if ch == (ops.AccountChange{}) {
-		return nil, usageErr("account edit needs at least one of --name, --type, --tax, --owner and --rate")
+		return nil, usageErr("account edit needs at least one of --name, --type, --tax and --rate")
 	}
 	res, err := ops.EditAccount(c.st, c.rec, id, ch, c.options())
 	return c.accountResult(res, err, id)

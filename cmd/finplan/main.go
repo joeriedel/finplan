@@ -111,7 +111,7 @@ func run(demo bool, shot *shotOptions) error {
 		return err
 	}
 	poll := newVersionPoll(pollEvery, version)
-	app, err := newApp(st)
+	app, err := newApp(st, demo)
 	if err != nil {
 		return err
 	}

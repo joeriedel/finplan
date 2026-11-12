@@ -36,6 +36,8 @@ type equityUI struct {
 	pct      []string
 	draft    grantDraft
 	problems [6]problemCache
+	// grantCheck and priceCheck keep the problems of the Add grant and Add price forms.
+	grantCheck, priceCheck problemCache
 
 	vest    *vestForm
 	selVest int64
@@ -724,7 +726,7 @@ func (t *acctTab) addGrantForm(acct *model.Account) {
 	pv := previewGrant(a.rec, *f)
 	t.grantPreview(pv)
 	t.label("")
-	formButton("Add grant", grantProblem(a.st, a.rec, acct.ID, *f), f.untouched(), func() {
+	formButton("Add grant", u.grantCheck.get(problemKey(a.rec, string(acct.ID), *f), func() string { return grantProblem(a.st, a.rec, acct.ID, *f) }), f.untouched(), func() {
 		in, _ := f.input(acct.ID)
 		var added int64
 		if a.addEntry("add grant", func() (*ops.Result, error) {

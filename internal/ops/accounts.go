@@ -48,7 +48,7 @@ func NewAccount(st *store.Store, rec *model.Record, acct model.Account, o Option
 		if next.Asset(model.DefaultAssetID(model.AccountID(id))) != nil {
 			return Result{}, refuse(ErrNameTaken, "there is already an asset %q", model.DefaultAssetID(model.AccountID(id)))
 		}
-		a := &model.Account{ID: model.AccountID(id), Name: name, Type: acct.Type, Tax: acct.Tax, Owner: strings.TrimSpace(acct.Owner), StatedRate: acct.StatedRate}
+		a := &model.Account{ID: model.AccountID(id), Name: name, Type: acct.Type, Tax: acct.Tax, StatedRate: acct.StatedRate}
 		if err := next.AddAccount(a); err != nil {
 			return Result{}, refuse(ErrInvalidValue, "%v", err)
 		}
@@ -61,7 +61,6 @@ type AccountChange struct {
 	Name       *string
 	Type       *model.AccountType
 	Tax        *model.TaxTreatment
-	Owner      *string
 	StatedRate *float64
 }
 
@@ -98,9 +97,6 @@ func EditAccount(st *store.Store, rec *model.Record, id model.AccountID, ch Acco
 		}
 		if ch.Tax != nil {
 			a.Tax = *ch.Tax
-		}
-		if ch.Owner != nil {
-			a.Owner = strings.TrimSpace(*ch.Owner)
 		}
 		if ch.StatedRate != nil {
 			a.StatedRate = *ch.StatedRate

@@ -18,18 +18,16 @@ import (
 
 // newAcctForm is the Add account form: every field is the text or choice as entered.
 type newAcctForm struct {
-	name, owner, rate string
-	typ               model.AccountType
-	tax               model.TaxTreatment
+	name, rate string
+	typ        model.AccountType
+	tax        model.TaxTreatment
 }
 
-// set changes one field: name, owner, rate, type or tax.
+// set changes one field: name, rate, type or tax.
 func (f *newAcctForm) set(field, text string) {
 	switch field {
 	case "name":
 		f.name = text
-	case "owner":
-		f.owner = text
 	case "rate":
 		f.rate = text
 	case "type":
@@ -41,7 +39,7 @@ func (f *newAcctForm) set(field, text string) {
 
 // account reads the form. A blank rate is 0; the rate is a percentage.
 func (f newAcctForm) account() (model.Account, error) {
-	a := model.Account{Name: strings.TrimSpace(f.name), Owner: strings.TrimSpace(f.owner), Type: f.typ, Tax: f.tax}
+	a := model.Account{Name: strings.TrimSpace(f.name), Type: f.typ, Tax: f.tax}
 	var err error
 	a.StatedRate, err = acctRate(f.rate)
 	return a, err
@@ -66,14 +64,12 @@ func newAcctProblem(st *store.Store, rec *model.Record, f newAcctForm) string {
 	return reasonOf(err)
 }
 
-// accountChange reads the new text of one attribute of an account being edited: name, owner or rate (a percentage), or the choice of type or tax.
+// accountChange reads the new text of one attribute of an account being edited: name or rate (a percentage), or the choice of type or tax.
 func accountChange(field, text string) (ops.AccountChange, error) {
 	var ch ops.AccountChange
 	switch field {
 	case "name":
 		ch.Name = model.Ptr(text)
-	case "owner":
-		ch.Owner = model.Ptr(text)
 	case "type":
 		ch.Type = model.Ptr(model.AccountType(text))
 	case "tax":
@@ -187,8 +183,10 @@ type acctTab struct {
 	ledger  bool
 	closeOn string
 	// closeCheck keeps the close problem of the account, which reads the database, until the record, account or date changes.
-	closeCheck            problemCache
-	ivFrom, ivTo, ivValue string
+	closeCheck problemCache
+	// addCheck, snapCheck and ivCheck keep the problems of the Add account, Record a balance and default balance forms.
+	addCheck, snapCheck, ivCheck problemCache
+	ivFrom, ivTo, ivValue        string
 }
 
 func (t *acctTab) reset() {
@@ -428,10 +426,6 @@ func (t *acctTab) detail(acct *model.Account) {
 	if k := pick("tax", taxName(acct.Tax), em*16, taxLabels, slices.Index(taxTreatments, string(acct.Tax))); k >= 0 {
 		t.editAttr(id, "tax", taxTreatments[k])
 	}
-	t.label("Owner")
-	if s, done := t.field(string(id)+"owner", "", acct.Owner, em*16); done {
-		t.editAttr(id, "owner", s)
-	}
 	t.label("Rate per year")
 	if s, done := t.field(string(id)+"rate", "percent, e.g. 3", formatValue(model.PropGrowth, model.ModeSet, acct.StatedRate), em*8); done {
 		t.editAttr(id, "rate", s)
@@ -467,7 +461,9 @@ func (t *acctTab) snapshots(acct *model.Account) {
 	imgui.SetNextItemWidth(em * 10)
 	imgui.InputTextWithHint("##snapbal", "negative for a debt", &t.snapBalance, 0, nil)
 	t.label("")
-	formButton("Add##snapshot", snapshotProblem(t.a.st, t.a.rec, acct.ID, t.snapDate, t.snapBalance), allBlank(t.snapDate, t.snapBalance), func() {
+	formButton("Add##snapshot", t.snapCheck.get(problemKey(t.a.rec, string(acct.ID), [2]string{t.snapDate, t.snapBalance}), func() string {
+		return snapshotProblem(t.a.st, t.a.rec, acct.ID, t.snapDate, t.snapBalance)
+	}), allBlank(t.snapDate, t.snapBalance), func() {
 		d, _ := parseDate(strings.TrimSpace(t.snapDate))
 		v, _ := parseValue(model.PropAmount, model.ModeSet, t.snapBalance)
 		if t.a.addEntry("record balance", func() (*ops.Result, error) {
@@ -509,7 +505,9 @@ func (t *acctTab) defaults(acct *model.Account) {
 	imgui.SetNextItemWidth(em * 10)
 	imgui.InputTextWithHint("##ivvalue", "e.g. 25000", &t.ivValue, 0, nil)
 	t.label("")
-	formButton("Add##interval", intervalProblem(t.a.st, t.a.rec, acct.ID, t.ivFrom, t.ivTo, t.ivValue), allBlank(t.ivFrom, t.ivTo, t.ivValue), func() {
+	formButton("Add##interval", t.ivCheck.get(problemKey(t.a.rec, string(acct.ID), [3]string{t.ivFrom, t.ivTo, t.ivValue}), func() string {
+		return intervalProblem(t.a.st, t.a.rec, acct.ID, t.ivFrom, t.ivTo, t.ivValue)
+	}), allBlank(t.ivFrom, t.ivTo, t.ivValue), func() {
 		iv, _ := interval(t.ivFrom, t.ivTo, t.ivValue)
 		if t.a.edit("add default balance", func() (*ops.Result, error) {
 			return ops.AddDefault(t.a.st, t.a.rec, model.DefaultAssetID(acct.ID), iv, ops.Options{})
@@ -616,10 +614,8 @@ func (t *acctTab) addForm() {
 	choose("type", "type", string(f.typ), accountTypeName(f.typ), accountTypes, accountTypeLabels)
 	sameLine()
 	choose("tax", "tax", string(f.tax), taxName(f.tax), taxTreatments, taxLabels)
-	input("owner", "owner", "optional", f.owner, em*10)
-	sameLine()
 	input("rate", "rate per year", "percent, e.g. 3", f.rate, em*6)
-	formButton("Add", newAcctProblem(t.a.st, t.a.rec, *f), f.untouched(), func() {
+	formButton("Add", t.addCheck.get(problemKey(t.a.rec, "", *f), func() string { return newAcctProblem(t.a.st, t.a.rec, *f) }), f.untouched(), func() {
 		acct, _ := f.account()
 		var added model.AccountID
 		if t.a.edit("add account", func() (*ops.Result, error) {

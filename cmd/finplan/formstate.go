@@ -16,7 +16,7 @@ func allBlank(texts ...string) bool {
 }
 
 // untouched reports whether nothing has been typed into the form.
-func (f newAcctForm) untouched() bool { return allBlank(f.name, f.owner, f.rate) }
+func (f newAcctForm) untouched() bool { return allBlank(f.name, f.rate) }
 
 // untouched reports whether nothing has been typed into the draft.
 func (d entryDraft) untouched() bool { return allBlank(d.date, d.amount, d.memo) }

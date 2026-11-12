@@ -117,7 +117,7 @@ func (d *rsuData) addTo(rec *model.Record) {
 		}
 		break
 	}
-	a := &model.Account{ID: Equity, Name: "Acme RSUs", Type: model.TypeEquity, Tax: model.Taxable, Owner: "Parent A", StatedRate: 0.05, Grants: d.grants, Vests: d.vests}
+	a := &model.Account{ID: Equity, Name: "Acme RSUs", Type: model.TypeEquity, Tax: model.Taxable, StatedRate: 0.05, Grants: d.grants, Vests: d.vests}
 	must(rec.AddAccount(a))
 	rec.Calendars = append(rec.Calendars, d.calendar)
 	for _, p := range d.prices {

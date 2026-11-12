@@ -205,6 +205,11 @@ func (c *problemCache) get(key string, problem func() string) string {
 	return c.reason
 }
 
+// problemKey is the key of a problem cache: the record, the account or stock the form is for, and every field of the form the problem reads, so the problem is asked again exactly when one of them changes.
+func problemKey(rec *model.Record, id string, form any) string {
+	return fmt.Sprintf("%p|%s|%#v", rec, id, form)
+}
+
 // entriesUI is the state of the entries section of the selected account.
 type entriesUI struct {
 	// rec, acct and voided say what rows were read for.
@@ -217,6 +222,8 @@ type entriesUI struct {
 	err    error
 
 	newTx entryDraft
+	// txCheck keeps the problem of the add-transaction form.
+	txCheck problemCache
 	// sel is the selected entry, with the draft and history read for it.
 	sel      int64
 	entry    store.Entry
@@ -336,7 +343,7 @@ func (t *acctTab) txForm(acct *model.Account) {
 	imgui.SetNextItemWidth(em * 16)
 	imgui.InputTextWithHint("##txmemo", "optional", &d.memo, 0, nil)
 	t.label("")
-	formButton("Add##entry", txProblem(t.a.st, t.a.rec, acct.ID, *d), d.untouched(), func() {
+	formButton("Add##entry", t.ent.txCheck.get(problemKey(t.a.rec, string(acct.ID), *d), func() string { return txProblem(t.a.st, t.a.rec, acct.ID, *d) }), d.untouched(), func() {
 		date, amount, _ := d.draftValues()
 		tx := model.Transaction{Date: date, Amount: amount, Kind: d.kind, Counter: d.counterFor(), Memo: d.memo}
 		if t.a.addEntry("record transaction", func() (*ops.Result, error) {

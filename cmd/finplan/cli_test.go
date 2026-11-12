@@ -66,10 +66,23 @@ func anyJSON(t *testing.T, args ...string) any {
 	return v
 }
 
+// TestCLIAccountsHaveNoOwner checks that no account output or help names the retired owner attribute.
+func TestCLIAccountsHaveNoOwner(t *testing.T) {
+	for _, args := range [][]string{{"--demo", "account", "list"}, {"help", "--json"}} {
+		_, out := cli(t, args...)
+		if bytes.Contains(bytes.ToLower(out), []byte("owner")) {
+			t.Errorf("finplan %v mentions an owner", args)
+		}
+	}
+	if code, _ := cli(t, "--demo", "account", "new", "X", "--type", "savings", "--tax", "taxable", "--owner", "Me"); code != 2 {
+		t.Errorf("account new --owner exited %d, want 2", code)
+	}
+}
+
 func TestCLIAccounts(t *testing.T) {
-	var accts []struct{ ID, Name, Type, Tax, Owner string }
+	var accts []struct{ ID, Name, Type, Tax string }
 	cliJSON(t, &accts, "--demo", "account", "list")
-	i := slices.IndexFunc(accts, func(a struct{ ID, Name, Type, Tax, Owner string }) bool { return a.ID == "401k" })
+	i := slices.IndexFunc(accts, func(a struct{ ID, Name, Type, Tax string }) bool { return a.ID == "401k" })
 	if i < 0 || accts[i].Name != "401k" || accts[i].Tax != "tax-deferred" {
 		t.Fatalf("accounts = %+v", accts)
 	}

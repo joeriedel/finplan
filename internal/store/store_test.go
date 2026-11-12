@@ -130,6 +130,24 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	}
 }
 
+// TestAccountDocumentWithOwnerLoads loads accounts whose documents still carry the retired owner field: the value is ignored and the next save drops it.
+func TestAccountDocumentWithOwnerLoads(t *testing.T) {
+	s, _ := openTemp(t)
+	want := demodata.Family()
+	mustSave(t, s, want)
+	if _, err := s.db.Exec(`UPDATE documents SET body = '{"owner":"Someone",' || substr(body, 2) WHERE kind = ?`, kindAccount); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoad(t, s); !reflect.DeepEqual(got, want) {
+		t.Fatal("accounts with an owner load differently")
+	}
+	mustSave(t, s, want)
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM documents WHERE kind = ? AND body LIKE '%owner%'`, kindAccount).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("account documents with an owner after a save: %d, %v", n, err)
+	}
+}
+
 func TestFormat2DocumentsLoadUnchanged(t *testing.T) {
 	s, _ := openTemp(t)
 	want := demodata.Family()
@@ -163,8 +181,66 @@ func TestProjectionAccountsRoundTrip(t *testing.T) {
 
 func TestEmptyDatabaseLoadsEmptyRecord(t *testing.T) {
 	s, _ := openTemp(t)
-	if got := mustLoad(t, s); !reflect.DeepEqual(got, model.NewRecord(0)) {
-		t.Fatal("empty database should load as an empty record")
+	s.now = func() time.Time { return time.Date(2031, time.March, 9, 23, 30, 0, 0, time.Local) }
+	today := model.D(2031, time.March, 9)
+	if got := mustLoad(t, s); !reflect.DeepEqual(got, model.NewRecord(today)) {
+		t.Fatalf("empty database should load as an empty record dated today, got today %v", got.Today)
+	}
+}
+
+func storedToday(t *testing.T, s *Store) string {
+	t.Helper()
+	var body string
+	if err := s.db.QueryRow(`SELECT body FROM documents WHERE kind = ?`, kindRecord).Scan(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+// TestUnsetTodayFollowsTheClock: a stored zero today loads as the current date, a save keeps it stored as zero, and the next load gets the later date.
+func TestUnsetTodayFollowsTheClock(t *testing.T) {
+	s, _ := openTemp(t)
+	s.now = func() time.Time { return time.Date(2031, time.March, 9, 23, 30, 0, 0, time.Local) }
+	mustSave(t, s, model.NewRecord(0))
+	if got := storedToday(t, s); got != `{"today":0}` {
+		t.Fatalf("stored %s", got)
+	}
+	r := mustLoad(t, s)
+	if want := model.D(2031, time.March, 9); r.Today != want {
+		t.Fatalf("today %v, want %v", r.Today, want)
+	}
+	mustSave(t, s, r)
+	if got := storedToday(t, s); got != `{"today":0}` {
+		t.Fatalf("stored after save %s", got)
+	}
+	s.now = func() time.Time { return time.Date(2031, time.April, 2, 8, 0, 0, 0, time.Local) }
+	if r = mustLoad(t, s); r.Today != model.D(2031, time.April, 2) {
+		t.Fatalf("later load today %v", r.Today)
+	}
+}
+
+// TestSetTodayLoadsUnchanged: a stored nonzero today is the record's today whatever the clock says, and a save writes it.
+func TestSetTodayLoadsUnchanged(t *testing.T) {
+	s, _ := openTemp(t)
+	s.now = func() time.Time { return time.Date(2031, time.March, 9, 12, 0, 0, 0, time.Local) }
+	want := demodata.Family()
+	mustSave(t, s, want)
+	r := mustLoad(t, s)
+	if r.Today != demodata.FamilyToday {
+		t.Fatalf("demo today %v", r.Today)
+	}
+	mustSave(t, s, r)
+	if got := mustLoad(t, s); got.Today != demodata.FamilyToday {
+		t.Fatalf("demo today after save %v", got.Today)
+	}
+	// A record dated by a caller after a defaulted load is that caller's date, not the unset one.
+	s, _ = openTemp(t)
+	mustSave(t, s, model.NewRecord(0))
+	r = mustLoad(t, s)
+	r.Today = model.D(2024, time.June, 1)
+	mustSave(t, s, r)
+	if got := mustLoad(t, s); got.Today != r.Today {
+		t.Fatalf("saved today %v loaded as %v", r.Today, got.Today)
 	}
 }
 

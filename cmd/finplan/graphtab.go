@@ -34,6 +34,8 @@ type graphTab struct {
 	lines     *graph.Lines
 	cache     *dataCache
 	dataStart model.Date
+	// demo is whether the database is the throwaway demo, which decides the lines a new Graph draws.
+	demo bool
 
 	// The visible limits as ImPlot reported them last frame, in unix seconds and dollars. applyX and
 	// applyY push the limits to ImPlot next frame (a range button, or fitting to the data); otherwise
@@ -79,20 +81,49 @@ type bandView struct {
 	upper, lower int
 }
 
-func newGraphTab(rec *model.Record, presets []graph.Preset, st *store.Store, notify func(string)) *graphTab {
+// demoLines are the lines of the demo's Graph.
+var demoLines = []model.AssetID{
+	demodata.NetWorth, demodata.AllCash, demodata.Retirement,
+	model.DefaultAssetID(demodata.Brokerage), model.DefaultAssetID(demodata.TSP), model.DefaultAssetID(demodata.Mortgage),
+}
+
+// defaultLines returns the assets a new Graph draws. The demo draws its own six. Any other record draws every aggregate asset (a user asset that has an asset or a rule among its members) in record order, or, with none, every account's default asset in record order.
+func defaultLines(rec *model.Record, demo bool) []model.AssetID {
+	var out []model.AssetID
+	if demo {
+		for _, id := range demoLines {
+			if rec.Asset(id) != nil {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+	isDefault := map[model.AssetID]bool{}
+	for _, a := range rec.Accounts {
+		isDefault[model.DefaultAssetID(a.ID)] = true
+	}
+	for _, a := range rec.Assets {
+		if !isDefault[a.ID] && slices.ContainsFunc(a.Members, func(m model.Member) bool { return m.Asset != "" || m.Rule != nil }) {
+			out = append(out, a.ID)
+		}
+	}
+	if len(out) == 0 {
+		for _, a := range rec.Accounts {
+			out = append(out, model.DefaultAssetID(a.ID))
+		}
+	}
+	return out
+}
+
+func newGraphTab(rec *model.Record, presets []graph.Preset, st *store.Store, notify func(string), demo bool) *graphTab {
 	switcher := ""
 	if len(rec.Projections) > 0 {
 		switcher = rec.Projections[0].Name
 	}
 	g := &graphTab{rec: rec, lines: graph.NewLines(switcher), cache: newDataCache(rec), dataStart: graph.DataStart(rec), preset: -1,
-		presets: presets, store: st, notify: notify}
-	for _, id := range []model.AssetID{
-		demodata.NetWorth, demodata.AllCash, demodata.Retirement,
-		model.DefaultAssetID(demodata.Brokerage), model.DefaultAssetID(demodata.TSP), model.DefaultAssetID(demodata.Mortgage),
-	} {
-		if rec.Asset(id) != nil {
-			g.lines.Add(id, false, "", graph.AssetColor(rec, id))
-		}
+		presets: presets, store: st, notify: notify, demo: demo}
+	for _, id := range defaultLines(rec, demo) {
+		g.lines.Add(id, false, "", graph.AssetColor(rec, id))
 	}
 	g.setRange(graph.RangeButtons[1])
 	return g
@@ -102,7 +133,7 @@ func newGraphTab(rec *model.Record, presets []graph.Preset, st *store.Store, not
 // projections still exist, the x range and the current preset if its name still exists.
 func (g *graphTab) reload(rec *model.Record, presets []graph.Preset) {
 	if len(g.rec.Accounts) == 0 {
-		*g = *newGraphTab(rec, presets, g.store, g.notify)
+		*g = *newGraphTab(rec, presets, g.store, g.notify, g.demo)
 		return
 	}
 	name := ""

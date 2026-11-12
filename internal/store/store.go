@@ -20,6 +20,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
+
+	"github.com/joeriedel/finplan/internal/model"
 )
 
 // Errors matched with errors.Is.
@@ -45,9 +47,11 @@ type Store struct {
 	path string
 	now  func() time.Time
 
-	mu       sync.Mutex // guards loaded and loadMark
-	loaded   bool       // whether Load has run
-	loadMark int64      // highest corrections.id seen by the most recent Load
+	mu             sync.Mutex // guards the fields below
+	loaded         bool       // whether Load has run
+	loadMark       int64      // highest corrections.id seen by the most recent Load
+	todayDefaulted bool       // whether the most recent Load gave the record the current date for an unset (zero) today
+	defaultedToday model.Date // that date; a save of a record still holding it writes today as unset
 }
 
 // Open opens the database at path, creating it if needed and migrating it to the current schema.
