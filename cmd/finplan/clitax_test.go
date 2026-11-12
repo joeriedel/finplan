@@ -111,6 +111,22 @@ func TestCLIHouseholdAndIncomeTypes(t *testing.T) {
 	refusedWrite(t, path, "", exitFailure, "name_taken", "household", "member", "add", "parent a", "--birth", "1990-01-01", "--role", "spouse")
 	refusedWrite(t, path, "", exitFailure, "invalid", "household", "member", "add", "Future", "--birth", "2030-01-01", "--role", "dependent")
 	refusedWrite(t, path, "", exitFailure, "not_found", "household", "member", "remove", "Nobody")
+	refusedWrite(t, path, "", exitFailure, "confirm_required", "household", "member", "remove", "Child 1")
+	var dry struct {
+		DryRun   bool `json:"dry_run"`
+		Affected []struct{ Kind, In, Effect string }
+	}
+	cliJSON(t, &dry, "--db", path, "household", "member", "remove", "Child 1", "--dry-run")
+	if !dry.DryRun || len(dry.Affected) != 1 || dry.Affected[0].Kind != "beneficiary" || dry.Affected[0].In != "529-oldest" {
+		t.Errorf("member remove dry run: %+v", dry)
+	}
+	if h := showHousehold(t, path); len(h.Members) != 6 {
+		t.Errorf("the dry run removed a member: %+v", h)
+	}
+	run("household", "member", "remove", "Child 1", "--force")
+	if w.Removed != "Child 1" || len(w.Household.Members) != 5 {
+		t.Errorf("forced member remove: %+v", w)
+	}
 	refusedWrite(t, path, "", exitFailure, "not_found", "household", "set", "--state", "ZZ")
 	refusedWrite(t, path, "", exitFailure, "invalid", "household", "set", "--checking", "Savings")
 	refusedWrite(t, path, "", exitUsage, "usage", "household", "set", "--filing", "widowed")

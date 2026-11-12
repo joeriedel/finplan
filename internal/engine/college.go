@@ -72,19 +72,22 @@ func (h *householdTax) payCollege(p *path, byID map[model.AccountID]*path) {
 	for _, c := range p.college {
 		pay, short := c.amount, 0.0
 		chk := byID[ReconciliationAccount(h.rec, c.date)]
-		if chk != nil && c.date > chk.start {
+		if chk != nil {
 			pay = min(c.amount, max(p.availBefore(c.date), 0))
 			short = c.amount - pay
-		} else if chk == nil {
-			h.note("there is no open checking account on %s: %s is paid from %s even if it holds less", c.date, c.item, p.acct.Name)
+		} else {
+			h.note("there is no open checking account for %s: it is paid from %s even if it holds less", c.item, p.acct.Name)
 		}
 		if pay != 0 {
 			p.changes = append(p.changes, change{date: c.date, cause: CauseExpense, amount: -pay, rank: rankExpense})
 			p.settle()
 		}
 		if short > 0.005 {
-			chk.changes = append(chk.changes, change{date: c.date, cause: CauseExpense, amount: -short, rank: rankExpense})
-			h.note("529 %s ran out on %s; %s is paid from checking from then on", p.acct.Name, c.date, c.item)
+			// Checking's actual data already holds a bill dated up to its start.
+			if c.date > chk.start {
+				chk.changes = append(chk.changes, change{date: c.date, cause: CauseExpense, amount: -short, rank: rankExpense})
+			}
+			h.note("529 %s ran out; %s is paid from checking from then on", p.acct.Name, c.item)
 		}
 	}
 }
@@ -138,6 +141,8 @@ func (h *householdTax) trackBasis() {
 			if byPath[c.counter] == nil {
 				basis[p] += c.amount
 			}
+		case c.amount > 0 && c.cause == CauseOpening && p.acct.Basis == nil:
+			basis[p] += c.amount
 		case c.amount < 0:
 			amt := -c.amount
 			removed, earnings := 0.0, 0.0

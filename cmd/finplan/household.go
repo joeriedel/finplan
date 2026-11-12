@@ -412,9 +412,18 @@ func (t *acctTab) household() {
 		}
 		imgui.SameLine()
 		if imgui.Button("x##hhremove") {
-			t.a.edit("remove household member", func() (*ops.Result, error) {
-				return ops.RemoveHouseholdMember(t.a.st, t.a.rec, m.Name, ops.Options{})
-			})
+			plan, err := ops.HouseholdMemberRemovePlan(t.a.rec, m.Name)
+			switch {
+			case err != nil:
+				t.a.notifyFailed("remove household member", err)
+			case len(plan.Affected) > 0:
+				t.hhDelName = m.Name
+				t.hhDel.ask(fmt.Sprintf("household member %q", m.Name), plan)
+			default:
+				t.a.edit("remove household member", func() (*ops.Result, error) {
+					return ops.RemoveHouseholdMember(t.a.st, t.a.rec, m.Name, ops.Options{})
+				})
+			}
 		}
 		if m.Role != model.RoleDependent {
 			t.benefits(i, m, t.openBenefits)
@@ -422,6 +431,14 @@ func (t *acctTab) household() {
 		imgui.PopID()
 	}
 	t.openBenefits = false
+	imgui.PushIDStr("hhdel")
+	if t.hhDel.draw(false, "") == deleteGo {
+		name := t.hhDelName
+		t.a.edit("remove household member", func() (*ops.Result, error) {
+			return ops.RemoveHouseholdMember(t.a.st, t.a.rec, name, ops.Options{})
+		})
+	}
+	imgui.PopID()
 
 	f := &t.hh
 	imgui.AlignTextToFramePadding()

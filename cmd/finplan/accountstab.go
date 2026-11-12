@@ -218,6 +218,9 @@ type acctTab struct {
 	add newAcctForm
 	// hh is the Add member form of the household editor, and hhCheck keeps its problem.
 	hh      householdForm
+	// hhDel is the dialog that asks before a member who is a 529 beneficiary is removed, and hhDelName the member.
+	hhDel     deleteDialog
+	hhDelName string
 	hhCheck problemCache
 	// fers holds the Add FERS form of each member without a FERS annuity, by name, and fersCheck keeps the problem of each.
 	fers                  map[string]fersForm

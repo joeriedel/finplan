@@ -54,6 +54,8 @@ func deleteLines(plan ops.DeletePlan) []string {
 			out = append(out, fmt.Sprintf("Projection %q: remove the modification %s", a.In, a.Detail))
 		case a.Kind == ops.AffectedHousehold:
 			out = append(out, "Household: reconciliation account resets to the first checking account")
+		case a.Kind == ops.AffectedBeneficiary:
+			out = append(out, fmt.Sprintf("Account %q: clear its %s", a.In, a.Detail))
 		case a.Kind == ops.AffectedTerms:
 			out = append(out, fmt.Sprintf("Account %q: remove its mortgage terms, %s", a.In, a.Detail))
 		case a.Kind == ops.AffectedBudgetItem && a.Effect == ops.EffectRemoved:

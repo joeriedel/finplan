@@ -51,7 +51,7 @@ func TestCollegeCostsDrawThe529ThenChecking(t *testing.T) {
 	}
 	res, err := Balances(rec, "", "acct:chk", []model.Date{d(2026, time.September, 2)})
 	must(t, err)
-	if len(res.Notes) != 1 || !strings.Contains(res.Notes[0], "Kid 529 ran out on 2026-09-01") || !strings.Contains(res.Notes[0], "Spring bill") {
+	if len(res.Notes) != 1 || !strings.Contains(res.Notes[0], "Kid 529 ran out") || !strings.Contains(res.Notes[0], "Spring bill") {
 		t.Errorf("notes %q", res.Notes)
 	}
 	ty := taxYear(t, rec, "", 2026)
@@ -156,5 +156,40 @@ func TestTransferBetween529sIsUntaxedAndMovesBasis(t *testing.T) {
 	ty := taxYear(t, rec, "", 2026)
 	if !near(ty.NonQualified529, 1000) {
 		t.Errorf("earnings %v, want the 1000 the first account held", ty.NonQualified529)
+	}
+}
+
+func TestShortfallIsNotedOncePerItem(t *testing.T) {
+	rec := collegeRecord(t, nil)
+	rec.Budget.Items = []model.BudgetItem{{ID: "tuition", Name: "Tuition", Kind: model.ItemExpense, Amount: model.Constant(2000), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, Account: "c529"}}
+	res, err := Balances(rec, "", "acct:chk", []model.Date{d(2026, time.December, 1)})
+	must(t, err)
+	if len(res.Notes) != 1 || !strings.Contains(res.Notes[0], "Tuition") {
+		t.Errorf("notes %q, want one for the item", res.Notes)
+	}
+}
+
+func TestShortfallInsideCheckingActualsIsNotBooked(t *testing.T) {
+	rec := collegeRecord(t, nil)
+	rec.Account("chk").AddSnapshot(d(2026, time.October, 1), 7000)
+	rec.Budget.Items = []model.BudgetItem{{ID: "bill", Name: "Bill", Kind: model.ItemExpense, Amount: model.Constant(5000), Recurrence: once(2026, time.August, 1), Account: "c529"}}
+	if got := sample(t, rec, "", "acct:c529", d(2026, time.August, 2)).Amount; !near(got, 0) {
+		t.Errorf("529 after the bill: %v, want 0", got)
+	}
+	if got := sample(t, rec, "", "acct:chk", d(2026, time.October, 2)).Amount; !near(got, 7000) {
+		t.Errorf("checking after its snapshot: %v, want 7000", got)
+	}
+}
+
+func TestProjectionOpeningBalanceIsBasis(t *testing.T) {
+	rec := collegeRecord(t, nil)
+	out := model.BudgetItem{ID: "out", Kind: model.ItemTransfer, Amount: model.Constant(5000), Recurrence: once(2026, time.June, 1), From: "pj529", To: "chk"}
+	must(t, rec.AddProjection(&model.Projection{
+		Name:     "pj",
+		Accounts: []model.ProjAccount{{ID: "pj529", Name: "Projected 529", Type: model.Type529, Tax: model.Tax529, Opening: 10000, From: d(2026, time.March, 1)}},
+		Mods:     []model.Modification{{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: "out"}, Property: model.PropAddItem, Item: &out}},
+	}))
+	if ty := taxYear(t, rec, "pj", 2026); !near(ty.NonQualified529, 0) {
+		t.Errorf("earnings %v, want 0", ty.NonQualified529)
 	}
 }

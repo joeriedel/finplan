@@ -84,6 +84,13 @@ func TestMemberRenameRemoveAndRoleFollowBeneficiaries(t *testing.T) {
 		t.Errorf("beneficiary after the rename: %q", got)
 	}
 
+	plan, err := HouseholdMemberRemovePlan(res.Record, "Alex")
+	if err != nil || len(plan.Affected) != 1 || plan.Affected[0].Kind != AffectedBeneficiary || plan.Affected[0].In != string(demodata.College1) {
+		t.Errorf("remove plan %+v, %v", plan, err)
+	}
+	if _, err := HouseholdMemberRemovePlan(res.Record, "Nobody"); !errors.Is(err, ErrUnknownObject) {
+		t.Errorf("remove plan of an unknown member: %v", err)
+	}
 	res, err = RemoveHouseholdMember(st, res.Record, "Alex", Options{})
 	if err != nil {
 		t.Fatal(err)

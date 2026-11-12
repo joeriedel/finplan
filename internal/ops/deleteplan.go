@@ -94,6 +94,20 @@ func AccountDeletePlan(st *store.Store, rec *model.Record, id model.AccountID) (
 	return DeletePlan{Affected: affected}, err
 }
 
+// HouseholdMemberRemovePlan returns what RemoveHouseholdMember would change besides the member: the 529 accounts whose beneficiary it clears. It is ErrUnknownObject for a member the household does not have. Nothing is changed.
+func HouseholdMemberRemovePlan(rec *model.Record, name string) (DeletePlan, error) {
+	if rec.Household.Member(name) < 0 {
+		return DeletePlan{}, refuse(ErrUnknownObject, "there is no household member %q", name)
+	}
+	var out []Affected
+	for _, a := range rec.Accounts {
+		if a.Beneficiary == name {
+			out = append(out, Affected{AffectedBeneficiary, string(a.ID), "beneficiary " + name, EffectRemoved})
+		}
+	}
+	return DeletePlan{Affected: out}, nil
+}
+
 // BudgetItemDeletePlan returns what DeleteBudgetItem would leave behind: the modifications of projections that target the base item, which stay and point at nothing. It is ErrUnknownObject for an item the budget does not have. Nothing is changed.
 func BudgetItemDeletePlan(rec *model.Record, id string) (DeletePlan, error) {
 	if _, err := baseItem(rec, id); err != nil {

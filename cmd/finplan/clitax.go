@@ -143,8 +143,9 @@ var taxCommands = []*command{
 		run:    cmdMemberEdit,
 	},
 	{
-		Name: "household member remove", Summary: "remove a person from the household",
+		Name: "household member remove", Summary: "remove a person from the household and clear them as the beneficiary of 529 accounts; refused with confirm_required, listing those accounts in the error's affected, unless --force is given or none names them",
 		Args:   []argDef{{Name: "name", Description: "the member's name", Required: true}},
+		Flags:  []flagDef{{Name: "force", Type: typeBool, Default: "false", Description: "remove although 529 accounts name the member as their beneficiary: it is cleared on them, as the error's affected (or --dry-run) lists"}},
 		Output: "{dry_run, changed, removed: name, member: the member as it was, household: as household show prints it, after the edit, affected: [{kind, in, detail, effect}] the 529 accounts whose beneficiary it cleared}",
 		run:    cmdMemberRemove,
 	},
@@ -419,6 +420,13 @@ func cmdHouseholdBenefits(c *call) (any, error) {
 func cmdMemberRemove(c *call) (any, error) {
 	st, rec, err := c.open()
 	if err != nil {
+		return nil, err
+	}
+	plan, err := ops.HouseholdMemberRemovePlan(rec, c.args[0])
+	if err != nil {
+		return nil, opsError(err)
+	}
+	if err := c.confirmDelete(plan); err != nil {
 		return nil, err
 	}
 	res, err := ops.RemoveHouseholdMember(st, rec, c.args[0], c.options())
