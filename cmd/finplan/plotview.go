@@ -4,6 +4,7 @@
 package main
 
 import (
+	"math"
 	"unsafe"
 
 	"github.com/AllenDang/cimgui-go/imgui"
@@ -125,6 +126,14 @@ func (g *graphTab) drawPlot(views []lineView) {
 		dl.AddTextVec2(imgui.NewVec2(todayX+6*s, top+4*s), u32(rgba(colAccent, 1)), "Today · projected →")
 	}
 
+	hovered := implot.IsPlotHovered()
+	mouse := imgui.MousePos()
+	day := dateOf(implot.GetPlotMousePos().X)
+	if hovered {
+		g.cursor = day
+	}
+	g.intervalBand(dl, hovered, day)
+
 	// Bands lie beneath the lines. The selected line is drawn last so that it lies on top.
 	polys := make([][]graph.Pt, len(views))
 	for i, v := range views {
@@ -167,9 +176,6 @@ func (g *graphTab) drawPlot(views []lineView) {
 		}
 	}
 
-	hovered := implot.IsPlotHovered()
-	mouse := imgui.MousePos()
-	day := dateOf(implot.GetPlotMousePos().X)
 	var rows []crosshairRow
 	var pts []crosshairPoint
 	if hovered {
@@ -179,8 +185,8 @@ func (g *graphTab) drawPlot(views []lineView) {
 	implot.PopPlotClipRect()
 
 	// Click selects the line nearest the pointer, within a few pixels; a click elsewhere clears it.
-	// A drag is panning, not a click.
-	if hovered && imgui.IsMouseReleased(imgui.MouseButtonLeft) {
+	// A drag is panning, not a click, and a Shift gesture paints the interval.
+	if hovered && imgui.IsMouseReleased(imgui.MouseButtonLeft) && !g.bandDrag {
 		if d := imgui.MouseDragDelta(); d.X == 0 && d.Y == 0 {
 			best, bestDist := graph.LineID(0), float32(hitRadius*s)
 			for i, v := range views {
@@ -194,6 +200,36 @@ func (g *graphTab) drawPlot(views []lineView) {
 
 	if hovered {
 		g.crosshairTags(views, rows, pts, bands, day)
+	}
+	if !imgui.IsMouseDown(imgui.MouseButtonLeft) {
+		g.bandDrag = false
+	}
+}
+
+// intervalBand handles the breakdown interval on the plot and draws it as a tinted band with a draggable handle on each edge. Shift and a left drag paint a new interval from the day where the drag starts to the day under the pointer, in either direction. day is the day under the pointer, valid when hovered.
+func (g *graphTab) intervalBand(dl *imgui.DrawList, hovered bool, day model.Date) {
+	handleHovered := false
+	if g.iv.set {
+		left, right := g.plotPos.X, g.plotPos.X+g.plotSize.X
+		x0, x1 := g.toPx(float64(g.iv.from)*secondsPerDay, 0).X, g.toPx(float64(g.iv.to)*secondsPerDay, 0).X
+		if x1 > left && x0 < right {
+			dl.AddRectFilled(imgui.NewVec2(max(x0, left), g.plotPos.Y), imgui.NewVec2(min(x1, right), g.plotPos.Y+g.plotSize.Y), u32(rgba(colAccent, 0.16)))
+		}
+		for i, d := range []model.Date{g.iv.from, g.iv.to} {
+			x := float64(d) * secondsPerDay
+			var clicked, hov, held bool
+			if implot.DragLineXV(int32(i), &x, rgba(colAccentLit, 0.9), 1.5*uiScale, implot.DragToolFlagsNoFit, &clicked, &hov, &held) {
+				g.iv.setEdge(g.cursor, i == 1, model.Date(math.Round(x/secondsPerDay)))
+			}
+			handleHovered = handleHovered || hov || held
+		}
+	}
+	shift := imgui.CurrentIO().KeyMods() == imgui.KeyChord(imgui.ModShift)
+	if hovered && shift && !handleHovered && imgui.IsMouseClickedBool(imgui.MouseButtonLeft) {
+		g.bandDrag, g.bandAnchor = true, day
+	}
+	if g.bandDrag && imgui.IsMouseDown(imgui.MouseButtonLeft) {
+		g.iv.paint(g.bandAnchor, dateOf(implot.GetPlotMousePos().X))
 	}
 }
 

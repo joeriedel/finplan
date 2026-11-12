@@ -168,9 +168,9 @@ func inPopup(w *imgui.Window) bool {
 	return false
 }
 
-// scrollsByDesign reports whether w is the scrolling window of the entries table, which draws only the visible rows of a ledger that is many screens tall. ImGui names that window "<parent>/<table ID>_<hex ID>".
+// scrollsByDesign reports whether w is the scrolling window of the entries table, which draws only the visible rows of a ledger that is many screens tall, or the Graph's breakdown panel, a fixed-height child whose rows grow with the causes and the member accounts folded out. ImGui names a child "<parent>/<child ID>_<hex ID>".
 func scrollsByDesign(w *imgui.Window) bool {
-	return strings.Contains(w.Name(), "/"+entriesTableID+"_")
+	return strings.Contains(w.Name(), "/"+entriesTableID+"_") || strings.Contains(w.Name(), "/"+breakdownPanelID+"_")
 }
 
 // readLayout measures the active windows of the frame just drawn.

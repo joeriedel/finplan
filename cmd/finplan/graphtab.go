@@ -56,6 +56,14 @@ type graphTab struct {
 	// The crosshair tags queued by crosshairTags, drawn after the plot.
 	tags tagQueue
 
+	// The breakdown panel: its cache, the interval the user set (unset, it covers the 12 months ending at cursor), the date last under the pointer on the plot, the header fields, and the Shift-drag gesture that paints the interval, anchored at bandAnchor.
+	bkCache    *breakdownCache
+	iv         bkInterval
+	cursor     model.Date
+	bk         bkUI
+	bandDrag   bool
+	bandAnchor model.Date
+
 	// The Add popup.
 	search     string
 	addAsset   model.AssetID
@@ -126,7 +134,7 @@ func newGraphTab(rec *model.Record, presets []graph.Preset, st *store.Store, not
 		switcher = rec.Projections[0].Name
 	}
 	g := &graphTab{rec: rec, lines: graph.NewLines(switcher), cache: newDataCache(rec), mc: newMCCache(rec), dataStart: graph.DataStart(rec), preset: -1,
-		presets: presets, store: st, notify: notify, demo: demo}
+		bkCache: newBreakdownCache(rec), cursor: rec.Today, presets: presets, store: st, notify: notify, demo: demo}
 	for _, id := range defaultLines(rec, demo) {
 		g.lines.Add(id, false, "", graph.AssetColor(rec, id))
 	}
@@ -149,7 +157,7 @@ func (g *graphTab) reload(rec *model.Record, presets []graph.Preset) {
 	oldSel, selected := g.lines.Selected()
 	keep := graph.Capture("", g.lines, g.xMin, g.xMax)
 	has := recordHas(rec)
-	g.rec, g.cache, g.mc, g.dataStart = rec, newDataCache(rec), newMCCache(rec), graph.DataStart(rec)
+	g.rec, g.cache, g.mc, g.dataStart, g.bkCache = rec, newDataCache(rec), newMCCache(rec), graph.DataStart(rec), newBreakdownCache(rec)
 	g.lines = keep.Restore(has, projectionNames(rec))
 	// Restore keeps the order of the lines it keeps, so the kept old lines pair up with the new ones.
 	newIDs := map[graph.LineID]graph.LineID{}
@@ -305,6 +313,15 @@ func (g *graphTab) draw() {
 	g.toolbar()
 	g.plotArea()
 	imgui.EndGroup()
+	g.escapeInterval()
+}
+
+// escapeInterval clears the breakdown interval on Esc, unless a text field has the keyboard or a popup is open, where Esc belongs to them.
+func (g *graphTab) escapeInterval() {
+	if g.iv.set && imgui.IsKeyPressedBoolV(imgui.KeyEscape, false) && !imgui.CurrentIO().WantTextInput() &&
+		!imgui.IsPopupOpenStrV("", imgui.PopupFlagsAnyPopupId|imgui.PopupFlagsAnyPopupLevel) {
+		g.iv.clear()
+	}
 }
 
 func (g *graphTab) toolbar() {
@@ -405,10 +422,13 @@ func (g *graphTab) plotArea() {
 	}
 
 	laneH, pitch := lanesHeight(len(views))
-	plotH := imgui.ContentRegionAvail().Y - laneH - imgui.CurrentStyle().ItemSpacing().Y
+	panelH := breakdownPanelHeight(imgui.ContentRegionAvail().Y)
+	plotH := imgui.ContentRegionAvail().Y - laneH - panelH - 2*imgui.CurrentStyle().ItemSpacing().Y
 	if plotH < 50 {
 		plotH = 50
 	}
+	// Shift alone belongs to the breakdown interval: ImPlot ignores the mouse while the modifier is held, so Shift-drag does not pan (ImPlot pans on a left drag whatever the modifiers), and Ctrl, its default, is free.
+	implot.GetInputMap().SetOverrideMod(int32(imgui.ModShift))
 	if implot.BeginPlotV("##balances", imgui.NewVec2(-1, plotH), implot.FlagsNoTitle|implot.FlagsNoLegend|implot.FlagsNoMouseText) {
 		// The time axis always reserves two label rows (PadAndDatumAxesX in implot.cpp), so its height is constant.
 		implot.SetupAxisV(implot.AxisX1, "", implot.AxisFlagsNoLabel)
@@ -432,4 +452,5 @@ func (g *graphTab) plotArea() {
 		g.tags.draw()
 	}
 	g.drawLanes(views, laneH, pitch)
+	g.breakdownPanel(panelH)
 }
