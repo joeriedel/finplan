@@ -51,9 +51,10 @@ func memberBenefits(rec *model.Record, infl model.Schedule, horizon model.Date, 
 		}
 	}
 	add := func(m model.HouseholdMember, kind benefitKind, from model.Date, end *model.Date, amount model.Schedule, indexed bool) {
-		acct := ReconciliationAccount(rec, max(from, rec.Today))
+		on := max(from, rec.Today)
+		acct := ReconciliationAccount(rec, on)
 		if acct == "" {
-			diag.Notes = append(diag.Notes, fmt.Sprintf("there is no open checking account on %s: the %s of %s is not paid", from, kind, m.Name))
+			diag.Notes = append(diag.Notes, fmt.Sprintf("there is no open checking account on %s: the %s of %s is not paid", on, kind, m.Name))
 			return
 		}
 		out = append(out, benefit{m.Name, kind, model.BudgetItem{
@@ -78,11 +79,8 @@ func memberBenefits(rec *model.Record, infl model.Schedule, horizon model.Date, 
 			var ownEnd *model.Date
 			if m.Role == model.RoleSpouse && earner != nil && earner.Name != m.Name {
 				spousalStart := max(ownStart, benefits.PayStart(earner.Birth, earner.SSClaimAge))
-				// A claim at an exact age is reduced as at that age; a spousal benefit that waits for the earner is reduced by the age it starts at.
-				ageMonths := m.SSClaimAge * 12
-				if spousalStart > ownStart {
-					ageMonths = benefits.AgeMonths(m.Birth, spousalStart)
-				}
+				// Payment starts the month after the age claimed at, and the reduction is that of the age claimed at.
+				ageMonths := benefits.AgeMonths(m.Birth, spousalStart) - 1
 				spousal := earner.SSBenefit / 2 * benefits.SSSpousalFactor(by, ageMonths)
 				if spousal > own {
 					add(m, benefitSSSpousal, spousalStart, nil, model.Constant(spousal), true)

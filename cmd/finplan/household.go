@@ -181,6 +181,9 @@ func fersProblem(st *store.Store, rec *model.Record, name string, f fersForm) st
 	if err != nil {
 		return err.Error()
 	}
+	if ch.FERSHigh3 == nil || *ch.FERSHigh3 <= 0 {
+		return "enter the high-3 salary"
+	}
 	_, err = ops.EditHouseholdMember(st, rec, name, ch, ops.Options{DryRun: true})
 	return reasonOf(err)
 }
@@ -289,10 +292,17 @@ func (t *acctTab) addFERS(m model.HouseholdMember) {
 	}
 	t.fers[m.Name] = f
 	imgui.SameLine()
-	formButton("Add FERS##hhaddfers", t.fersCheck.get(problemKey(t.a.rec, m.Name, f), func() string { return fersProblem(t.a.st, t.a.rec, m.Name, f) }), f.untouched(), func() {
+	if t.fersCheck == nil {
+		t.fersCheck = map[string]*problemCache{}
+	}
+	if t.fersCheck[m.Name] == nil {
+		t.fersCheck[m.Name] = &problemCache{}
+	}
+	formButton("Add FERS##hhaddfers", t.fersCheck[m.Name].get(problemKey(t.a.rec, m.Name, f), func() string { return fersProblem(t.a.st, t.a.rec, m.Name, f) }), f.untouched(), func() {
 		ch, _ := f.change()
 		if t.changeMember(m.Name, "add FERS", ch) {
 			delete(t.fers, m.Name)
+			delete(t.fersCheck, m.Name)
 		}
 	})
 }

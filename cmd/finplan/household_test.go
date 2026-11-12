@@ -149,6 +149,13 @@ func TestFERSFormSaysWhatIsMissingAndAddsAsOneChange(t *testing.T) {
 	if !f.untouched() {
 		t.Error("a blank form is touched")
 	}
+	if fersProblem(a.st, a.rec, name, f) == "" {
+		t.Error("a blank form has no problem")
+	}
+	f.set("high3", "0")
+	if fersProblem(a.st, a.rec, name, f) == "" {
+		t.Error("a high-3 of 0 has no problem")
+	}
 	steps := []struct {
 		field, text string
 		ok          bool

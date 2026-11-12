@@ -207,9 +207,9 @@ type acctTab struct {
 	// hh is the Add member form of the household editor, and hhCheck keeps its problem.
 	hh      householdForm
 	hhCheck problemCache
-	// fers holds the Add FERS form of each member without a FERS annuity, by name, and fersCheck keeps its problem.
+	// fers holds the Add FERS form of each member without a FERS annuity, by name, and fersCheck keeps the problem of each.
 	fers                  map[string]fersForm
-	fersCheck             problemCache
+	fersCheck             map[string]*problemCache
 	snapDate, snapBalance string
 	ent                   entriesUI
 	// eq is the state of the equity sections of an equity account.

@@ -222,9 +222,14 @@ func TestBenefitsAreTaxedAndBookedUnderTheirOwnCauses(t *testing.T) {
 func TestSpousalReductionUsesTheAgeWhenItStarts(t *testing.T) {
 	a := model.HouseholdMember{Name: "A", Role: model.RoleEarner, Birth: d(1985, time.March, 12), SSBenefit: 3100, SSClaimAge: 67}
 	b := model.HouseholdMember{Name: "B", Role: model.RoleSpouse, Birth: d(1986, time.July, 4), SSBenefit: 1200, SSClaimAge: 62}
-	// The spousal benefit starts in April 2052, when B is 65 years 9 months old, 15 months before her full retirement age.
+	// The spousal benefit starts in April 2052, the month after A reaches 67; B is then 65 years 9 months old and is reduced as at 65 years 8 months, 16 months before her full retirement age.
 	rec := benefitRecord(t, 0, a, b)
-	if got := benefitsOf(t, rec, 2060, "B"); !near(got.SSSpousal, 12*1550*(1-15*25.0/36/100)) || got.SSOwn != 0 {
+	if got := benefitsOf(t, rec, 2060, "B"); !near(got.SSSpousal, 12*1550*(1-16*25.0/36/100)) || got.SSOwn != 0 {
+		t.Errorf("spouse gets %+v, want the spousal benefit reduced for 16 months", got)
+	}
+	// An earner whose pay starts a month later moves the spousal start, and the reduction, by one month.
+	a.Birth = d(1985, time.April, 12)
+	if got := benefitsOf(t, benefitRecord(t, 0, a, b), 2060, "B"); !near(got.SSSpousal, 12*1550*(1-15*25.0/36/100)) || got.SSOwn != 0 {
 		t.Errorf("spouse gets %+v, want the spousal benefit reduced for 15 months", got)
 	}
 }
