@@ -1039,3 +1039,63 @@ func TestCLIRetireAt60Scenario(t *testing.T) {
 		}
 	}
 }
+
+func TestCLIItemJSONEditKeepsExplicitTiming(t *testing.T) {
+	path := seededFile(t)
+	storedTiming := func() model.Timing {
+		st, err := store.OpenReadOnly(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		rec, err := st.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, it := range rec.Budget.Items {
+			if it.ID == "groceries" {
+				return it.Timing
+			}
+		}
+		t.Fatal("no groceries item")
+		return ""
+	}
+	if got := storedTiming(); got != model.Spread {
+		t.Fatalf("groceries is stored with timing %q, want an explicit spread", got)
+	}
+	var list []json.RawMessage
+	cliJSON(t, &list, "--db", path, "budget", "list")
+	var shown json.RawMessage
+	for _, raw := range list {
+		var id struct{ ID string }
+		if err := json.Unmarshal(raw, &id); err != nil {
+			t.Fatal(err)
+		}
+		if id.ID == "groceries" {
+			shown = raw
+		}
+	}
+	if shown == nil || !strings.Contains(string(shown), `"timing":"spread"`) {
+		t.Fatalf("the item shown: %s", shown)
+	}
+	before := dbSnapshot(t, path)
+	if w := write(t, path, string(shown), "budget", "edit", "groceries"); w.Changed || !reflect.DeepEqual(before, dbSnapshot(t, path)) {
+		t.Errorf("feeding the shown item back changed it: %+v", w)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(shown, &fields); err != nil {
+		t.Fatal(err)
+	}
+	fields["amount"] = 1900
+	delete(fields, "amount_schedule")
+	edited, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := write(t, path, string(edited), "budget", "edit", "groceries"); !w.Changed {
+		t.Errorf("an edit of the amount did not change the item: %+v", w)
+	}
+	if got := storedTiming(); got != model.Spread {
+		t.Errorf("an edit of the amount left timing %q, want the explicit spread", got)
+	}
+}

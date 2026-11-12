@@ -1184,7 +1184,8 @@ func (n numOrSegments) schedule(growth bool) (model.Schedule, error) {
 	return model.Constant(*n.num), nil
 }
 
-func (c *call) itemJSON() (model.BudgetItem, error) {
+// itemJSON reads the item from JSON; base is the item being edited, nil when adding.
+func (c *call) itemJSON(base *model.BudgetItem) (model.BudgetItem, error) {
 	var in itemInput
 	if err := c.readJSON(&in); err != nil {
 		return model.BudgetItem{}, err
@@ -1244,9 +1245,9 @@ func (c *call) itemJSON() (model.BudgetItem, error) {
 		}
 		it.Recurrence.Anchor = d
 	}
-	// budget list shows the effective timing, so an item fed back as listed is stored without one while it is the default.
-	if it.Timing == it.DefaultTiming() {
-		it.Timing = ""
+	// budget list shows the effective timing, so an item fed back as listed keeps the timing the base stored, empty or explicit.
+	if base != nil && it.Timing == base.EffectiveTiming() {
+		it.Timing = base.Timing
 	}
 	return it, nil
 }
@@ -1477,7 +1478,7 @@ func (c *call) itemInputFor(base *model.BudgetItem) (model.BudgetItem, error) {
 		}
 		return c.itemFromFlags(base)
 	}
-	return c.itemJSON()
+	return c.itemJSON(base)
 }
 
 func cmdItemAdd(c *call) (any, error) {
