@@ -52,6 +52,8 @@ func deleteLines(plan ops.DeletePlan) []string {
 			out = append(out, fmt.Sprintf("View preset %q: remove what shows it (%s)", a.In, a.Detail))
 		case a.Kind == ops.AffectedModification:
 			out = append(out, fmt.Sprintf("Projection %q: remove the modification %s", a.In, a.Detail))
+		case a.Kind == ops.AffectedHousehold:
+			out = append(out, "Household: reconciliation account resets to the first checking account")
 		case a.In == "budget":
 			out = append(out, "Base budget: delete the item "+a.Detail)
 		default:
@@ -85,7 +87,7 @@ func (d *deleteDialog) draw(canClose bool, closeBlock string) deleteChoice {
 			bulletText(l)
 		}
 	default:
-		imgui.TextUnformatted(fmt.Sprintf("Delete the %s? It is removed from everything below, and those changes go with it. Undo brings it all back.", d.what))
+		imgui.TextUnformatted(fmt.Sprintf("Delete the %s? The changes below go with it. Undo brings it all back.", d.what))
 		imgui.Spacing()
 		for _, l := range d.lines {
 			bulletText(l)

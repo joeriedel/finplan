@@ -121,6 +121,14 @@ func TestDeleteLinesNamesAPreset(t *testing.T) {
 	}
 }
 
+func TestDeleteLinesNamesTheHousehold(t *testing.T) {
+	plan := ops.DeletePlan{Affected: []ops.Affected{{Kind: ops.AffectedHousehold, In: "household", Detail: "reconciliation account", Effect: ops.EffectRemoved}}}
+	want := "Household: reconciliation account resets to the first checking account"
+	if got := deleteLines(plan); len(got) != 1 || got[0] != want {
+		t.Errorf("got %q", got)
+	}
+}
+
 func TestOpenAccountDeleteListsAPreset(t *testing.T) {
 	a := demoApp(t)
 	if err := addDeletableDemoAccount(a); err != nil {
