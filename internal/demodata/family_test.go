@@ -435,12 +435,22 @@ func TestFamilyCardStaysBounded(t *testing.T) {
 
 func TestFamilyCollegeSavings(t *testing.T) {
 	rec := Family()
-	bills := map[string]int{}
+	bills, terms := map[string]int{}, map[string]int{}
 	for _, it := range rec.Budget.Items {
 		if a := rec.Account(it.Account); it.Kind == model.ItemExpense && a != nil && a.Type == model.Type529 {
 			bills[a.Beneficiary]++
 			if it.Start == nil || it.End == nil {
 				t.Errorf("%s has no college years", it.ID)
+				continue
+			}
+			for _, c := range colleges {
+				if c.child != a.Beneficiary {
+					continue
+				}
+				if *it.Start != c.first || *it.End != c.last {
+					t.Errorf("%s runs %s to %s, want %s to %s", it.ID, *it.Start, *it.End, c.first, c.last)
+				}
+				terms[a.Beneficiary] += len(it.Recurrence.Between(*it.Start-1, *it.End))
 			}
 		}
 	}
@@ -461,6 +471,9 @@ func TestFamilyCollegeSavings(t *testing.T) {
 		}
 		if bills[a.Beneficiary] != 2 {
 			t.Errorf("%s: %d college bills, want 2 (fall and spring)", a.ID, bills[a.Beneficiary])
+		}
+		if terms[a.Beneficiary] != 8 {
+			t.Errorf("%s: %d bills over the college years, want 8 (fall and spring for four years)", a.ID, terms[a.Beneficiary])
 		}
 	}
 	if n != 4 {
