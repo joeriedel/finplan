@@ -593,3 +593,38 @@ func TestEditKeepsAbsentStart(t *testing.T) {
 		check("projection", got)
 	}
 }
+
+// A scheduled modification keeps its segments when its property or its mode changes.
+func TestScheduledModKeepsSegmentsOnPropertyAndMode(t *testing.T) {
+	a := demoApp(t)
+	pt := a.proj
+	job := demodata.ProjNewJob // mod 1: account Brokerage growth set, three segments
+	before := a.rec.Projection(job).Mods[1].Values.Segments()
+	if len(before) < 2 {
+		t.Fatalf("not a scheduled modification: %+v", before)
+	}
+	same := func(what string) {
+		t.Helper()
+		got := a.rec.Projection(job).Mods[1].Values.Segments()
+		if len(got) != len(before) {
+			t.Fatalf("%s: %d segments, want %d", what, len(got), len(before))
+		}
+		for k := range got {
+			if got[k].From != before[k].From || (got[k].End == nil) != (before[k].End == nil) || got[k].End != nil && *got[k].End != *before[k].End {
+				t.Errorf("%s: segment %d is %+v, want %+v", what, k, got[k], before[k])
+			}
+		}
+	}
+
+	pt.setModMode(job, 1, model.ModeScale)
+	if m := a.rec.Projection(job).Mods[1]; !m.IsScale() {
+		t.Fatalf("mode %q: %v", m.Mode, a.notices)
+	}
+	same("mode")
+
+	pt.setModTarget(job, 1, model.KindAccount, string(demodata.Brokerage), model.PropDefault)
+	if m := a.rec.Projection(job).Mods[1]; m.Property != model.PropDefault {
+		t.Fatalf("property %q: %v", m.Property, a.notices)
+	}
+	same("property")
+}

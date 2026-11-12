@@ -385,7 +385,7 @@ func (t *timelineStrip) controls(values model.Schedule, segs []model.Segment, lo
 		imgui.SameLine()
 		if g.From == model.MinDate {
 			imgui.AlignTextToFramePadding()
-			imgui.TextDisabled("beginning")
+			disabledText("beginning")
 		} else {
 			t.dateField("tlfrom"+strconv.Itoa(st.sel), dateHint, g.From.String(), "set segment start", values, false)
 		}
@@ -443,7 +443,7 @@ func (t *timelineStrip) controls(values model.Schedule, segs []model.Segment, lo
 		}
 	} else {
 		imgui.AlignTextToFramePadding()
-		imgui.TextDisabled("Click a segment to select it.")
+		disabledText("Click a segment to select it.")
 	}
 	imgui.SameLine()
 	if imgui.Button("Add after last") {

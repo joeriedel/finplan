@@ -155,9 +155,9 @@ func (t *budgetTab) draw() {
 	income, expenses, net := budgetTotalsText(a.rec)
 	imgui.TextUnformatted("Each month, on " + a.rec.Today.String() + ", in today's dollars:")
 	imgui.TextUnformatted("income " + income + "    expenses " + expenses + "    left over " + net)
-	imgui.TextDisabled("Transfers are in neither total; a one-time item counts for nothing, and an annual item for a twelfth.")
+	disabledText("Transfers are in neither total; a one-time item counts for nothing, and an annual item for a twelfth.")
 
-	imgui.TextDisabled("A dash means no start or end date is set. Open an item with its arrow to change it.")
+	disabledText("A dash means no start or end date is set. Open an item with its arrow to change it.")
 	t.table()
 	if t.del.draw(false, "") == deleteGo {
 		t.deleteItem(t.delID)
@@ -195,7 +195,7 @@ func (t *budgetTab) table() {
 		if len(g.Rows) == 0 {
 			imgui.TableNextRowV(0, 0)
 			imgui.TableSetColumnIndex(1)
-			imgui.TextDisabled("No " + strings.ToLower(g.Title) + " items.")
+			disabledText("No " + strings.ToLower(g.Title) + " items.")
 		}
 		for _, r := range g.Rows {
 			imgui.PushIDStr(r.ID)
@@ -247,7 +247,7 @@ func (t *budgetTab) editor(id string) {
 	}
 
 	imgui.AlignTextToFramePadding()
-	imgui.TextDisabled("end on")
+	disabledText("end on")
 	imgui.SameLine()
 	text := t.endOn[id]
 	imgui.SetNextItemWidth(em * 8)

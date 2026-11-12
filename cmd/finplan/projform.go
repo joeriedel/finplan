@@ -438,12 +438,15 @@ func (t *projTab) addNewItem(proj string) bool {
 	return true
 }
 
-// setModTarget changes the object and property of modification i of the projection, keeping its values, through ops.SetMod. A property of propEndsOn makes the modification what ops.EndItem stores, from the date the modification had or else the record's today; leaving it makes an amount of zero from the beginning.
+// setModTarget changes the object and property of modification i of the projection, keeping its values, through ops.SetMod. A property of propEndsOn makes the modification what ops.EndItem stores, from the date its first segment starts or else the record's today; leaving it makes an amount of zero from the beginning.
 func (t *projTab) setModTarget(proj string, i int, kind model.ObjectKind, obj, prop string) {
 	rec := t.a.rec
 	m := rec.Projection(proj).Mods[i]
 	endDate, ended := ops.EndedOn(m)
-	_, from, _ := constantOf(m.Values)
+	var from *model.Date
+	if segs := m.Values.Segments(); len(segs) > 0 && segs[0].From != model.MinDate {
+		from = model.Ptr(segs[0].From)
+	}
 	m.Target = model.ObjectRef{Kind: kind, ID: obj}
 	if prop == propEndsOn {
 		d := rec.Today

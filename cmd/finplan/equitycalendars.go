@@ -181,7 +181,7 @@ func (t *acctTab) calendarsSection(acct *model.Account) {
 	if !u.section("Vest calendars", "calendars") {
 		return
 	}
-	imgui.TextWrapped("A calendar says on which dates an employer's grants vest: one rule for each vest month, a fixed day or the Nth weekday. Any date it generates can be moved. Grants share the calendar they name.")
+	wrappedText("A calendar says on which dates an employer's grants vest: one rule for each vest month, a fixed day or the Nth weekday. Any date it generates can be moved. Grants share the calendar they name.")
 
 	cal := a.rec.Calendar(u.cal)
 	if !u.calNew && cal == nil && len(a.rec.Calendars) > 0 {

@@ -80,13 +80,13 @@ func (d *deleteDialog) draw(canClose bool, closeBlock string) deleteChoice {
 		imgui.TextUnformatted(fmt.Sprintf("Delete the %s? The projection changes below stay, but have nothing left to change. Undo brings it all back.", d.what))
 		imgui.Spacing()
 		for _, l := range d.lines {
-			imgui.BulletText(l)
+			bulletText(l)
 		}
 	default:
 		imgui.TextUnformatted(fmt.Sprintf("Delete the %s? It is removed from everything below, and those changes go with it. Undo brings it all back.", d.what))
 		imgui.Spacing()
 		for _, l := range d.lines {
-			imgui.BulletText(l)
+			bulletText(l)
 		}
 	}
 	imgui.PopTextWrapPos()

@@ -299,3 +299,15 @@ func TestEntryTableHeight(t *testing.T) {
 		}
 	}
 }
+
+func TestSelectionIn(t *testing.T) {
+	rows := []entryRow{{ID: 4}, {ID: 7}}
+	for _, tc := range []struct{ sel, want int64 }{{0, 0}, {7, 7}, {5, 0}} {
+		if got := selectionIn(tc.sel, rows); got != tc.want {
+			t.Errorf("selection %d: %d, want %d", tc.sel, got, tc.want)
+		}
+	}
+	if got := selectionIn(7, nil); got != 0 {
+		t.Errorf("no rows: %d", got)
+	}
+}

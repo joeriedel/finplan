@@ -474,7 +474,7 @@ func (t *acctTab) grantsSection(acct *model.Account) {
 	}
 	rows := grantRows(a.rec, acct)
 	if len(rows) == 0 {
-		imgui.TextDisabled("No grants yet. Add one below.")
+		disabledText("No grants yet. Add one below.")
 	} else if imgui.BeginTableV("##grants", 7, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
 		for _, h := range []string{"Stock", "Granted", "Shares", "Grant price", "Vested", "Unvested", "Unvested value"} {
 			imgui.TableSetupColumnV(h, 0, 1, 0)
@@ -492,7 +492,7 @@ func (t *acctTab) grantsSection(acct *model.Account) {
 			}
 		}
 		imgui.EndTable()
-		imgui.TextDisabled("Select a grant to see its schedule and record its vests.")
+		disabledText("Select a grant to see its schedule and record its vests.")
 	}
 	if u.sel != 0 {
 		t.grantPanel(acct)
@@ -567,7 +567,7 @@ func (t *acctTab) grantPanel(acct *model.Account) {
 		imgui.EndTable()
 	}
 	if recorded {
-		imgui.TextDisabled("The percents are fixed while a vest is recorded; void the vests to change them.")
+		disabledText("The percents are fixed while a vest is recorded; void the vests to change them.")
 	} else {
 		key := fmt.Sprintf("%p|%v", a.rec, u.pct)
 		formButton("Save percents", u.problems[0].get(key, func() string { return percentsProblem(a.st, a.rec, g.ID, u.pct) }), false, func() {
@@ -577,7 +577,7 @@ func (t *acctTab) grantPanel(acct *model.Account) {
 			})
 		})
 		imgui.SameLine()
-		imgui.TextDisabled("Each planned vest's percent of the shares; they add up to 100.")
+		disabledText("Each planned vest's percent of the shares; they add up to 100.")
 	}
 	if u.vest != nil {
 		t.vestForm(g)
@@ -746,14 +746,14 @@ func (t *acctTab) grantPreview(pv grantPreview) {
 	if pv.HasShares {
 		imgui.TextUnformatted(fmt.Sprintf("Shares: %d, at a grant price of %s", pv.Shares, formatDollars(pv.Price)))
 	} else {
-		imgui.TextDisabled("Shares: enter the value or shares and the grant price.")
+		disabledText("Shares: enter the value or shares and the grant price.")
 	}
 	if pv.PlanErr != "" {
 		errorText("No schedule yet: " + pv.PlanErr)
 		return
 	}
 	if len(pv.Plan) == 0 {
-		imgui.TextDisabled("Schedule: pick the calendar and first vest and enter the yearly percents.")
+		disabledText("Schedule: pick the calendar and first vest and enter the yearly percents.")
 		return
 	}
 	if imgui.BeginTableV("##grantpreview", 4, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {

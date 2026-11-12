@@ -94,7 +94,7 @@ func (t *acctTab) pricesSection(acct *model.Account) {
 	}
 	syms := accountSymbols(acct)
 	if len(syms) == 0 {
-		imgui.TextDisabled("Prices are kept for the stock of a grant: add a grant first.")
+		disabledText("Prices are kept for the stock of a grant: add a grant first.")
 		return
 	}
 	if !slices.Contains(syms, u.sym) {
@@ -106,7 +106,7 @@ func (t *acctTab) pricesSection(acct *model.Account) {
 			u.sym, u.selPrice = syms[k], 0
 		}
 	}
-	imgui.TextWrapped("The latest price of " + u.sym + " values the unvested shares. Each recorded vest also records the price it vested at.")
+	wrappedText("The latest price of " + u.sym + " values the unvested shares. Each recorded vest also records the price it vested at.")
 	t.label("Date")
 	imgui.SetNextItemWidth(em * 10)
 	imgui.InputTextWithHint("##pdate", dateHint, &u.price.date, 0, nil)
@@ -125,7 +125,7 @@ func (t *acctTab) pricesSection(acct *model.Account) {
 
 	rows := priceRows(a.rec, u.sym)
 	if len(rows) == 0 {
-		imgui.TextDisabled("No prices yet.")
+		disabledText("No prices yet.")
 		return
 	}
 	if imgui.BeginTableV("##prices", 2, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {

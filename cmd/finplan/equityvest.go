@@ -192,7 +192,7 @@ func vestVoidProblem(st *store.Store, rec *model.Record, id int64) string {
 // drawFigures shows V, W and N.
 func drawFigures(fg vestFigures, err error) {
 	if err != nil {
-		imgui.TextDisabled("Value, withheld and net: fill in the fields above.")
+		disabledText("Value, withheld and net: fill in the fields above.")
 		return
 	}
 	imgui.TextUnformatted(fmt.Sprintf("Value V: %s    Withheld W: %s    Net N: %s", formatDollars(fg.V), formatDollars(fg.W), formatDollars(fg.N)))
@@ -275,7 +275,7 @@ func (t *acctTab) depositPicker(g *model.Grant, f *vestForm) {
 		f.tx = 0
 	}
 	if len(labels) == 0 {
-		imgui.TextDisabled(fmt.Sprintf("No deposit of %s is within %d days of the vest date that no vest is tied to.", counterName(a.rec, g.Brokerage), tieWindowDays))
+		disabledText(fmt.Sprintf("No deposit of %s is within %d days of the vest date that no vest is tied to.", counterName(a.rec, g.Brokerage), tieWindowDays))
 		return
 	}
 	preview := "choose"

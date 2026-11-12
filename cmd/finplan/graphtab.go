@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/AllenDang/cimgui-go/implot"
@@ -36,9 +37,13 @@ type graphTab struct {
 
 	// The visible limits as ImPlot reported them last frame, in unix seconds and dollars. applyX and
 	// applyY push the limits to ImPlot next frame (a range button, or fitting to the data); otherwise
-	// the user's panning and zooming are left alone.
+	// the user's panning and zooming stand, except that a change of the x range refits y.
 	xMin, xMax, yMin, yMax float64
 	applyX, applyY, fitY   bool
+
+	// fitX0 and fitX1 are the x range the y range was last fitted for.
+	fitX0, fitX1 float64
+
 	// The plot area in screen pixels as of last frame, shared with the data lanes.
 	plotPos, plotSize imgui.Vec2
 
@@ -152,6 +157,18 @@ func (g *graphTab) persist(p graph.Preset) bool {
 	return true
 }
 
+// presetModified reports whether the view cur differs from the stored preset: any line, band or switcher, or an x range off by more than a day, which a read-back from ImPlot after applying the preset never is.
+func presetModified(stored, cur graph.Preset) bool {
+	const tolerance = secondsPerDay
+	return stored.Switcher != cur.Switcher || !slices.Equal(stored.Lines, cur.Lines) || !slices.Equal(stored.Bands, cur.Bands) ||
+		math.Abs(stored.From-cur.From) > tolerance || math.Abs(stored.To-cur.To) > tolerance
+}
+
+// presetDirty reports whether the current preset is set and the view differs from it.
+func (g *graphTab) presetDirty() bool {
+	return g.preset >= 0 && presetModified(g.presets[g.preset], graph.Capture("", g.lines, g.xMin, g.xMax))
+}
+
 // savePreset stores the current view over the current preset.
 func (g *graphTab) savePreset() {
 	p := graph.Capture(g.presets[g.preset].Name, g.lines, g.xMin, g.xMax)
@@ -237,7 +254,7 @@ func (g *graphTab) assetName(id model.AssetID) string {
 
 func (g *graphTab) draw() {
 	if len(g.rec.Accounts) == 0 {
-		imgui.TextWrapped("There are no accounts yet. Adding them comes with the editor tabs and SimpleFIN. Run finplan with --demo to explore an invented family.")
+		wrappedText("There are no accounts yet. Adding them comes with the editor tabs and SimpleFIN. Run finplan with --demo to explore an invented family.")
 		return
 	}
 	imgui.PushStyleColorVec4(imgui.ColChildBg, rgba(colPanel, 1))
@@ -294,24 +311,33 @@ func (g *graphTab) visible(grid graph.Grid) []lineView {
 
 // fitToData sets the y limits to the drawn lines within the visible dates, with a margin.
 func (g *graphTab) fitToData(views []lineView) {
-	lo, hi := math.Inf(1), math.Inf(-1)
-	from, to := dateOf(g.xMin), dateOf(g.xMax)
-	for _, v := range views {
-		for _, s := range v.samples {
+	series := make([][]engine.Sample, len(views))
+	for i, v := range views {
+		series[i] = v.samples
+	}
+	if lo, hi, ok := fitYRange(series, dateOf(g.xMin), dateOf(g.xMax)); ok {
+		g.yMin, g.yMax, g.applyY = lo, hi, true
+	}
+}
+
+// fitYRange returns the y range that shows the samples dated from..to with a margin: the span of their amounts, widened by 1 on each side if under 1, plus 8% on each side. ok is false when no sample is in range.
+func fitYRange(series [][]engine.Sample, from, to model.Date) (lo, hi float64, ok bool) {
+	lo, hi = math.Inf(1), math.Inf(-1)
+	for _, samples := range series {
+		for _, s := range samples {
 			if s.Date >= from && s.Date <= to {
 				lo, hi = min(lo, s.Amount), max(hi, s.Amount)
 			}
 		}
 	}
 	if lo > hi {
-		return
+		return 0, 0, false
 	}
 	if hi-lo < 1 {
 		lo, hi = lo-1, hi+1
 	}
 	margin := (hi - lo) * 0.08
-	g.yMin, g.yMax = lo-margin, hi+margin
-	g.applyY = true
+	return lo - margin, hi + margin, true
 }
 
 func (g *graphTab) plotArea() {
@@ -321,6 +347,11 @@ func (g *graphTab) plotArea() {
 	}
 	grid := graph.SampleGrid(dateOf(g.xMin), dateOf(g.xMax), width)
 	views := g.visible(grid)
+	// Panning or zooming refits y to the lines in the new x range, so dragging y alone is left as the user set it.
+	if g.xMin != g.fitX0 || g.xMax != g.fitX1 {
+		g.fitX0, g.fitX1 = g.xMin, g.xMax
+		g.fitY = true
+	}
 	if g.fitY {
 		g.fitToData(views)
 		g.fitY = false

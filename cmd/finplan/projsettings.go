@@ -68,7 +68,7 @@ func (f settingForm) setting() (model.AssetSetting, string) {
 // settings draws the projection's per-asset start settings, which apply in this order with the last one winning, and under them the start each account ends up with.
 func (t *projTab) settings(p *model.Projection) {
 	imgui.SeparatorText("Start settings")
-	imgui.TextWrapped("Give an asset its own projection start date or override_history. The settings apply in this order and the last one that reaches an account wins; an account without one inherits the projection's.")
+	wrappedText("Give an asset its own projection start date or override_history. The settings apply in this order and the last one that reaches an account wins; an account without one inherits the projection's.")
 	flags := imgui.TableFlagsRowBg | imgui.TableFlagsBordersInnerV | imgui.TableFlagsSizingStretchProp
 	em := imgui.FontSize()
 	if len(p.AssetSettings) > 0 && imgui.BeginTableV("##settings", 5, flags, imgui.NewVec2(0, 0), 0) {
@@ -84,7 +84,7 @@ func (t *projTab) settings(p *model.Projection) {
 		imgui.EndTable()
 	}
 	if len(p.AssetSettings) == 0 {
-		imgui.TextDisabled("No start settings yet.")
+		disabledText("No start settings yet.")
 	}
 	t.addSettingForm(p)
 	t.effectiveStarts(p)
@@ -188,7 +188,7 @@ func (t *projTab) settingRow(p *model.Projection, i int) {
 		})
 	}
 	if imgui.IsItemHovered() {
-		imgui.SetTooltip("Remove this start setting")
+		tooltipText("Remove this start setting")
 	}
 }
 
@@ -209,7 +209,7 @@ func (t *projTab) addSettingForm(p *model.Projection) {
 	imgui.Spacing()
 	t.label("Add start setting")
 	imgui.AlignTextToFramePadding()
-	imgui.TextDisabled("asset")
+	disabledText("asset")
 	imgui.SameLine()
 	preview := "choose"
 	sel := -1
@@ -227,13 +227,13 @@ func (t *projTab) addSettingForm(p *model.Projection) {
 	}
 	imgui.SameLine()
 	imgui.AlignTextToFramePadding()
-	imgui.TextDisabled("starts on")
+	disabledText("starts on")
 	imgui.SameLine()
 	imgui.SetNextItemWidth(em * 8)
 	imgui.InputTextWithHint("##addsetstart", dateHint, &f.start, 0, nil)
 	imgui.SameLine()
 	imgui.AlignTextToFramePadding()
-	imgui.TextDisabled("override history")
+	disabledText("override history")
 	imgui.SameLine()
 	if k := pick("addsetoverride", overrideNames[f.override], em*7, overrideNames, f.override); k >= 0 {
 		f.override = k

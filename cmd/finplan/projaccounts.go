@@ -153,11 +153,11 @@ func acctChange(field, text string) (ops.ProjAccountChange, error) {
 func (t *projTab) accounts(p *model.Projection) {
 	rec := t.a.rec
 	imgui.SeparatorText("Accounts in this projection")
-	imgui.TextWrapped("Hypothetical accounts exist only under this projection and the ones building on it. They are never part of the record, and aggregates such as Net worth include them.")
+	wrappedText("Hypothetical accounts exist only under this projection and the ones building on it. They are never part of the record, and aggregates such as Net worth include them.")
 	rows := accountRows(rec, p.Name)
 	em := imgui.FontSize()
 	if len(rows) == 0 {
-		imgui.TextDisabled("No accounts yet.")
+		disabledText("No accounts yet.")
 	} else if imgui.BeginTableV("##accounts", 7, imgui.TableFlagsRowBg|imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
 		imgui.TableSetupColumnV("Name", 0, 2, 0)
 		imgui.TableSetupColumnV("Type", imgui.TableColumnFlagsWidthFixed, em*8, 0)
@@ -240,7 +240,7 @@ func (t *projTab) addAccountForm(p *model.Projection) {
 	f := &t.addAcct
 	input := func(field, label, hint, value string, width float32) {
 		imgui.AlignTextToFramePadding()
-		imgui.TextDisabled(label)
+		disabledText(label)
 		imgui.SameLine()
 		s := value
 		imgui.SetNextItemWidth(width)
@@ -250,7 +250,7 @@ func (t *projTab) addAccountForm(p *model.Projection) {
 	}
 	choose := func(field, label, cur, curName string, values, names []string) {
 		imgui.AlignTextToFramePadding()
-		imgui.TextDisabled(label)
+		disabledText(label)
 		imgui.SameLine()
 		preview := "choose"
 		if cur != "" {

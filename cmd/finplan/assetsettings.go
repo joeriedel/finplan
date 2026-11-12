@@ -21,9 +21,9 @@ func (t *assetsTab) defaults(asset *model.Asset) {
 	id := asset.ID
 	imgui.Spacing()
 	imgui.SeparatorText("Default balance")
-	imgui.TextWrapped("The balance used on dates when no account under the asset has recorded data. Intervals apply in the order listed: where they overlap, the later one wins. Drag a number to reorder.")
+	wrappedText("The balance used on dates when no account under the asset has recorded data. Intervals apply in the order listed: where they overlap, the later one wins. Drag a number to reorder.")
 	if len(asset.Default.Intervals) == 0 {
-		imgui.TextDisabled("None.")
+		disabledText("None.")
 	}
 	for i, iv := range asset.Default.Intervals {
 		imgui.PushIDStr("interval" + strconv.Itoa(i))
@@ -79,7 +79,7 @@ func (t *assetsTab) defaults(asset *model.Asset) {
 	imgui.SameLine()
 	imgui.SetNextItemWidth(em * 8)
 	imgui.InputTextWithHint("##ivvalue", "balance", &t.ivValue, 0, nil)
-	imgui.TextDisabled("Dates are " + dateHint + ".")
+	disabledText("Dates are " + dateHint + ".")
 	formButton("Add##interval", addIntervalProblem(t.a.st, t.a.rec, id, t.ivFrom, t.ivTo, t.ivValue), allBlank(t.ivFrom, t.ivTo, t.ivValue), func() {
 		iv, _ := interval(t.ivFrom, t.ivTo, t.ivValue)
 		if t.a.edit("add default balance", func() (*ops.Result, error) {
@@ -127,7 +127,7 @@ func (t *assetsTab) params(asset *model.Asset) {
 	if t.tl.open && (t.tl.generation != t.a.generation || t.tlAsset != id || kind == growthNone) {
 		t.tl = timelineState{}
 	}
-	imgui.TextWrapped("Growth: a fraction per year for every account under the asset, applied over the account's stated rate. Settings apply from the innermost asset out, the last applied winning on each date.")
+	wrappedText("Growth: a fraction per year for every account under the asset, applied over the account's stated rate. Settings apply from the innermost asset out, the last applied winning on each date.")
 	fid := string(id) + "growth"
 	switch kind {
 	case growthNone:
@@ -222,10 +222,10 @@ func (t *assetsTab) effectiveGrowth(asset *model.Asset) {
 		return
 	}
 	if len(growth) == 0 {
-		imgui.TextDisabled("No accounts under this asset.")
+		disabledText("No accounts under this asset.")
 		return
 	}
-	imgui.TextDisabled("Layers apply top to bottom; greyed layers are overwritten today (" + t.a.rec.Today.String() + ").")
+	disabledText("Layers apply top to bottom; greyed layers are overwritten today (" + t.a.rec.Today.String() + ").")
 	if !imgui.BeginTableV("##effgrowth", 3, imgui.TableFlagsRowBg|imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
 		return
 	}

@@ -47,6 +47,7 @@ type openState struct {
 // openNames are the states --open can show.
 var openNames = []openState{
 	{"add-line", "Graph", "add-line", false},
+	{"about", "Graph", "", false},
 	{"target", "Projections", "addsetasset", true},
 	{"member", "Assets", "memberacct", true},
 	{"member-form", "Assets", "", true},
@@ -154,11 +155,13 @@ func (o *shotOptions) openName() (n openState) {
 	return n
 }
 
-// applyOpen puts the app in the state --open asks for that is not a picker: the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the Projections Add form on the focal grant kind (focal-grant), the first Budget item's editor (budget-item) or its delete confirmation (budget-delete), the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth, the selected account's ledger panel (ledger), or one of the equity states, which scroll the selected equity account's detail to a section: its grants table (equity-grants), the Add grant form filled in by dollar value (equity-add-grant), the schedule of its first grant with recorded and planned vests (equity-schedule), the Record vest form of that grant's first planned vest with a changed federal rate (equity-vest) or tied to a deposit (equity-tie, with the picker closed), the Prices section (equity-prices) and the vest calendar editor (equity-calendar).
+// applyOpen puts the app in the state --open asks for that is not a picker: the About dialog (about), the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the Projections Add form on the focal grant kind (focal-grant), the first Budget item's editor (budget-item) or its delete confirmation (budget-delete), the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth, the selected account's ledger panel (ledger), or one of the equity states, which scroll the selected equity account's detail to a section: its grants table (equity-grants), the Add grant form filled in by dollar value (equity-add-grant), the schedule of its first grant with recorded and planned vests (equity-schedule), the Record vest form of that grant's first planned vest with a changed federal rate (equity-vest) or tied to a deposit (equity-tie, with the picker closed), the Prices section (equity-prices) and the vest calendar editor (equity-calendar).
 func (o *shotOptions) applyOpen(a *app) error {
 	switch o.open {
 	case "member", "member-form":
 		a.assets.add.kind = memberAccount
+	case "about":
+		a.openAbout()
 	case "ledger":
 		a.accts.ledger = true
 	case "equity-grants", "equity-add-grant", "equity-schedule", "equity-vest", "equity-tie", "equity-prices", "equity-calendar":
@@ -280,7 +283,7 @@ func (o *shotOptions) tieDeposit(a *app, g *model.Grant) error {
 	return fmt.Errorf("the brokerage account has no deposit a vest can be tied to")
 }
 
-// showEquityOnGraph shows the projection on the Graph the way the Projections tab's Show on graph does, after drawing the equity accounts and the brokerage accounts their grants deposit into too, so that vests show as a step down of one line and a step up of the other.
+// showEquityOnGraph shows the projection on the Graph the way the Projections tab's Pin to Graph does, after drawing the equity accounts and the brokerage accounts their grants deposit into too, so that vests show as a step down of one line and a step up of the other.
 func (a *app) showEquityOnGraph(proj string) {
 	for _, acct := range a.rec.Accounts {
 		if acct.Type != model.TypeEquity {

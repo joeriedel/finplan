@@ -36,6 +36,10 @@ type app struct {
 	generation int
 	// forceTab is the name of a tab to select on the next frame it is drawn; empty leaves the selection alone.
 	forceTab string
+	// about is whether the About dialog is open, aboutOpens how many times it has been opened and aboutLine the tagline it shows.
+	about      bool
+	aboutOpens int
+	aboutLine  string
 	// reported holds the preset problems already queued, so that a reload does not queue them again.
 	reported map[string]bool
 }
@@ -126,6 +130,49 @@ func (a *app) drawNotices() {
 	}
 }
 
+// aboutTaglines are the lines the About dialog shows, one for each time it opens, in turn.
+var aboutTaglines = []string{
+	"Are you troubled by strange charges in the middle of the month? Do you experience feelings of dread in your checking account? finplan: we're ready to believe you.",
+	"For all your phantom-expense elimination needs.",
+	"Who you gonna call? Not your financial advisor.",
+	"We ain't afraid of no 401(k).",
+}
+
+// aboutTagline is the tagline the About dialog shows the nth time it opens, counting from 0.
+func aboutTagline(n int) string {
+	return aboutTaglines[n%len(aboutTaglines)]
+}
+
+// openAbout opens the About dialog with the next tagline.
+func (a *app) openAbout() {
+	a.about = true
+	a.aboutLine = aboutTagline(a.aboutOpens)
+	a.aboutOpens++
+}
+
+// drawAbout shows the About dialog in a modal while it is open.
+func (a *app) drawAbout() {
+	if !a.about {
+		return
+	}
+	imgui.OpenPopupStr("About finplan##about")
+	imgui.SetNextWindowPosV(imgui.MainViewport().Center(), imgui.CondAppearing, imgui.NewVec2(0.5, 0.5))
+	if imgui.BeginPopupModalV("About finplan##about", &a.about, imgui.WindowFlagsAlwaysAutoResize) {
+		imgui.PushTextWrapPosV(imgui.FontSize() * 30)
+		imgui.TextUnformatted("finplan")
+		imgui.TextUnformatted("Copyright \u00a9 2026 Joseph Riedel")
+		imgui.Spacing()
+		imgui.TextUnformatted(a.aboutLine)
+		imgui.PopTextWrapPos()
+		imgui.Spacing()
+		if imgui.Button("OK") {
+			a.about = false
+			imgui.CloseCurrentPopup()
+		}
+		imgui.EndPopup()
+	}
+}
+
 // tabs lists the tab bar in order; only Markets is not built.
 var tabs = []string{"Graph", "Projections", "Assets", "Accounts", "Budget", "Markets"}
 
@@ -137,6 +184,7 @@ func (a *app) draw() {
 	a.shortcuts()
 	a.menuBar()
 	a.drawNotices()
+	a.drawAbout()
 
 	vp := imgui.MainViewport()
 	imgui.SetNextWindowPos(vp.WorkPos())
@@ -175,7 +223,7 @@ func (a *app) draw() {
 					case 4:
 						a.budget.draw()
 					default:
-						imgui.TextDisabled("The " + name + " tab is not built yet.")
+						disabledText("The " + name + " tab is not built yet.")
 					}
 				}
 				imgui.EndChild()
@@ -190,10 +238,15 @@ func (a *app) draw() {
 	imgui.PopStyleVarV(3)
 }
 
-// shortcuts handles Ctrl+Z (undo) and Ctrl+Shift+Z or Ctrl+Y (redo), except while a text field is being edited, which has
-// its own undo, or a message is waiting.
+// shortcutsBlocked reports whether Ctrl+Z and the redo keys do nothing: while a message is waiting, a text field is being edited, which has its own undo, or any popup, modal or not, is open.
+func shortcutsBlocked(notices int, textInput, popupOpen bool) bool {
+	return notices > 0 || textInput || popupOpen
+}
+
+// shortcuts handles Ctrl+Z (undo) and Ctrl+Shift+Z or Ctrl+Y (redo) unless shortcutsBlocked.
 func (a *app) shortcuts() {
-	if len(a.notices) > 0 || imgui.CurrentIO().WantTextInput() {
+	popup := imgui.IsPopupOpenStrV("", imgui.PopupFlagsAnyPopupId|imgui.PopupFlagsAnyPopupLevel)
+	if shortcutsBlocked(len(a.notices), imgui.CurrentIO().WantTextInput(), popup) {
 		return
 	}
 	switch {
@@ -204,7 +257,7 @@ func (a *app) shortcuts() {
 	}
 }
 
-// menuBar draws the main menu. File > Backup, Quit and Edit > Undo and Redo are the menu items that do anything yet.
+// menuBar draws the main menu. File > Backup, Quit, Edit > Undo and Redo and Help > About finplan are the menu items that do anything yet.
 func (a *app) menuBar() {
 	if !imgui.BeginMainMenuBar() {
 		return
@@ -245,7 +298,9 @@ func (a *app) menuBar() {
 		imgui.EndMenu()
 	}
 	if imgui.BeginMenuV("Help", true) {
-		imgui.MenuItemBoolV("About finplan", "", false, false)
+		if imgui.MenuItemBoolV("About finplan", "", false, true) {
+			a.openAbout()
+		}
 		imgui.EndMenu()
 	}
 	imgui.EndMainMenuBar()

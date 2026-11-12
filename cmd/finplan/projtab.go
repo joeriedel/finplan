@@ -274,7 +274,7 @@ func (t *projTab) detail() {
 	rec := t.a.rec
 	p := rec.Projection(t.sel)
 	if p == nil {
-		imgui.TextWrapped("Reality is the record as it stands, with no projection. It cannot be edited. Select a projection, or add one with New.")
+		wrappedText("Reality is the record as it stands, with no projection. It cannot be edited. Select a projection, or add one with New.")
 		return
 	}
 	if e := t.errs[""]; e != "" {
@@ -398,7 +398,7 @@ func (t *projTab) header(p *model.Projection) {
 	t.label("Inflation")
 	t.inflation(p, w)
 
-	if imgui.Button("Show on graph") {
+	if imgui.Button("Pin to Graph") {
 		t.showOnGraph(p.Name)
 	}
 }
@@ -487,12 +487,12 @@ func (t *projTab) inflation(p *model.Projection, w float32) {
 		single := slices.IndexFunc(p.Mods[idx+1:], isInflation) < 0 && !slices.ContainsFunc(p.Mods, func(m model.Modification) bool { return isInflation(m) && m.IsScale() })
 		if !single {
 			imgui.AlignTextToFramePadding()
-			imgui.TextDisabled("varies; edit each in the modifications table")
+			disabledText("varies; edit each in the modifications table")
 			return
 		}
 		if !ok || from != nil {
 			imgui.AlignTextToFramePadding()
-			imgui.TextDisabled("varies")
+			disabledText("varies")
 			imgui.SameLine()
 			if imgui.SmallButton("Timeline##inflation") {
 				t.openTimeline(p.Name, idx, p.Mods[idx])
@@ -596,7 +596,7 @@ func (t *projTab) mods(p *model.Projection) {
 		imgui.EndTable()
 	}
 	if len(p.Mods) == 0 {
-		imgui.TextDisabled("No modifications yet.")
+		disabledText("No modifications yet.")
 	}
 	t.timelineEditor(p)
 	t.itemTimelineEditor(p)
@@ -711,7 +711,7 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 	case grants:
 		imgui.AlignTextToFramePadding()
 		imgui.TextUnformatted("adds grant")
-	case editable:
+	case !adds && !grants:
 		if pr, changed := propertyCombo("property", m.Target.Kind, rowProperty(m), -1); changed {
 			t.setModTarget(p.Name, i, m.Target.Kind, m.Target.ID, pr)
 		}
@@ -724,7 +724,7 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 	imgui.TableSetColumnIndex(4)
 	switch {
 	case adds, grants:
-	case editable && !ends:
+	case !ends:
 		cur := cmp.Or(m.Mode, model.ModeSet)
 		if k := pick("mode", string(cur), -1, modeNames, slices.Index(modeNames, string(cur))); k >= 0 {
 			t.setModMode(p.Name, i, model.Mode(modeNames[k]))
@@ -739,20 +739,20 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 	switch {
 	case editable && ends:
 		imgui.AlignTextToFramePadding()
-		imgui.TextDisabled("pays nothing")
+		disabledText("pays nothing")
 	case editable:
 		if text, done := t.field("value"+strconv.Itoa(i), "", formatValue(m.Property, m.Mode, v), -1); done {
 			t.commit("value"+strconv.Itoa(i), func() { t.setModValue(p.Name, i, strings.TrimSpace(text)) })
 		}
 	case adds, grants:
 		imgui.AlignTextToFramePadding()
-		imgui.TextDisabled("see object")
+		disabledText("see object")
 	default:
 		if imgui.SmallButton("Timeline") {
 			t.openTimeline(p.Name, i, m)
 		}
 		if imgui.IsItemHovered() {
-			imgui.SetTooltip("This value changes over time. Edit it on a timeline under the table.")
+			tooltipText("This value changes over time. Edit it on a timeline under the table.")
 		}
 	}
 	if editable {
@@ -768,7 +768,7 @@ func (t *projTab) modRow(p *model.Projection, i int) {
 		}
 	}
 	if imgui.IsItemHovered() {
-		imgui.SetTooltip("Remove this modification")
+		tooltipText("Remove this modification")
 	}
 }
 
@@ -1072,7 +1072,7 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 	input := func(field, label, hint, value string, width float32) {
 		fid := id + field
 		imgui.AlignTextToFramePadding()
-		imgui.TextDisabled(label)
+		disabledText(label)
 		imgui.SameLine()
 		if live {
 			s := value
@@ -1089,7 +1089,7 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 	choose := func(field, label, preview string, width float32, values, names []string, cur string) {
 		imgui.AlignTextToFramePadding()
 		if label != "" {
-			imgui.TextDisabled(label)
+			disabledText(label)
 			imgui.SameLine()
 		}
 		if k := pick(id+field, preview, width, names, slices.Index(values, cur)); k >= 0 {
@@ -1104,7 +1104,7 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 	scheduled := func(field, label, hint, value string, width float32, sched bool) {
 		if sched {
 			imgui.AlignTextToFramePadding()
-			imgui.TextDisabled(label)
+			disabledText(label)
 			imgui.SameLine()
 			imgui.TextUnformatted(value + " now, changes over time")
 		} else {
@@ -1167,7 +1167,7 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 		imgui.SameLine()
 		input("date", "from", "today", f.date, em*8)
 	}
-	imgui.TextDisabled(recurrenceChoiceOf(f.every).hint)
+	disabledText(recurrenceChoiceOf(f.every).hint)
 	input("end", "until", "no end", f.end, em*8)
 	imgui.SameLine()
 	scheduled("growth", "raise per year", "percent, e.g. 3", f.growth, em*6, f.growthSched)
@@ -1473,6 +1473,19 @@ func disabledText(msg string) {
 	imgui.PushStyleColorVec4(imgui.ColText, *imgui.StyleColorVec4(imgui.ColTextDisabled))
 	imgui.TextUnformatted(msg)
 	imgui.PopStyleColor()
+}
+
+// wrappedText draws msg wrapped at the right edge of the window as plain text; TextWrapped takes a format string.
+func wrappedText(msg string) {
+	imgui.PushTextWrapPos()
+	imgui.TextUnformatted(msg)
+	imgui.PopTextWrapPos()
+}
+
+// bulletText draws a bullet and msg as plain text; BulletText takes a format string, and msg quotes user input.
+func bulletText(msg string) {
+	imgui.Bullet()
+	imgui.TextUnformatted(msg)
 }
 
 // errorText draws msg in the error colour as plain text; msg quotes user input, so it must never be a format string.

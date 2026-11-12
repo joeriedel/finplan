@@ -5,6 +5,7 @@ package main
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -475,5 +476,31 @@ func TestGroupHasHeader(t *testing.T) {
 	two := listGroup{Title: "529", Rows: make([]listRow, 2)}
 	if groupHasHeader(one) || !groupHasHeader(two) || groupHasHeader(listGroup{}) {
 		t.Error("only a group of two or more accounts has a header")
+	}
+}
+
+func TestGroupHeaderTextAndEquityTax(t *testing.T) {
+	g := listGroup{Title: "529", Rows: []listRow{{Balance: 38000}, {Balance: 30000.5}, {Balance: 1000}}}
+	if got, want := groupHeaderText(g), "529 · 3 · $69,001"; got != want {
+		t.Errorf("header %q, want %q", got, want)
+	}
+
+	a := demoApp(t)
+	for _, g := range groupAccounts(listAccounts(a.rec)) {
+		sum := 0.0
+		for _, r := range g.Rows {
+			sum += r.Balance
+		}
+		if want := g.Title + " · " + strconv.Itoa(len(g.Rows)) + " · " + graph.FormatMoney(sum); groupHeaderText(g) != want {
+			t.Errorf("header %q, want %q", groupHeaderText(g), want)
+		}
+		if g.Title == accountTypeName(model.Type529) && (len(g.Rows) != 3 || !groupHasHeader(g)) {
+			t.Errorf("529 group %+v", g)
+		}
+	}
+	for _, r := range listAccounts(a.rec) {
+		if got := listTaxText(r.Account); (r.Account.Type == model.TypeEquity) != (got == "") {
+			t.Errorf("%s (%s): tax cell %q", r.Account.ID, r.Account.Type, got)
+		}
 	}
 }

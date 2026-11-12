@@ -159,7 +159,7 @@ func (t *assetsTab) draw() {
 		if asset := a.rec.Asset(t.sel); asset != nil {
 			t.detail(asset)
 		} else {
-			imgui.TextDisabled("Select an asset to see and change it.")
+			disabledText("Select an asset to see and change it.")
 		}
 	}
 	imgui.EndChild()
@@ -168,7 +168,7 @@ func (t *assetsTab) draw() {
 // tree draws the assets with their members and balances today. A member left out of its asset's total is in red, with the reason in a tooltip.
 func (t *assetsTab) tree() {
 	if len(t.rows) == 0 {
-		imgui.TextDisabled("No assets yet.")
+		disabledText("No assets yet.")
 		return
 	}
 	if !imgui.BeginTableV("##assets", 2, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
@@ -363,7 +363,7 @@ func (t *assetsTab) members(asset *model.Asset, row *assetRow) {
 	imgui.Spacing()
 	imgui.SeparatorText("Members")
 	if len(row.Members) == 0 {
-		imgui.TextDisabled("None.")
+		disabledText("None.")
 	}
 	for _, m := range row.Members {
 		imgui.PushIDStr("member" + strconv.Itoa(m.Member.Seq))
@@ -456,7 +456,7 @@ func (t *assetsTab) members(asset *model.Asset, row *assetRow) {
 			}
 			imgui.EndCombo()
 		}
-		imgui.TextDisabled("A rule takes in accounts whose type and tax treatment are among those ticked (any when none is ticked), including accounts added later. It never changes an account's type or tax treatment.")
+		disabledText("A rule takes in accounts whose type and tax treatment are among those ticked (any when none is ticked), including accounts added later. It never changes an account's type or tax treatment.")
 	}
 	t.label("")
 	formButton("Add##member", memberProblem(t.a.st, t.a.rec, asset.ID, *f), f.untouched(), func() {
@@ -504,7 +504,7 @@ func (t *assetsTab) chartArea(id model.AssetID) {
 		errorText(c.Err)
 		return
 	}
-	imgui.TextDisabled("Solid: actual data. Dashed: projected. Faded: default balances. Drag to pan, scroll to zoom, double-click to fit.")
+	disabledText("Solid: actual data. Dashed: projected. Faded: default balances. Drag to pan, scroll to zoom, double-click to fit.")
 	h := max(imgui.ContentRegionAvail().Y-imgui.FontSize()*14, imgui.FontSize()*12)
 	var geom plotGeom
 	if implot.BeginPlotV("##assetchart", imgui.NewVec2(-1, h), implot.FlagsNoTitle|implot.FlagsNoLegend|implot.FlagsNoMouseText) {

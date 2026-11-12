@@ -4,6 +4,8 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/joeriedel/finplan/internal/engine"
 	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
@@ -70,4 +72,21 @@ func groupAccounts(rows []listRow) []listGroup {
 		out = append(out, closed)
 	}
 	return out
+}
+
+// groupHeaderText is the text of the header row of a group: its title, the number of accounts and the sum of their balances, as "529 · 3 · $98,927".
+func groupHeaderText(g listGroup) string {
+	sum := 0.0
+	for _, r := range g.Rows {
+		sum += r.Balance
+	}
+	return fmt.Sprintf("%s \u00b7 %d \u00b7 %s", g.Title, len(g.Rows), graph.FormatMoney(sum))
+}
+
+// listTaxText is the Tax cell of an account in the list: blank for an equity account, which has no tax treatment of its own.
+func listTaxText(a *model.Account) string {
+	if a.Type == model.TypeEquity {
+		return ""
+	}
+	return taxName(a.Tax)
 }

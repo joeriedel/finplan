@@ -4,11 +4,13 @@
 package main
 
 import (
+	"math"
 	"os"
 	"reflect"
 	"testing"
 
 	"github.com/joeriedel/finplan/internal/demodata"
+	"github.com/joeriedel/finplan/internal/engine"
 	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
 )
@@ -198,5 +200,97 @@ func TestRecordHas(t *testing.T) {
 	has := recordHas(demodata.Family())
 	if !has(demodata.NetWorth, "") || has("nonesuch", "") || has(demodata.NetWorth, "nonesuch") || !has(demodata.NetWorth, demodata.ProjBase) {
 		t.Error("recordHas gave the wrong answer")
+	}
+}
+
+func TestAboutTaglineRotates(t *testing.T) {
+	if len(aboutTaglines) != 4 {
+		t.Fatalf("%d taglines", len(aboutTaglines))
+	}
+	a := &app{}
+	for n := 0; n < 2*len(aboutTaglines)+1; n++ {
+		a.openAbout()
+		if want := aboutTaglines[n%len(aboutTaglines)]; !a.about || a.aboutLine != want || aboutTagline(n) != want {
+			t.Errorf("open %d shows %q, want %q", n, a.aboutLine, want)
+		}
+	}
+}
+
+func TestShortcutsBlocked(t *testing.T) {
+	for _, tc := range []struct {
+		notices          int
+		textInput, popup bool
+		want             bool
+	}{
+		{0, false, false, false},
+		{1, false, false, true},
+		{0, true, false, true},
+		{0, false, true, true},
+	} {
+		if got := shortcutsBlocked(tc.notices, tc.textInput, tc.popup); got != tc.want {
+			t.Errorf("%+v: %v", tc, got)
+		}
+	}
+}
+
+func TestPresetModified(t *testing.T) {
+	a := demoApp(t)
+	g := a.graph
+	g.applyPreset(0)
+	if g.presetDirty() {
+		t.Error("a just applied preset is modified")
+	}
+	// ImPlot reads the limits back as it set them, give or take rounding.
+	g.xMin, g.xMax = g.xMin+0.001, g.xMax-0.001
+	if g.presetDirty() {
+		t.Error("a rounding read-back marks the preset modified")
+	}
+	g.xMin += 10 * secondsPerDay
+	if !g.presetDirty() {
+		t.Error("a panned view is unmodified")
+	}
+	g.applyPreset(0)
+
+	ln := g.lines.All()[0]
+	g.lines.SetVisible(ln.ID, !ln.Visible)
+	if !g.presetDirty() {
+		t.Error("a hidden line left the preset unmodified")
+	}
+	g.savePreset()
+	if len(a.notices) != 0 {
+		t.Fatalf("notices: %v", a.notices)
+	}
+	if g.presetDirty() {
+		t.Error("a saved preset is modified")
+	}
+
+	g.preset = -1
+	if g.presetDirty() {
+		t.Error("no preset is modified")
+	}
+}
+
+func TestFitYRange(t *testing.T) {
+	d := func(day int, v float64) engine.Sample { return engine.Sample{Date: model.Date(day), Amount: v} }
+	near := func(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
+	big := []engine.Sample{d(0, 1000000), d(10, 2000000), d(20, 3000000)}
+	small := []engine.Sample{d(0, 100), d(10, 200), d(20, 300)}
+
+	lo, hi, ok := fitYRange([][]engine.Sample{big, small}, 0, 20)
+	if !ok || !near(lo, 100-0.08*(3000000-100)) || !near(hi, 3000000+0.08*(3000000-100)) {
+		t.Errorf("all in range: %v %v %v", lo, hi, ok)
+	}
+	// Only the small line is in range.
+	lo, hi, ok = fitYRange([][]engine.Sample{{d(30, 5000000)}, small}, 0, 20)
+	if !ok || !near(lo, 100-0.08*200) || !near(hi, 300+0.08*200) {
+		t.Errorf("only small lines in range: %v %v %v", lo, hi, ok)
+	}
+	// A flat line gets a margin of one on each side.
+	lo, hi, ok = fitYRange([][]engine.Sample{{d(5, 50), d(6, 50)}}, 0, 20)
+	if !ok || !near(lo, 49-0.16) || !near(hi, 51+0.16) {
+		t.Errorf("flat: %v %v %v", lo, hi, ok)
+	}
+	if _, _, ok := fitYRange([][]engine.Sample{big}, 100, 200); ok {
+		t.Error("no sample in range fitted")
 	}
 }

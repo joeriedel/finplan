@@ -268,7 +268,7 @@ func (t *acctTab) ledgerPanel(acct *model.Account) {
 		return
 	}
 	if len(u.rows) == 0 {
-		imgui.TextDisabled(emptyEntries(u.hidden))
+		disabledText(emptyEntries(u.hidden))
 	} else {
 		t.entryTable(acct)
 	}
@@ -277,10 +277,19 @@ func (t *acctTab) ledgerPanel(acct *model.Account) {
 	}
 }
 
-// loadRows reads the rows of the account and counts the voided entries they leave out.
+// selectionIn is the selected entry after the rows change: 0, nothing, if it is not among them, as when Show voided is unticked while a voided entry is selected.
+func selectionIn(sel int64, rows []entryRow) int64 {
+	if slices.ContainsFunc(rows, func(r entryRow) bool { return r.ID == sel }) {
+		return sel
+	}
+	return 0
+}
+
+// loadRows reads the rows of the account, clears the selection if its entry is not among them, and counts the voided entries they leave out.
 func (t *acctTab) loadRows(id model.AccountID) {
 	u, a := &t.ent, t.a
 	u.rows, u.err = entryRows(a.st, a.rec, id, u.voided)
+	u.sel = selectionIn(u.sel, u.rows)
 	u.hidden = 0
 	if u.err != nil || u.voided {
 		return
@@ -307,7 +316,7 @@ func (t *acctTab) txForm(acct *model.Account) {
 	d := &t.ent.newTx
 	imgui.Spacing()
 	imgui.SeparatorText("Record a transaction")
-	imgui.TextDisabled("The amount is signed from this account's view: negative when money leaves it.")
+	disabledText("The amount is signed from this account's view: negative when money leaves it.")
 	if acct.IsClosed() {
 		errorText("Closed on " + acct.Closed.String() + ": a transaction cannot be recorded after that date.")
 	}
@@ -456,7 +465,7 @@ func (t *acctTab) entryPanel(acct *model.Account) {
 	}
 	imgui.SeparatorText(title)
 	if e.Void {
-		imgui.TextDisabled("This entry is out of the record. Restoring it puts it back with its last values.")
+		disabledText("This entry is out of the record. Restoring it puts it back with its last values.")
 		t.label("Note")
 		imgui.SetNextItemWidth(em * 24)
 		imgui.InputTextWithHint("##entnote", "why", &d.note, 0, nil)

@@ -83,6 +83,9 @@ func (g *graphTab) presetSection() int {
 	preview := "Choose a preset"
 	if g.preset >= 0 {
 		preview = g.presets[g.preset].Name
+		if g.presetDirty() {
+			preview += " *"
+		}
 	}
 	imgui.SetNextItemWidth(-1)
 	if imgui.BeginComboV("##preset", preview, 0) {
@@ -275,7 +278,7 @@ func (g *graphTab) row(ln graph.Line) {
 		g.fitY = true
 	}
 	if soloHot {
-		imgui.SetTooltip("Solo: draw only soloed lines (Ctrl-click clears all)")
+		tooltipText("Solo: draw only soloed lines (Ctrl-click clears all)")
 	}
 
 	pinX := p.X + w - 2*fh - 4*s
@@ -300,7 +303,7 @@ func (g *graphTab) row(ln graph.Line) {
 	}
 	removeHot, removeActive := imgui.IsItemHovered(), imgui.IsItemActive()
 	if removeHot {
-		imgui.SetTooltip("Remove line")
+		tooltipText("Remove line")
 	}
 	showSolo, showPin, showRemove := rowControls(hovered, ln.Pinned, soloed, soloActive || pinActive || removeActive)
 
@@ -456,7 +459,7 @@ func (g *graphTab) addPopup() {
 		imgui.EndCombo()
 	}
 	if g.addAsset == "" {
-		imgui.TextDisabled("Colour: chosen with the asset")
+		disabledText("Colour: chosen with the asset")
 	} else {
 		imgui.ColorEdit3V("Colour", &g.addColor, imgui.ColorEditFlagsNoInputs)
 	}

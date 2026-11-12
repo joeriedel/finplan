@@ -226,7 +226,7 @@ func (t *acctTab) draw() {
 		if acct != nil {
 			t.detail(acct)
 		} else {
-			imgui.TextDisabled("Select an account to see and change it.")
+			disabledText("Select an account to see and change it.")
 		}
 	}
 	imgui.EndChild()
@@ -289,7 +289,7 @@ func (t *acctTab) list(withTax bool) {
 	em := imgui.FontSize()
 	groups := groupAccounts(t.rows)
 	if len(groups) == 0 {
-		imgui.TextDisabled("No accounts yet.")
+		disabledText("No accounts yet.")
 		return
 	}
 	cols, id := int32(3), "##accountsnarrow"
@@ -307,23 +307,31 @@ func (t *acctTab) list(withTax bool) {
 	imgui.TableSetupColumnV("Last data", imgui.TableColumnFlagsWidthFixed, em*listLastEm, 0)
 	imgui.TableHeadersRow()
 	for _, g := range groups {
-		if groupHasHeader(g) {
-			groupHeaderRow(g.Title)
+		header := groupHasHeader(g)
+		if header {
+			groupHeaderRow(groupHeaderText(g))
 		}
 		for _, r := range g.Rows {
-			t.listRow(r, withTax)
+			t.listRow(r, withTax, header)
 		}
 	}
 	imgui.EndTable()
 }
 
-func (t *acctTab) listRow(r listRow, withTax bool) {
+// listRow draws one account; indented puts it under the header of its group.
+func (t *acctTab) listRow(r listRow, withTax, indented bool) {
 	imgui.PushIDStr("acct" + string(r.Account.ID))
 	defer imgui.PopID()
 	imgui.TableNextRowV(0, 0)
 	imgui.TableSetColumnIndex(0)
+	if indented {
+		imgui.Indent()
+	}
 	if imgui.SelectableBoolV(r.Account.Name, t.sel == r.Account.ID, imgui.SelectableFlagsSpanAllColumns, imgui.NewVec2(0, 0)) {
 		t.sel = r.Account.ID
+	}
+	if indented {
+		imgui.Unindent()
 	}
 	text := func(i int, s string) {
 		imgui.TableSetColumnIndex(int32(i))
@@ -331,16 +339,16 @@ func (t *acctTab) listRow(r listRow, withTax bool) {
 	}
 	col := 1
 	if withTax {
-		text(col, taxName(r.Account.Tax))
+		text(col, listTaxText(r.Account))
 		col++
 	}
 	text(col, graph.FormatMoney(r.Balance))
 	imgui.TableSetColumnIndex(int32(col + 1))
 	switch {
 	case r.Account.IsClosed():
-		imgui.TextDisabled("closed " + r.Account.Closed.String())
+		disabledText("closed " + r.Account.Closed.String())
 	case !r.HasData:
-		imgui.TextDisabled("no data")
+		disabledText("no data")
 	case r.Stale:
 		errorText(r.LastData.String() + " stale")
 	default:
@@ -445,9 +453,9 @@ func (t *acctTab) snapshots(acct *model.Account) {
 	imgui.Spacing()
 	imgui.SeparatorText("Record a balance")
 	if sp, ok := acct.Span(); ok {
-		imgui.TextDisabled("Record entries run from " + sp.From.String() + " to " + sp.To.String() + ".")
+		disabledText("Record entries run from " + sp.From.String() + " to " + sp.To.String() + ".")
 	} else {
-		imgui.TextDisabled("No balance recorded yet: the Graph shows the account once it has one.")
+		disabledText("No balance recorded yet: the Graph shows the account once it has one.")
 	}
 	if acct.IsClosed() {
 		errorText("Closed on " + acct.Closed.String() + ": a balance cannot be recorded after that date.")
@@ -475,7 +483,7 @@ func (t *acctTab) defaults(acct *model.Account) {
 	em := imgui.FontSize()
 	imgui.Spacing()
 	imgui.SeparatorText("Default balances")
-	imgui.TextWrapped("The balance used on dates with no recorded data. Where intervals overlap, the one added last wins.")
+	wrappedText("The balance used on dates with no recorded data. Where intervals overlap, the one added last wins.")
 	for i, iv := range acct.Default.Intervals {
 		imgui.PushIDInt(int32(i))
 		imgui.AlignTextToFramePadding()
@@ -489,7 +497,7 @@ func (t *acctTab) defaults(acct *model.Account) {
 		imgui.PopID()
 	}
 	if len(acct.Default.Intervals) == 0 {
-		imgui.TextDisabled("None.")
+		disabledText("None.")
 	}
 	t.label("From")
 	imgui.SetNextItemWidth(em * 10)
@@ -520,14 +528,14 @@ func (t *acctTab) lifecycle(acct *model.Account) {
 	imgui.Spacing()
 	imgui.SeparatorText("Close or delete")
 	if acct.IsClosed() {
-		imgui.TextWrapped("Closed on " + acct.Closed.String() + ". It keeps its history, reads 0 after that date, and is left out of the pickers for new lines and objects.")
+		wrappedText("Closed on " + acct.Closed.String() + ". It keeps its history, reads 0 after that date, and is left out of the pickers for new lines and objects.")
 		actionButton("Reopen", "", func() {
 			t.a.edit("reopen account", func() (*ops.Result, error) {
 				return ops.ReopenAccount(t.a.st, t.a.rec, acct.ID, ops.Options{})
 			})
 		})
 	} else {
-		imgui.TextWrapped("Closing keeps the history and shows the account as 0 after its close date. Only an account without record entries can be deleted; deleting it also deletes the budget items that use it.")
+		wrappedText("Closing keeps the history and shows the account as 0 after its close date. Only an account without record entries can be deleted; deleting it also deletes the budget items that use it.")
 		t.label("Closes on")
 		imgui.SetNextItemWidth(em * 10)
 		imgui.InputTextWithHint("##closeon", "today; or "+dateHint, &t.closeOn, 0, nil)
@@ -577,7 +585,7 @@ func (t *acctTab) addForm() {
 	imgui.SeparatorText("Add account")
 	input := func(field, label, hint, value string, width float32) {
 		imgui.AlignTextToFramePadding()
-		imgui.TextDisabled(label)
+		disabledText(label)
 		imgui.SameLine()
 		s := value
 		imgui.SetNextItemWidth(width)
@@ -587,7 +595,7 @@ func (t *acctTab) addForm() {
 	}
 	choose := func(field, label, cur, curName string, values, names []string) {
 		imgui.AlignTextToFramePadding()
-		imgui.TextDisabled(label)
+		disabledText(label)
 		imgui.SameLine()
 		preview := "choose"
 		if cur != "" {
