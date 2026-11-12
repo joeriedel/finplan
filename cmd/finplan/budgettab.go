@@ -14,7 +14,7 @@ import (
 	"github.com/joeriedel/finplan/internal/ops"
 )
 
-// budgetTab shows and edits the base budget, which every projection builds on.
+// budgetTab shows and edits the base budget, which every projection builds on, and, in a second view, the household's tax for a year.
 type budgetTab struct {
 	a *app
 	// fields draws and keeps the typed text and errors of the item fields, which are the Projections tab's.
@@ -31,6 +31,9 @@ type budgetTab struct {
 	// del confirms the delete of the item with the id delID.
 	del   deleteDialog
 	delID string
+	// tax is the Taxes view's selection and memo; showTaxes selects that view on the next frame.
+	tax       taxState
+	showTaxes bool
 }
 
 func newBudgetTab(a *app) *budgetTab {
@@ -152,6 +155,27 @@ func (t *budgetTab) draw() {
 	}
 	defer imgui.EndChild()
 
+	if !imgui.BeginTabBarV("##budgetviews", imgui.TabBarFlagsNone) {
+		return
+	}
+	defer imgui.EndTabBar()
+	if imgui.BeginTabItemV("Items##budgetview", nil, imgui.TabItemFlagsNone) {
+		t.items()
+		imgui.EndTabItem()
+	}
+	flags := imgui.TabItemFlagsNone
+	if t.showTaxes {
+		flags, t.showTaxes = imgui.TabItemFlagsSetSelected, false
+	}
+	if imgui.BeginTabItemV("Taxes##budgetview", nil, flags) {
+		t.taxes()
+		imgui.EndTabItem()
+	}
+}
+
+// items draws the Items view: the totals, the base budget items and the Add form.
+func (t *budgetTab) items() {
+	a := t.a
 	income, expenses, net := budgetTotalsText(a.rec)
 	imgui.TextUnformatted("Each month, on " + a.rec.Today.String() + ", in today's dollars:")
 	imgui.TextUnformatted("income " + income + "    expenses " + expenses + "    left over " + net)

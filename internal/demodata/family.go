@@ -60,6 +60,8 @@ const (
 	ProjAcmeUp     = "Acme +15%"
 	ProjAcmeCrash  = "Acme crash"
 	ProjAcmeGrants = "Acme yearly grants"
+	// ProjMax401k raises the 401k contribution from 2027 to nearly the yearly limit.
+	ProjMax401k = "Max 401k"
 )
 
 var (
@@ -231,6 +233,13 @@ func Family() *model.Record {
 			Property: model.PropAddGrant,
 			Grant: &model.FocalGrant{Symbol: Symbol, Value: 80000, Date: model.D(2027, time.March, 1), Yearly: true, Calendar: CalendarName,
 				YearPercents: []float64{40, 30, 20, 10}, FirstVestMonths: 1, Brokerage: Brokerage},
+		},
+	}}))
+	must(rec.AddProjection(&model.Projection{Name: ProjMax401k, Parent: ProjBase, Mods: []model.Modification{
+		{
+			Target:   model.ObjectRef{Kind: model.KindBudgetItem, ID: "save-401k"},
+			Property: model.PropAmount,
+			Values:   model.MustSchedule(model.Segment{From: model.D(2027, time.January, 1), Value: 2000}),
 		},
 	}}))
 	return rec
