@@ -126,10 +126,10 @@ func (h *householdTax) drawPaths(paths []*path) *drawPaths {
 // move books amount from src to dst on d.
 func (h *householdTax) move(d model.Date, src, dst *path, amount float64) {
 	cause := transferCause(h.rec, src.acct.ID, dst.acct.ID)
-	src.changes = append(src.changes, change{date: d, cause: cause, amount: -amount, counter: dst.acct.ID, rank: rankTransfer})
-	dst.changes = append(dst.changes, change{date: d, cause: cause, amount: amount, counter: src.acct.ID, rank: rankTransfer})
-	src.settle()
-	dst.settle()
+	src.addChange(change{date: d, cause: cause, amount: -amount, counter: dst.acct.ID, rank: rankTransfer})
+	dst.addChange(change{date: d, cause: cause, amount: amount, counter: src.acct.ID, rank: rankTransfer})
+	src.resettle(d)
+	dst.resettle(d)
 }
 
 // reconcileWithDrawdown is reconcile for a query with retirement, distributions or conversions: the same reconciliations, and the month ends and year ends between them.

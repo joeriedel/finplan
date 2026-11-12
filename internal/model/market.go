@@ -20,7 +20,7 @@ const (
 	ClassCash          = "cash"
 )
 
-// MarketClass is a source of returns (treasuries, large cap, ...). Return is the annual growth of the class over time; Volatility is the annual standard deviation of its return, which the engine does not use yet.
+// MarketClass is a source of returns (treasuries, large cap, ...). Return is the annual growth of the class over time; Volatility is the annual standard deviation of its return, which the Monte Carlo runs draw yearly returns with.
 type MarketClass struct {
 	ID         string
 	Name       string

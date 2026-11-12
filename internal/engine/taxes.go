@@ -430,10 +430,12 @@ func (h *householdTax) withhold(y int, in *yearInputs) {
 		}
 		return r.SocialSecurity + r.Medicare + r.AdditionalMedicare
 	}
-	cum := 0.0
+	cum, before := 0.0, payroll(0)
 	for _, p := range in.paychecks {
-		t := incomeTax*p.gross/in.wages + payroll(cum+p.gross) - payroll(cum)
+		after := payroll(cum + p.gross)
+		t := incomeTax*p.gross/in.wages + after - before
 		cum += p.gross
+		before = after
 		in.withheld[paycheckKey{p.item, p.date}] = t
 		in.paycheckWithheld += t
 	}
@@ -566,10 +568,10 @@ func (h *householdTax) reconcileYear(y int, date model.Date, paths, interest []*
 		return
 	}
 	if date > recon.start {
-		recon.changes = append(recon.changes, change{date: date, cause: CauseTax, amount: -(t.Due - t.GainsTax), rank: rankTax})
+		recon.addChange(change{date: date, cause: CauseTax, amount: -(t.Due - t.GainsTax), rank: rankTax})
 		if t.GainsTax != 0 {
-			recon.changes = append(recon.changes, change{date: date, cause: CauseGainsTax, amount: -t.GainsTax, rank: rankTax})
+			recon.addChange(change{date: date, cause: CauseGainsTax, amount: -t.GainsTax, rank: rankTax})
 		}
-		recon.settle()
+		recon.resettle(date)
 	}
 }

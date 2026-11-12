@@ -97,6 +97,21 @@ var commands = []*command{
 		run:    cmdBalance,
 	},
 	{
+		Name: "montecarlo", Summary: "percentile bands of the value of an asset or account on a series of dates over many random runs; each run draws every market class's yearly return (correlated, with the class's volatility) and every stock's yearly price return (with the stock's volatility) around the expected rates, from where the projection starts",
+		Args: []argDef{{Name: "target", Description: targetArg, Required: true}},
+		Flags: []flagDef{
+			{Name: "from", Type: typeDate, Required: true, Description: "first sample date: " + dateNote},
+			{Name: "to", Type: typeDate, Required: true, EndOfMonth: true, Description: "last sample date, inclusive: " + endNote},
+			{Name: "step", Type: typeEnum, Default: "month", Choices: []string{"day", "week", "month", "year"}, Description: "spacing of the samples; month and year keep the day of the month of --from, clamped to the end of shorter months"},
+			{Name: "projection", Type: typeString, Description: projDesc},
+			{Name: "runs", Type: typeInt, Default: "1000", Description: "the number of random runs, at least 1"},
+			{Name: "seed", Type: typeInt, Default: "1", Description: "the seed of the random draws, 0 or more; the same seed gives the same bands"},
+			{Name: "percentiles", Type: typeString, Default: "10,25,50,75,90", Description: "comma-separated percentiles to report, each from 0 to 100"},
+		},
+		Output: "{target (asset id), projection, from, to, step, runs, seed, percentiles: [numbers], dates: [date], bands: [{percentile, values: [value per date]}] (in the order of --percentiles)}. " + jsonNote,
+		run:    cmdMonteCarlo,
+	},
+	{
 		Name: "breakdown", Summary: "split the change in an asset or account over a period by cause",
 		Args: []argDef{{Name: "target", Description: targetArg, Required: true}},
 		Flags: []flagDef{
@@ -840,6 +855,58 @@ func cmdBalance(c *call) (any, error) {
 	}{string(target), nullable(projection), jd(from), jd(to), step, []jsample{}, diagnosticsJSON(res.Diagnostics)}
 	for _, s := range res.Samples {
 		out.Samples = append(out.Samples, jsample{jd(s.Date), s.Amount, strings.ReplaceAll(s.Status.String(), " ", "_")})
+	}
+	return out, nil
+}
+
+func cmdMonteCarlo(c *call) (any, error) {
+	rec, target, projection, from, to, err := c.period()
+	if err != nil {
+		return nil, err
+	}
+	runs, err := strconv.Atoi(c.str("runs"))
+	if err != nil || runs < 1 {
+		return nil, usageErr("--runs: %q is not a whole number of at least 1", c.str("runs"))
+	}
+	seed, err := strconv.ParseUint(c.str("seed"), 10, 63)
+	if err != nil {
+		return nil, usageErr("--seed: %q is not a whole number of 0 or more", c.str("seed"))
+	}
+	var pcts []float64
+	for _, f := range strings.Split(c.str("percentiles"), ",") {
+		p, err := strconv.ParseFloat(strings.TrimSpace(f), 64)
+		if err != nil || math.IsNaN(p) || p < 0 || p > 100 {
+			return nil, usageErr("--percentiles: %q is not a number from 0 to 100", f)
+		}
+		pcts = append(pcts, p)
+	}
+	step := c.str("step")
+	dates := sampleDates(from, to, step)
+	res, err := engine.MonteCarlo(rec, projection, target, dates, engine.MonteCarloOptions{Runs: runs, Seed: seed, Percentiles: pcts})
+	if err != nil {
+		return nil, failErr("engine", "%v", err)
+	}
+	type jband struct {
+		Percentile float64   `json:"percentile"`
+		Values     []float64 `json:"values"`
+	}
+	out := struct {
+		Target      string    `json:"target"`
+		Projection  *string   `json:"projection"`
+		From        jdate     `json:"from"`
+		To          jdate     `json:"to"`
+		Step        string    `json:"step"`
+		Runs        int       `json:"runs"`
+		Seed        uint64    `json:"seed"`
+		Percentiles []float64 `json:"percentiles"`
+		Dates       []jdate   `json:"dates"`
+		Bands       []jband   `json:"bands"`
+	}{string(target), nullable(projection), jd(from), jd(to), step, res.Runs, res.Seed, res.Percentiles, []jdate{}, []jband{}}
+	for _, d := range dates {
+		out.Dates = append(out.Dates, jd(d))
+	}
+	for i, p := range res.Percentiles {
+		out.Bands = append(out.Bands, jband{p, res.Bands[i]})
 	}
 	return out, nil
 }

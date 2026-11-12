@@ -28,7 +28,10 @@ type Record struct {
 	// StockGrowth is each stock's base growth schedule by symbol; a stock with none is projected flat.
 	StockGrowth map[string]Schedule
 
-	// Correlations are the pairwise correlations of the classes' returns; the engine does not use them yet.
+	// StockVolatility is each stock's annual volatility by symbol, as a fraction; a stock with none has DefaultStockVolatility.
+	StockVolatility map[string]float64
+
+	// Correlations are the pairwise correlations of the classes' returns, which the Monte Carlo runs draw correlated returns with.
 	Correlations []Correlation
 
 	// Household is who files the tax return, and Tax the rules it is taxed by.
@@ -43,14 +46,15 @@ type Record struct {
 // NewRecord returns an empty record.
 func NewRecord(today Date) *Record {
 	return &Record{
-		Today:       today,
-		Globals:     map[string]Schedule{},
-		Prices:      &PriceBook{},
-		StockGrowth: map[string]Schedule{},
-		Household:   DefaultHousehold(),
-		Tax:         tax.Defaults(),
-		accountIdx:  map[AccountID]int{},
-		assetIdx:    map[AssetID]int{},
+		Today:           today,
+		Globals:         map[string]Schedule{},
+		Prices:          &PriceBook{},
+		StockGrowth:     map[string]Schedule{},
+		StockVolatility: map[string]float64{},
+		Household:       DefaultHousehold(),
+		Tax:             tax.Defaults(),
+		accountIdx:      map[AccountID]int{},
+		assetIdx:        map[AssetID]int{},
 	}
 }
 

@@ -3,7 +3,10 @@
 
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 type tProjectionShow struct {
 	Modifications []struct {
@@ -141,4 +144,48 @@ func TestCLIBreakdownOfEquityAccount(t *testing.T) {
 	if sum != bd.Total {
 		t.Errorf("lines add up to %v, total %v", sum, bd.Total)
 	}
+}
+
+func TestCLIStockVolatility(t *testing.T) {
+	path := seededFile(t)
+	var w struct {
+		Changed    bool
+		Volatility *float64
+		Growth     any
+	}
+	cliWrite := func(args ...string) {
+		t.Helper()
+		w.Volatility, w.Growth = nil, nil
+		code, out := wcli(t, "", append([]string{"--db", path, "stock", "growth", "ACME"}, args...)...)
+		if code != 0 {
+			t.Fatalf("stock growth %v exited %d: %s", args, code, out)
+		}
+		if err := json.Unmarshal(out, &w); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := lastValue(t, path, "equity", "Base", "2028-01", "2028-01")
+	cliWrite("--volatility", "0.5")
+	if !w.Changed || w.Volatility == nil || *w.Volatility != 0.5 || w.Growth != nil {
+		t.Errorf("set volatility: %+v", w)
+	}
+	if lastValue(t, path, "equity", "Base", "2028-01", "2028-01") != before {
+		t.Error("the volatility changed the deterministic line")
+	}
+	cliWrite("--volatility", "0.5")
+	if w.Changed {
+		t.Error("setting the volatility again changed")
+	}
+	cliWrite("--volatility", "0.4", "--value", "0.1")
+	if !w.Changed || *w.Volatility != 0.4 || w.Growth == nil {
+		t.Errorf("growth and volatility: %+v", w)
+	}
+	cliWrite("--clear-volatility")
+	if !w.Changed || *w.Volatility != 0.35 {
+		t.Errorf("clear volatility: %+v", w)
+	}
+	refusedWrite(t, path, "", 1, "unknown_target", "stock", "growth", "NOPE", "--volatility", "0.2")
+	refusedWrite(t, path, "", 1, "invalid", "stock", "growth", "ACME", "--volatility", "-0.1")
+	refusedWrite(t, path, "", 2, "usage", "stock", "growth", "ACME", "--volatility", "0.2", "--clear-volatility")
+	refusedWrite(t, path, "", 1, "invalid", "stock", "growth", "ACME", "--value", "0.08", "--volatility", "11")
 }

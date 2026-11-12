@@ -121,7 +121,7 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	want := demodata.Family()
 	mustSave(t, s, want)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 12 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 13 {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
 	// Format 1 documents have no mode and no growth; a schedule of no growth is not stored.
@@ -1433,6 +1433,32 @@ func TestStockGrowthAndFocalGrantRoundTrip(t *testing.T) {
 	mustSave(t, s, rec)
 	if got := mustLoad(t, s); len(got.StockGrowth) != 0 {
 		t.Errorf("deleted stock growth is still stored: %v", got.StockGrowth)
+	}
+}
+
+func TestStockVolatilityRoundTripAndOldRecordsHaveNone(t *testing.T) {
+	s, _ := openTemp(t)
+	rec := demodata.Family()
+	mustSave(t, s, rec)
+	if got := mustLoad(t, s); len(got.StockVolatility) != 0 || got.StockVolatilityOf(demodata.Symbol) != model.DefaultStockVolatility {
+		t.Errorf("a record without volatilities loads %v", got.StockVolatility)
+	}
+	// A document written before format 13 has no stock volatility.
+	if _, err := s.db.Exec(`UPDATE documents SET format = 12`); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoad(t, s); !reflect.DeepEqual(got, rec) {
+		t.Error("the format 12 record loaded differently")
+	}
+	rec.StockVolatility[demodata.Symbol] = 0.5
+	mustSave(t, s, rec)
+	if got := mustLoad(t, s); !reflect.DeepEqual(got, rec) || got.StockVolatilityOf(demodata.Symbol) != 0.5 {
+		t.Errorf("volatility loads as %v", got.StockVolatility)
+	}
+	delete(rec.StockVolatility, demodata.Symbol)
+	mustSave(t, s, rec)
+	if got := mustLoad(t, s); len(got.StockVolatility) != 0 {
+		t.Errorf("deleted volatility is still stored: %v", got.StockVolatility)
 	}
 }
 

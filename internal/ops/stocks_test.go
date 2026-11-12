@@ -153,3 +153,34 @@ func TestSetStockGrowth(t *testing.T) {
 		t.Errorf("clear again: %v", err)
 	}
 }
+
+func TestSetStockVolatility(t *testing.T) {
+	st, rec := seed(t)
+	vol := 0.5
+	res, err := SetStockVolatility(st, rec, demodata.Symbol, &vol, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reload(t, st).StockVolatilityOf(demodata.Symbol); got != 0.5 {
+		t.Errorf("stored volatility %v", got)
+	}
+	if _, err := SetStockVolatility(st, res.Record, demodata.Symbol, &vol, Options{}); !errors.Is(err, ErrNoChange) {
+		t.Errorf("setting it again: %v", err)
+	}
+	bad := -0.1
+	if _, err := SetStockVolatility(st, res.Record, demodata.Symbol, &bad, Options{}); !errors.Is(err, ErrInvalidValue) {
+		t.Errorf("negative volatility: %v", err)
+	}
+	if _, err := SetStockVolatility(st, res.Record, "NOPE", &vol, Options{}); !errors.Is(err, ErrUnknownTarget) {
+		t.Errorf("unknown stock: %v", err)
+	}
+	if _, err := SetStockVolatility(st, res.Record, demodata.Symbol, nil, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := reload(t, st).StockVolatilityOf(demodata.Symbol); got != model.DefaultStockVolatility {
+		t.Errorf("cleared volatility %v", got)
+	}
+	if _, err := SetStockVolatility(st, rec, demodata.Symbol, nil, Options{}); !errors.Is(err, ErrNoChange) {
+		t.Errorf("clearing what is not set: %v", err)
+	}
+}

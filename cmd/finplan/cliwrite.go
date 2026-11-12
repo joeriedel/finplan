@@ -256,16 +256,18 @@ var writeCommands = []*command{
 		run:    cmdModMove,
 	},
 	{
-		Name: "stock growth", Summary: "set a stock's base growth, the annual rate its price is projected with from its latest recorded price when no projection says otherwise (0% when none is set); projections change it with mod add --target stock:<symbol> --property growth",
+		Name: "stock growth", Summary: "set a stock's base growth, the annual rate its price is projected with from its latest recorded price when no projection says otherwise (0% when none is set), and its volatility, the annual standard deviation its price is drawn with in montecarlo (35% when none is set); projections change the growth with mod add --target stock:<symbol> --property growth. With only --volatility or --clear-volatility the growth is left alone",
 		Args: []argDef{{Name: "symbol", Description: "the stock's symbol, as a grant or a price observation names it", Required: true}},
 		Flags: []flagDef{
 			{Name: "clear", Type: typeBool, Default: "false", Description: "remove the stock's growth schedule, so it projects flat"},
 			{Name: "value", Type: typeNumber, Description: "a constant annual rate, a fraction: 0.08 for 8%; without it (and without --clear) the schedule is read as JSON"},
 			{Name: "from", Type: typeDate, Description: "with --value, the date the rate starts: " + dateNote + "; always when omitted"},
 			{Name: "end", Type: typeDate, Description: "with --value and --from, the last date the rate holds: " + dateNote + "; open-ended when omitted"},
+			{Name: "volatility", Type: typeNumber, Description: "the stock's annual volatility, a fraction between 0 and 10: 0.35 for 35%"},
+			{Name: "clear-volatility", Type: typeBool, Default: "false", Description: "remove the stock's volatility, so it has the default of 35%"},
 		},
-		Input:  "without --value and --clear, a schedule: " + scheduleNote,
-		Output: "{dry_run, changed, stock, growth: [{from, end, value}]}",
+		Input:  "without --value, --clear, --volatility and --clear-volatility, a schedule: " + scheduleNote,
+		Output: "{dry_run, changed, stock, growth: [{from, end, value}]}; with a volatility flag also volatility, the fraction in force",
 		run:    cmdStockGrowth,
 	},
 	{
@@ -978,26 +980,65 @@ func cmdStockGrowth(c *call) (any, error) {
 		return nil, err
 	}
 	symbol := c.args[0]
-	var growth *model.Schedule
-	if c.str("clear") == "true" {
-		if c.set["value"] || c.set["from"] || c.set["end"] || c.set["json-file"] {
-			return nil, usageErr("--clear cannot be combined with a schedule")
-		}
-	} else {
-		s, err := c.schedule()
-		if err != nil {
-			return nil, err
-		}
-		growth = &s
+	vol, volSet, err := c.number("volatility")
+	if err != nil {
+		return nil, err
 	}
-	res, err := ops.SetStockGrowth(st, rec, symbol, growth, c.options())
-	switch {
-	case errors.Is(err, ops.ErrNoChange):
-		return map[string]any{"dry_run": c.options().DryRun, "changed": false, "stock": symbol}, nil
-	case err != nil:
-		return nil, opsError(err)
+	clearVol := c.str("clear-volatility") == "true"
+	if volSet && clearVol {
+		return nil, usageErr("--volatility and --clear-volatility cannot be used together")
 	}
-	return map[string]any{"dry_run": c.options().DryRun, "changed": true, "stock": symbol, "growth": scheduleJSONOut(res.Record.StockGrowthOf(symbol))}, nil
+	changesVol := volSet || clearVol
+	if volSet {
+		check := c.options()
+		check.DryRun = true
+		if _, err := ops.SetStockVolatility(st, rec, symbol, &vol, check); err != nil && !errors.Is(err, ops.ErrNoChange) {
+			return nil, opsError(err)
+		}
+	}
+	changesGrowth := !changesVol || c.set["value"] || c.set["from"] || c.set["end"] || c.set["json-file"] || c.str("clear") == "true"
+	out := map[string]any{"dry_run": c.options().DryRun, "changed": false, "stock": symbol}
+	if changesGrowth {
+		var growth *model.Schedule
+		if c.str("clear") == "true" {
+			if c.set["value"] || c.set["from"] || c.set["end"] || c.set["json-file"] {
+				return nil, usageErr("--clear cannot be combined with a schedule")
+			}
+		} else {
+			s, err := c.schedule()
+			if err != nil {
+				return nil, err
+			}
+			growth = &s
+		}
+		res, err := ops.SetStockGrowth(st, rec, symbol, growth, c.options())
+		switch {
+		case errors.Is(err, ops.ErrNoChange):
+		case err != nil:
+			return nil, opsError(err)
+		default:
+			rec = res.Record
+			out["changed"] = true
+			out["growth"] = scheduleJSONOut(rec.StockGrowthOf(symbol))
+		}
+	}
+	if changesVol {
+		var v *float64
+		if volSet {
+			v = &vol
+		}
+		res, err := ops.SetStockVolatility(st, rec, symbol, v, c.options())
+		switch {
+		case errors.Is(err, ops.ErrNoChange):
+		case err != nil:
+			return nil, opsError(err)
+		default:
+			rec = res.Record
+			out["changed"] = true
+		}
+		out["volatility"] = rec.StockVolatilityOf(symbol)
+	}
+	return out, nil
 }
 
 func cmdModEdit(c *call) (any, error) {

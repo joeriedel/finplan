@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 // Package engine is finplan's placeholder projection engine: a pure function of the record (including
-// the base budget) and a projection with its parent chain. It reads no clock, keeps no globals and uses
-// no randomness, and every output is in a deterministic order.
+// the base budget) and a projection with its parent chain. It reads no clock and keeps no globals,
+// and every output is in a deterministic order. Balances uses no randomness; MonteCarlo draws the returns of the market classes and
+// stocks from a seed it is given.
 //
 // Each account is read back from real data up to its own start and extrapolated from there by
 // applying budget flows on their calendar dates and compounding growth over the exact time elapsed.
@@ -11,6 +12,7 @@
 package engine
 
 import (
+	"cmp"
 	"math"
 	"slices"
 	"sort"
@@ -137,6 +139,11 @@ func (r *run) eval(d model.Date) model.Evaluation {
 }
 
 func prepare(base *model.Record, projection string, target model.AssetID, horizon model.Date) (*run, error) {
+	return prepareDrawn(base, projection, target, horizon, nil)
+}
+
+// prepareDrawn is prepare with the market classes' and the stocks' growth from the projection's start drawn at random by draws instead of expected; nil draws give the expected growth.
+func prepareDrawn(base *model.Record, projection string, target model.AssetID, horizon model.Date, draws *rateDraws) (*run, error) {
 	rec, err := base.For(projection)
 	if err != nil {
 		return nil, err
@@ -438,6 +445,9 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 				base = c.Return
 			}
 			cls, _, _ := model.Apply(rateLayer{s: base}, classSettings, func(id model.AssetID) bool { return string(id) == class }, rateLayer.over)
+			if draws != nil {
+				cls.s = draws.classRate(class, cls.s, projStart, horizon)
+			}
 			return leg{class: class, share: share, rate: cls.s}
 		}
 		for _, h := range acct.Allocation {
@@ -528,7 +538,13 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 	}
 	for _, a := range equity {
 		start := pathOf(a.ID).start
-		pl := newEquityPlan(rec, a, start, horizon, newStockPrices(rec, a, start, focal[a.ID], stockSettings), focal[a.ID])
+		prices := newStockPrices(rec, a, start, focal[a.ID], stockSettings)
+		if draws != nil {
+			for sym, g := range prices.growth {
+				prices.growth[sym] = draws.stockRate(sym, g, projStart, horizon)
+			}
+		}
+		pl := newEquityPlan(rec, a, start, horizon, prices, focal[a.ID])
 		plans = append(plans, pl)
 		if p := r.paths[a.ID]; p != nil {
 			p.plan, p.rate = pl, model.Schedule{}
@@ -676,7 +692,7 @@ func raiseFactor(it model.BudgetItem, today, d model.Date, g model.Schedule) flo
 	f := 1.0
 	for y := max(ay+1, fy); y <= dy; y++ {
 		a := model.D(y, month, day)
-		if _, m, _ := a.YMD(); m != month {
+		if month == time.February && day == 29 && !(y%4 == 0 && (y%100 != 0 || y%400 == 0)) {
 			a = model.D(y, month, 28)
 		}
 		if a <= from {
@@ -741,6 +757,8 @@ type path struct {
 	plan    *equityPlan
 	changes []change // flows after start, ordered by date then rank
 	points  []point  // balance after each date with a flow, from start
+	// slab is the storage of the subs and cumSubs of the points.
+	slab []float64
 	// mirrored are the transfers other accounts recorded with this one as counter after this account's data ends.
 	mirrored []change
 	// college are the expense items paid from a 529 account, and nonQualified the earnings its transfers to other kinds of account took; both are made by settle529.
@@ -927,26 +945,42 @@ func (p *path) collect(rec *model.Record, items []model.BudgetItem, cutoffs map[
 // settle orders the changes and works out the balance after each date with one.
 func (p *path) settle() {
 	p.shocked, p.gains = nil, nil
-	p.points = []point{{date: p.start, bal: p.startVal}}
+	p.points = append(p.points[:0], point{date: p.start, bal: p.startVal})
 	if p.legs != nil {
 		p.points[0].subs, p.points[0].cumSubs = p.split(p.startVal), make([]float64, len(p.legs))
 	}
 	if p.idle {
 		return
 	}
-	sort.SliceStable(p.changes, func(i, j int) bool {
-		a, b := p.changes[i], p.changes[j]
-		if a.date != b.date {
-			return a.date < b.date
-		}
-		return a.rank < b.rank
-	})
+	p.changes = sortedChanges(p.changes)
 	if p.legs != nil {
-		p.settleLegs()
+		p.settleLegs(model.MinDate, 1)
 		return
 	}
-	bal, cum, cur := p.startVal, 0.0, p.start
-	for i := 0; i < len(p.changes); {
+	p.settleFlat(0, p.startVal, 0, p.start)
+}
+
+// resettle is settle after a change was booked on d with addChange. The points before d are not touched by the change, so a path keeps them and works out the rest, unless it has lots.
+func (p *path) resettle(d model.Date) {
+	k := sort.Search(len(p.points), func(i int) bool { return p.points[i].date >= d })
+	if p.idle || k == 0 || p.legs != nil && p.lots {
+		p.settle()
+		return
+	}
+	last := p.points[k-1]
+	p.points = p.points[:k]
+	if p.legs != nil {
+		p.settleLegs(d, k)
+		return
+	}
+	i := sort.Search(len(p.changes), func(i int) bool { return p.changes[i].date >= d })
+	p.settleFlat(i, last.bal, last.cumGrowth, last.date)
+}
+
+// settleFlat works out the points of a path without legs from change i on, given the balance, the growth and the date of the point before.
+func (p *path) settleFlat(i int, bal, cum float64, cur model.Date) {
+	p.points = slices.Grow(p.points, len(p.changes)-i)
+	for i < len(p.changes) {
 		d := p.changes[i].date
 		g := bal*p.factor(bal, cur, d) - bal
 		if p.plan != nil {
@@ -962,6 +996,49 @@ func (p *path) settle() {
 	}
 }
 
+// changesSorted reports whether the changes are ordered by date then rank.
+func changesSorted(changes []change) bool {
+	for i := 1; i < len(changes); i++ {
+		a, b := &changes[i-1], &changes[i]
+		if a.date > b.date || a.date == b.date && a.rank > b.rank {
+			return false
+		}
+	}
+	return true
+}
+
+// addChange books a change on a path that may already be settled, after the changes equal to it in date and rank, so that the order settle would give is kept and settle need not sort.
+func (p *path) addChange(c change) {
+	i := sort.Search(len(p.changes), func(i int) bool {
+		e := &p.changes[i]
+		return e.date > c.date || e.date == c.date && e.rank > c.rank
+	})
+	p.changes = slices.Insert(p.changes, i, c)
+}
+
+// sortedChanges returns the changes ordered by date then rank, keeping the order of changes equal in both. It sorts small keys and moves each change once, since sorting the changes themselves, which are large, dominated the time of a run; changes already in order are returned as they are.
+func sortedChanges(changes []change) []change {
+	if changesSorted(changes) {
+		return changes
+	}
+	type key struct {
+		date      model.Date
+		rank, idx int32
+	}
+	keys := make([]key, len(changes))
+	for i, c := range changes {
+		keys[i] = key{c.date, int32(c.rank), int32(i)}
+	}
+	slices.SortFunc(keys, func(a, b key) int {
+		return cmp.Or(cmp.Compare(a.date, b.date), cmp.Compare(a.rank, b.rank), cmp.Compare(a.idx, b.idx))
+	})
+	out := make([]change, len(changes))
+	for i, k := range keys {
+		out[i] = changes[k.idx]
+	}
+	return out
+}
+
 // split divides an amount among the legs by their shares.
 func (p *path) split(amount float64) []float64 {
 	out := make([]float64, len(p.legs))
@@ -972,9 +1049,12 @@ func (p *path) split(amount float64) []float64 {
 }
 
 // settleLegs is settle for an allocated path: each leg compounds at its class's rate, money paid in is split by the current shares and money paid out comes from the legs pro rata to their balances (by share if the account holds nothing or less). On a date the changes come first, then shocks, then rebalances. A path with lots opens a lot for each purchase and realizes the gain of each sale.
-func (p *path) settleLegs() {
+//
+// It keeps the first keep points, the last of them dated before from, and works out the rest from the changes and events dated from or later; keep 1 and from model.MinDate settle the whole path. A path with lots is always settled whole, since the lots of the kept points are not kept.
+func (p *path) settleLegs(from model.Date, keep int) {
 	n := len(p.legs)
-	subs, cum, cur := slices.Clone(p.points[0].subs), make([]float64, n), p.start
+	last := p.points[keep-1]
+	subs, cum, cur := slices.Clone(last.subs), slices.Clone(last.cumSubs), last.date
 	shares, price := make([]float64, n), make([]float64, n)
 	for j, l := range p.legs {
 		shares[j], price[j] = l.share, 1
@@ -1002,7 +1082,18 @@ func (p *path) settleLegs() {
 		}
 		return a.kind < b.kind
 	})
-	for i, k := 0, 0; i < len(p.changes) || k < len(events); {
+	i := sort.Search(len(p.changes), func(i int) bool { return p.changes[i].date >= from })
+	k := sort.Search(len(events), func(i int) bool { return events[i].date >= from })
+	for _, e := range events[:k] {
+		if e.kind == eventRebalance {
+			copy(shares, e.target)
+		}
+	}
+	p.shocked = p.shocked[:sort.Search(len(p.shocked), func(i int) bool { return p.shocked[i].date >= from })]
+	// Each point keeps its own copy of subs and cum, cut from one slab.
+	p.points = slices.Grow(p.points, len(p.changes)-i+len(events)-k)
+	slab := slices.Grow(p.slab[:2*n*(keep-1)], 2*n*(len(p.changes)-i+len(events)-k))
+	for i < len(p.changes) || k < len(events) {
 		d := model.MaxDate
 		if i < len(p.changes) {
 			d = p.changes[i].date
@@ -1079,8 +1170,12 @@ func (p *path) settleLegs() {
 			bal += subs[j]
 			growth += cum[j]
 		}
-		p.points = append(p.points, point{date: d, bal: bal, cumGrowth: growth, subs: slices.Clone(subs), cumSubs: slices.Clone(cum)})
+		slab = append(slab, subs...)
+		slab = append(slab, cum...)
+		at := len(slab) - 2*n
+		p.points = append(p.points, point{date: d, bal: bal, cumGrowth: growth, subs: slab[at : at+n : at+n], cumSubs: slab[at+n : at+2*n]})
 	}
+	p.slab = slab
 }
 
 func (p *path) flows(rec *model.Record, it model.BudgetItem, d model.Date, amt float64) {

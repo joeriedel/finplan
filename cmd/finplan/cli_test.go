@@ -519,6 +519,7 @@ var readCommands = [][]string{
 	{"projection", "list"},
 	{"projection", "show", "New job"},
 	{"balance", "net-worth", "--from", "2027-01", "--to", "2027-12", "--projection", "New job"},
+	{"montecarlo", "net-worth", "--from", "2027-01", "--to", "2028-12", "--step", "year", "--runs", "5"},
 	{"breakdown", "net-worth", "--from", "2027-01", "--to", "2027-12"},
 	{"starts"},
 	{"calendar", "list"},

@@ -53,6 +53,7 @@ func (r *Record) Clone() *Record {
 	c.Correlations = slices.Clone(r.Correlations)
 	c.Prices = r.Prices.clone()
 	c.StockGrowth = cloneSchedules(r.StockGrowth)
+	c.StockVolatility = maps.Clone(r.StockVolatility)
 	c.Household = r.Household.Clone()
 	c.Tax = r.Tax.Clone()
 	c.Calendars = nil
@@ -199,7 +200,7 @@ func (r *Record) WithDocuments(src *Record) *Record {
 		}
 	}
 	c := r.Clone()
-	c.Budget, c.Projections, c.Calendars, c.StockGrowth = n.Budget, n.Projections, n.Calendars, n.StockGrowth
+	c.Budget, c.Projections, c.Calendars, c.StockGrowth, c.StockVolatility = n.Budget, n.Projections, n.Calendars, n.StockGrowth, n.StockVolatility
 	c.Classes, c.Correlations = n.Classes, n.Correlations
 	c.Household, c.Tax = n.Household, n.Tax
 	c.Accounts, c.Assets, c.accountIdx, c.assetIdx, c.seq = n.Accounts, n.Assets, n.accountIdx, n.assetIdx, n.seq

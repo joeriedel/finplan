@@ -87,6 +87,16 @@ func encodeRecord(r *model.Record) ([]docRow, error) {
 			return nil, err
 		}
 	}
+	vols := make([]string, 0, len(r.StockVolatility))
+	for s := range r.StockVolatility {
+		vols = append(vols, s)
+	}
+	sort.Strings(vols)
+	for i, s := range vols {
+		if err := add(kindStockVol, s, i, r.StockVolatility[s]); err != nil {
+			return nil, err
+		}
+	}
 	for i, p := range r.Projections {
 		if err := add(kindProjection, p.Name, i, projectionToDoc(p)); err != nil {
 			return nil, err
@@ -100,16 +110,17 @@ func encodeRecord(r *model.Record) ([]docRow, error) {
 // sequence are the model's own; an error means the stored shape cannot be reproduced exactly.
 func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Record, error) {
 	var (
-		today   model.Date
-		accts   []accountDoc
-		assets  []assetDoc
-		budget  budgetDoc
-		classes []classDoc
-		corrs   []correlationDoc
-		globals = map[string][]segDoc{}
-		projs   []projectionDoc
-		cals    []calendarDoc
-		stocks  = map[string][]segDoc{}
+		today     model.Date
+		accts     []accountDoc
+		assets    []assetDoc
+		budget    budgetDoc
+		classes   []classDoc
+		corrs     []correlationDoc
+		globals   = map[string][]segDoc{}
+		projs     []projectionDoc
+		cals      []calendarDoc
+		stocks    = map[string][]segDoc{}
+		stockVols = map[string]float64{}
 
 		household *householdDoc
 		taxes     tax.Tables
@@ -154,6 +165,10 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 			var d []segDoc
 			err = decodeDoc(row, &d)
 			stocks[row.key] = d
+		case kindStockVol:
+			var d float64
+			err = decodeDoc(row, &d)
+			stockVols[row.key] = d
 		case kindHousehold:
 			var d householdDoc
 			err = decodeDoc(row, &d)
@@ -238,6 +253,9 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 			return nil, fmt.Errorf("store: stock %q: %w", sym, err)
 		}
 		rec.StockGrowth[sym] = s
+	}
+	for sym, v := range stockVols {
+		rec.StockVolatility[sym] = v
 	}
 	for _, d := range cals {
 		c := docCalendar(d)
