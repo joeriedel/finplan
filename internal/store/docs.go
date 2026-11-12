@@ -17,8 +17,8 @@ import (
 // converts it. Format 2 added the modification mode and the budget item growth to format 1's shape; a
 // format 1 document has neither and reads as set and zero, and the bump makes an older build refuse a
 // document whose scale modifications it would otherwise silently ignore. Format 3 added the accounts a
-// projection defines; a format 1 or 2 document has none and reads as an empty list. Format 4 added the close date of an account; an older document has none and reads as an open account, and the bump makes an older build refuse a document whose closed accounts it would otherwise show as open. Format 5 stores a budget item's amount and growth as segment arrays and adds the count and unit of a custom recurrence; an older document has numbers there, which read as a one-segment schedule (a zero growth as none), and the bump makes an older build refuse a document whose schedules it would otherwise misread. Format 6 adds the income type of a budget item, the household and the tax tables; a budget item of an older document has no income type, which an income item reads as wages, and a record with no tax tables is given the shipped ones when it is loaded. Format 7 stores a market class's return as a segment array with its volatility, the correlations of the classes and the allocation of an account; an older class document has a number as its return, which reads as a one-segment schedule, and the bump makes an older build refuse a document whose allocations it would otherwise ignore. Format 8 adds the yearly rebalance setting of an account; an older document has none and reads as off, and the bump makes an older build refuse a document whose setting it would otherwise drop. Format 9 adds the terms of a mortgage account and the employer match of a wages budget item; an older document has none and reads as a mortgage without terms and an item without a match, and the bump makes an older build refuse a document whose terms and matches it would otherwise drop.
-const formatCurrent = 9
+// projection defines; a format 1 or 2 document has none and reads as an empty list. Format 4 added the close date of an account; an older document has none and reads as an open account, and the bump makes an older build refuse a document whose closed accounts it would otherwise show as open. Format 5 stores a budget item's amount and growth as segment arrays and adds the count and unit of a custom recurrence; an older document has numbers there, which read as a one-segment schedule (a zero growth as none), and the bump makes an older build refuse a document whose schedules it would otherwise misread. Format 6 adds the income type of a budget item, the household and the tax tables; a budget item of an older document has no income type, which an income item reads as wages, and a record with no tax tables is given the shipped ones when it is loaded. Format 7 stores a market class's return as a segment array with its volatility, the correlations of the classes and the allocation of an account; an older class document has a number as its return, which reads as a one-segment schedule, and the bump makes an older build refuse a document whose allocations it would otherwise ignore. Format 8 adds the yearly rebalance setting of an account; an older document has none and reads as off, and the bump makes an older build refuse a document whose setting it would otherwise drop. Format 9 adds the terms of a mortgage account and the employer match of a wages budget item; an older document has none and reads as a mortgage without terms and an item without a match, and the bump makes an older build refuse a document whose terms and matches it would otherwise drop. Format 10 adds the Social Security and FERS inputs of a household member and the benefit taxation thresholds of the federal tax tables; an older member has none and reads as without benefits, an older table borrows the shipped thresholds, and the bump makes an older build refuse a household whose benefits it would otherwise drop.
+const formatCurrent = 10
 
 // Document kinds.
 const (
@@ -150,6 +150,15 @@ type householdMemberDoc struct {
 	Name  string     `json:"name"`
 	Birth model.Date `json:"birth"`
 	Role  model.Role `json:"role"`
+
+	SSBenefit  float64 `json:"ss_benefit,omitempty"`
+	SSClaimAge int     `json:"ss_claim_age,omitempty"`
+
+	FERSHigh3         float64        `json:"fers_high3,omitempty"`
+	FERSYears         int            `json:"fers_years,omitempty"`
+	FERSSeparationAge int            `json:"fers_separation_age,omitempty"`
+	FERSStartAge      int            `json:"fers_start_age,omitempty"`
+	FERSSurvivor      model.Survivor `json:"fers_survivor,omitempty"`
 }
 
 type householdDoc struct {
@@ -163,13 +172,14 @@ type householdDoc struct {
 
 func householdToDoc(h model.Household) householdDoc {
 	return householdDoc{mapSlice(h.Members, func(m model.HouseholdMember) householdMemberDoc {
-		return householdMemberDoc{m.Name, m.Birth, m.Role}
+		return householdMemberDoc{m.Name, m.Birth, m.Role, m.SSBenefit, m.SSClaimAge, m.FERSHigh3, m.FERSYears, m.FERSSeparationAge, m.FERSStartAge, m.FERSSurvivor}
 	}), h.Filing, h.State, h.Checking}
 }
 
 func docHousehold(d householdDoc) model.Household {
 	return model.Household{Members: mapSlice(d.Members, func(m householdMemberDoc) model.HouseholdMember {
-		return model.HouseholdMember{Name: m.Name, Birth: m.Birth, Role: m.Role}
+		return model.HouseholdMember{Name: m.Name, Birth: m.Birth, Role: m.Role, SSBenefit: m.SSBenefit, SSClaimAge: m.SSClaimAge,
+			FERSHigh3: m.FERSHigh3, FERSYears: m.FERSYears, FERSSeparationAge: m.FERSSeparationAge, FERSStartAge: m.FERSStartAge, FERSSurvivor: m.FERSSurvivor}
 	}), Filing: d.Filing, State: d.State, Checking: d.Checking}
 }
 
@@ -320,7 +330,7 @@ type docRow struct {
 // decodeDoc decodes a document body of the given format version into v, the current shape.
 func decodeDoc(row docRow, v any) error {
 	switch row.format {
-	case 1, 2, 3, 4, 5, 6, 7, 8, 9:
+	case 1, 2, 3, 4, 5, 6, 7, 8, 9, 10:
 		if err := json.Unmarshal(row.body, v); err != nil {
 			return fmt.Errorf("store: %s %q: %w", row.kind, row.key, err)
 		}

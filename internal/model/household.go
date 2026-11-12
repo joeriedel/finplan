@@ -25,12 +25,40 @@ var Roles = []Role{RoleEarner, RoleSpouse, RoleDependent}
 // Valid reports whether r is one of the roles.
 func (r Role) Valid() bool { return slices.Contains(Roles, r) }
 
-// HouseholdMember is a person on the household's tax return.
+// Survivor is the survivor option of a FERS annuity, which reduces the annuity to pay for the benefit a surviving spouse would get. The zero value is none.
+type Survivor string
+
+// Survivor options.
+const (
+	SurvivorNone    Survivor = "none"
+	SurvivorPartial Survivor = "partial"
+	SurvivorFull    Survivor = "full"
+)
+
+// Survivors lists the survivor options.
+var Survivors = []Survivor{SurvivorNone, SurvivorPartial, SurvivorFull}
+
+// Valid reports whether s is one of the options or empty.
+func (s Survivor) Valid() bool { return s == "" || slices.Contains(Survivors, s) }
+
+// HouseholdMember is a person on the household's tax return. The benefit fields are optional and zero means none: SSBenefit is the monthly Social Security benefit at full retirement age in today's dollars and SSClaimAge the whole age from 62 to 70 it is claimed at (a spouse who sets only the claim age gets the spousal benefit alone); FERSHigh3 is the high-3 average salary in today's dollars, FERSYears the years of service, FERSSeparationAge and FERSStartAge the ages the member leaves service and starts the annuity, and FERSSurvivor the survivor option.
 type HouseholdMember struct {
 	Name  string
 	Birth Date
 	Role  Role
+
+	SSBenefit  float64
+	SSClaimAge int
+
+	FERSHigh3         float64
+	FERSYears         int
+	FERSSeparationAge int
+	FERSStartAge      int
+	FERSSurvivor      Survivor
 }
+
+// HasFERS reports whether the member has a FERS annuity.
+func (m HouseholdMember) HasFERS() bool { return m.FERSHigh3 > 0 }
 
 // AgeIn is the member's age at the end of the calendar year.
 func (m HouseholdMember) AgeIn(year int) int {

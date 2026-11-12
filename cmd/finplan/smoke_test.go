@@ -62,6 +62,7 @@ func TestScreenshotSmoke(t *testing.T) {
 		{"accounts-allocation", "Accounts", "Brokerage", ""},
 		{"markets-selected", "Markets", "US large cap", ""},
 		{"accounts-ledger", "Accounts", "Checking", "ledger"},
+		{"accounts-member-benefits", "Accounts", "", "member-benefits"},
 		{"assets-selected", "Assets", "Net worth", ""},
 		{"add-line", "Graph", "", "add-line"},
 		{"about", "Graph", "", "about"},

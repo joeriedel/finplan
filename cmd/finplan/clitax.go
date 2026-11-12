@@ -20,8 +20,8 @@ import (
 
 const (
 	householdOut = "{dry_run, changed, household: as household show prints it, after the edit}"
-	memberOut    = "{dry_run, changed, member: {name, birth, role}, household: as household show prints it, after the edit}"
-	taxTableNote = "a federal table is {year, status: {mfj|single|hoh|mfs: {brackets: [{over, rate}], standard_deduction, child_credit_phase_out, additional_medicare_threshold, niit_threshold, long_term_gains_15_over, long_term_gains_20_over (the taxable income above which long-term gains are taxed at 15% and at 20%)}}, child_credit, other_dependent_credit, early_withdrawal_penalty_rate, social_security_rate, social_security_wage_base, medicare_rate, additional_medicare_rate, niit_rate, limit_401k, limit_ira, limit_hsa}; a state table is {name, year, brackets: [{over, rate}], standard_deduction: {mfj|single|hoh|mfs: amount}, exemption, dependent_exemption, cap_529}; the first bracket starts at over 0 and the rest ascend, each rate applying to the income above its over; tax table show prints both shapes"
+	memberOut    = "{dry_run, changed, member: as one of household show's members, household: as household show prints it, after the edit}"
+	taxTableNote = "a federal table is {year, status: {mfj|single|hoh|mfs: {brackets: [{over, rate}], standard_deduction, child_credit_phase_out, additional_medicare_threshold, niit_threshold, long_term_gains_15_over, long_term_gains_20_over (the taxable income above which long-term gains are taxed at 15% and at 20%), benefit_base and benefit_adjusted (the provisional income thresholds of the taxation of Social Security benefits)}}, child_credit, other_dependent_credit, early_withdrawal_penalty_rate, social_security_rate, social_security_wage_base, medicare_rate, additional_medicare_rate, niit_rate, limit_401k, limit_ira, limit_hsa}; a state table is {name, year, brackets: [{over, rate}], standard_deduction: {mfj|single|hoh|mfs: amount}, exemption, dependent_exemption, cap_529}; the first bracket starts at over 0 and the rest ascend, each rate applying to the income above its over; tax table show prints both shapes"
 )
 
 var filingStatuses = func() []string {
@@ -40,11 +40,37 @@ var householdRoles = func() []string {
 	return out
 }()
 
+var survivorOptions = func() []string {
+	var out []string
+	for _, s := range model.Survivors {
+		out = append(out, string(s))
+	}
+	return out
+}()
+
+// benefitFlags are the Social Security and FERS flags of household member add and edit.
+var benefitFlags = []flagDef{
+	{Name: "ss-benefit", Type: typeNumber, Description: "the monthly Social Security benefit at full retirement age in today's dollars, from the SSA statement; 0 for none; earner or spouse only"},
+	{Name: "ss-claim-age", Type: typeInt, Description: "the whole age from 62 to 70 Social Security is claimed at; needed with a benefit, and a spouse who sets only this gets the spousal benefit"},
+	{Name: "fers-high3", Type: typeNumber, Description: "the FERS high-3 average salary in today's dollars, indexed by inflation to the separation age; 0 for no FERS annuity; earner or spouse only"},
+	{Name: "fers-years", Type: typeInt, Description: "the years of FERS service, 1 to 60"},
+	{Name: "fers-separation-age", Type: typeInt, Description: "the age the member leaves service, 18 to 90"},
+	{Name: "fers-start-age", Type: typeInt, Description: "the age the annuity starts, not before the separation age; refused if the years of service do not allow it (the minimum retirement age with 10 years, 60 with 20, 62 with 5); before the minimum retirement age with 30 years or 60 with 20 a supplement is paid until 62"},
+	{Name: "fers-survivor", Type: typeEnum, Choices: survivorOptions, Description: "the survivor option: none, partial (reduces the annuity 5%) or full (10%)"},
+}
+
 var taxReadCommands = []*command{
 	{
 		Name: "household show", Summary: "show the household: its members, filing status, state tax table and reconciliation account",
-		Output: "{filing_status (mfj, single, hoh or mfs), state (a state tax table's name), checking (the account id set as the reconciliation account, null for the first checking account), reconciliation_account (the account id in effect, null without a checking account), members: [{name, birth, role (earner, spouse or dependent)}]}",
+		Output: "{filing_status (mfj, single, hoh or mfs), state (a state tax table's name), checking (the account id set as the reconciliation account, null for the first checking account), reconciliation_account (the account id in effect, null without a checking account), members: [{name, birth, role (earner, spouse or dependent), ss_benefit (monthly Social Security benefit at full retirement age in today's dollars, 0 for none), ss_claim_age (62 to 70, 0 for none), fers_high3 (the high-3 salary in today's dollars, 0 for no FERS annuity), fers_years, fers_separation_age, fers_start_age, fers_survivor (none, partial or full)}]}",
 		run:    cmdHouseholdShow,
+	},
+	{
+		Name: "household benefits", Summary: "the Social Security and FERS income the household's members receive in a calendar year under a projection, as the engine books it, with the part of the Social Security that is taxable",
+		Args:   []argDef{{Name: "year", Description: "the calendar year", Required: true}},
+		Flags:  []flagDef{{Name: "projection", Type: typeString, Description: projDesc}},
+		Output: "{year, projection, members: [{name, ss_own (the member's own Social Security benefit paid in the year), ss_spousal (the spousal benefit paid in the year, which replaces the own benefit once it is higher), fers_annuity, fers_supplement}] (members who are not dependents), social_security_received (all Social Security benefits of the year), taxable_social_security (the part in the adjusted gross income; Virginia does not tax it), " + diagShape + "}; dollars rounded to cents",
+		run:    cmdHouseholdBenefits,
 	},
 	{
 		Name: "tax table show", Summary: "show the tax tables: with --year the federal table of that year, with --state and --year a state table, else which tables there are",
@@ -59,7 +85,7 @@ var taxReadCommands = []*command{
 		Name: "tax year", Summary: "the household's tax for a calendar year under a projection, as the engine books it: the year's income, contributions and withdrawals, the tax by kind, what paychecks and vests withheld and the reconciliation on 15 April of the next year",
 		Args:   []argDef{{Name: "year", Description: "the calendar year", Required: true}},
 		Flags:  []flagDef{{Name: "projection", Type: typeString, Description: projDesc}},
-		Output: "{year, projection, filing_status, state, inputs: {wages (paychecks), vest_wages, pre_tax: {k401, ira, hsa} (before the limits), ordinary_income (other-ordinary items, interest and taxable withdrawals that are not early), interest (included in ordinary_income), early_withdrawal, short_term_gains and long_term_gains (realized by sales in taxable accounts, a loss negative; not in ordinary_income), dependent_ages, contrib_529: [one per 529 account]}, tax: {agi, federal_taxable, federal_tax (before credits), credits, niit, early_withdrawal_penalty, state_taxable, state_tax, social_security, medicare, additional_medicare, total, gains_tax (the part of total the gains add)}, withheld: {paychecks, vests, total} (those before the projection's start included), due_minus_withheld, reconciliation: {date, account (null without a checking account), amount (positive paid, negative refunded)}, " + diagShape + "}; dollars rounded to cents",
+		Output: "{year, projection, filing_status, state, inputs: {wages (paychecks), vest_wages, pre_tax: {k401, ira, hsa} (before the limits), ordinary_income (other-ordinary items, interest and taxable withdrawals that are not early), social_security_benefits (Social Security received; not in ordinary_income), interest (included in ordinary_income), early_withdrawal, short_term_gains and long_term_gains (realized by sales in taxable accounts, a loss negative; not in ordinary_income), dependent_ages, contrib_529: [one per 529 account]}, tax: {agi, federal_taxable, federal_tax (before credits), credits, niit, early_withdrawal_penalty, state_taxable, state_tax, social_security, medicare, additional_medicare, total, gains_tax (the part of total the gains add)}, withheld: {paychecks, vests, total} (those before the projection's start included), due_minus_withheld, reconciliation: {date, account (null without a checking account), amount (positive paid, negative refunded)}, " + diagShape + "}; dollars rounded to cents",
 		run:    cmdTaxYear,
 	},
 	{
@@ -97,21 +123,21 @@ var taxCommands = []*command{
 	{
 		Name: "household member add", Summary: "add a person to the household",
 		Args: []argDef{{Name: "name", Description: "the member's name, unique among the members", Required: true}},
-		Flags: []flagDef{
+		Flags: append([]flagDef{
 			{Name: "birth", Type: typeDate, Required: true, Description: "date of birth: " + dateNote},
 			{Name: "role", Type: typeEnum, Required: true, Choices: householdRoles, Description: "earner, spouse or dependent; dependents earn the child tax credit when under 17 and the credit for other dependents otherwise"},
-		},
+		}, benefitFlags...),
 		Output: memberOut,
 		run:    cmdMemberAdd,
 	},
 	{
 		Name: "household member edit", Summary: "change a household member; flags given override the current values",
 		Args: []argDef{{Name: "name", Description: "the member's name", Required: true}},
-		Flags: []flagDef{
+		Flags: append([]flagDef{
 			{Name: "name", Type: typeString, Description: "the new name"},
 			{Name: "birth", Type: typeDate, Description: "date of birth: " + dateNote},
 			{Name: "role", Type: typeEnum, Choices: householdRoles, Description: "earner, spouse or dependent"},
-		},
+		}, benefitFlags...),
 		Output: memberOut,
 		run:    cmdMemberEdit,
 	},
@@ -152,16 +178,31 @@ func init() {
 }
 
 type jhouseholdMember struct {
-	Name  string `json:"name"`
-	Birth jdate  `json:"birth"`
-	Role  string `json:"role"`
+	Name              string  `json:"name"`
+	Birth             jdate   `json:"birth"`
+	Role              string  `json:"role"`
+	SSBenefit         float64 `json:"ss_benefit"`
+	SSClaimAge        int     `json:"ss_claim_age"`
+	FERSHigh3         float64 `json:"fers_high3"`
+	FERSYears         int     `json:"fers_years"`
+	FERSSeparationAge int     `json:"fers_separation_age"`
+	FERSStartAge      int     `json:"fers_start_age"`
+	FERSSurvivor      string  `json:"fers_survivor"`
+}
+
+func memberJSON(m model.HouseholdMember) jhouseholdMember {
+	survivor := model.SurvivorNone
+	if m.FERSSurvivor != "" {
+		survivor = m.FERSSurvivor
+	}
+	return jhouseholdMember{m.Name, jd(m.Birth), string(m.Role), m.SSBenefit, m.SSClaimAge, m.FERSHigh3, m.FERSYears, m.FERSSeparationAge, m.FERSStartAge, string(survivor)}
 }
 
 func householdJSON(rec *model.Record) any {
 	h := rec.Household
 	members := []jhouseholdMember{}
 	for _, m := range h.Members {
-		members = append(members, jhouseholdMember{m.Name, jd(m.Birth), string(m.Role)})
+		members = append(members, memberJSON(m))
 	}
 	return struct {
 		Filing         string             `json:"filing_status"`
@@ -228,7 +269,32 @@ func cmdMemberAdd(c *call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	var ch ops.MemberChange
+	if err := c.benefitChange(&ch); err != nil {
+		return nil, err
+	}
 	m := model.HouseholdMember{Name: c.args[0], Birth: birth, Role: model.Role(c.str("role"))}
+	if ch.SSBenefit != nil {
+		m.SSBenefit = *ch.SSBenefit
+	}
+	if ch.SSClaimAge != nil {
+		m.SSClaimAge = *ch.SSClaimAge
+	}
+	if ch.FERSHigh3 != nil {
+		m.FERSHigh3 = *ch.FERSHigh3
+	}
+	if ch.FERSYears != nil {
+		m.FERSYears = *ch.FERSYears
+	}
+	if ch.FERSSeparationAge != nil {
+		m.FERSSeparationAge = *ch.FERSSeparationAge
+	}
+	if ch.FERSStartAge != nil {
+		m.FERSStartAge = *ch.FERSStartAge
+	}
+	if ch.FERSSurvivor != nil {
+		m.FERSSurvivor = *ch.FERSSurvivor
+	}
 	res, err := ops.AddHouseholdMember(st, rec, m, c.options())
 	return c.memberResult(res, err, m.Name)
 }
@@ -251,8 +317,102 @@ func cmdMemberEdit(c *call) (any, error) {
 	if c.set["role"] {
 		ch.Role = model.Ptr(model.Role(c.str("role")))
 	}
+	if err := c.benefitChange(&ch); err != nil {
+		return nil, err
+	}
 	res, err := ops.EditHouseholdMember(st, rec, c.args[0], ch, c.options())
 	return c.memberResult(res, err, name)
+}
+
+// benefitChange sets the Social Security and FERS fields of the change from the flags given.
+func (c *call) benefitChange(ch *ops.MemberChange) error {
+	var err error
+	if ch.SSBenefit, err = c.optNumber("ss-benefit"); err != nil {
+		return err
+	}
+	if ch.SSClaimAge, err = c.optInt("ss-claim-age"); err != nil {
+		return err
+	}
+	if ch.FERSHigh3, err = c.optNumber("fers-high3"); err != nil {
+		return err
+	}
+	if ch.FERSYears, err = c.optInt("fers-years"); err != nil {
+		return err
+	}
+	if ch.FERSSeparationAge, err = c.optInt("fers-separation-age"); err != nil {
+		return err
+	}
+	if ch.FERSStartAge, err = c.optInt("fers-start-age"); err != nil {
+		return err
+	}
+	if c.set["fers-survivor"] {
+		ch.FERSSurvivor = model.Ptr(model.Survivor(c.str("fers-survivor")))
+	}
+	return nil
+}
+
+func (c *call) optNumber(name string) (*float64, error) {
+	v, ok, err := c.number(name)
+	if !ok || err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (c *call) optInt(name string) (*int, error) {
+	v, ok, err := c.integer(name)
+	if !ok || err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func cmdHouseholdBenefits(c *call) (any, error) {
+	_, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	year, err := strconv.Atoi(c.args[0])
+	if err != nil || year < 1 || year > 9998 {
+		return nil, usageErr("year %q is not a calendar year", c.args[0])
+	}
+	projection, err := c.projection(rec)
+	if err != nil {
+		return nil, err
+	}
+	got, ty, err := engine.BenefitsOf(rec, projection, year)
+	if err != nil {
+		return nil, failErr("invalid", "%v", err)
+	}
+	cents := func(v float64) float64 { return math.Round(v*100) / 100 }
+	type jbenefit struct {
+		Name           string  `json:"name"`
+		SSOwn          float64 `json:"ss_own"`
+		SSSpousal      float64 `json:"ss_spousal"`
+		FERSAnnuity    float64 `json:"fers_annuity"`
+		FERSSupplement float64 `json:"fers_supplement"`
+	}
+	members := []jbenefit{}
+	for _, m := range rec.Household.Members {
+		if m.Role == model.RoleDependent {
+			continue
+		}
+		b := jbenefit{Name: m.Name}
+		for _, g := range got {
+			if g.Member == m.Name {
+				b.SSOwn, b.SSSpousal, b.FERSAnnuity, b.FERSSupplement = cents(g.SSOwn), cents(g.SSSpousal), cents(g.FERSAnnuity), cents(g.FERSSupplement)
+			}
+		}
+		members = append(members, b)
+	}
+	return struct {
+		Year       int          `json:"year"`
+		Projection *string      `json:"projection"`
+		Members    []jbenefit   `json:"members"`
+		Received   float64      `json:"social_security_received"`
+		Taxable    float64      `json:"taxable_social_security"`
+		Diag       jdiagnostics `json:"diagnostics"`
+	}{year, nullable(projection), members, cents(ty.Benefits), cents(ty.Result.TaxableBenefits), diagnosticsJSON(ty.Diagnostics)}, nil
 }
 
 func cmdMemberRemove(c *call) (any, error) {
@@ -282,10 +442,10 @@ func (c *call) memberResult(res *ops.Result, err error, name string) (map[string
 		rec = res.Record
 	}
 	if res != nil && res.Member != nil {
-		out["member"] = jhouseholdMember{res.Member.Name, jd(res.Member.Birth), string(res.Member.Role)}
+		out["member"] = memberJSON(*res.Member)
 	} else if i := rec.Household.Member(name); i >= 0 {
 		hm := rec.Household.Members[i]
-		out["member"] = jhouseholdMember{hm.Name, jd(hm.Birth), string(hm.Role)}
+		out["member"] = memberJSON(hm)
 	}
 	return out, nil
 }
@@ -545,6 +705,7 @@ type jtaxYear struct {
 			HSA  float64 `json:"hsa"`
 		} `json:"pre_tax"`
 		Ordinary        float64   `json:"ordinary_income"`
+		Benefits        float64   `json:"social_security_benefits"`
 		Interest        float64   `json:"interest"`
 		EarlyWithdrawal float64   `json:"early_withdrawal"`
 		ShortTermGains  float64   `json:"short_term_gains"`
@@ -600,6 +761,7 @@ func cmdTaxYear(c *call) (any, error) {
 	in := &out.Inputs
 	in.Wages, in.VestWages = cents(ty.Wages), cents(ty.VestWages)
 	in.PreTax.K401, in.PreTax.IRA, in.PreTax.HSA = cents(ty.K401), cents(ty.IRA), cents(ty.HSA)
+	in.Benefits = cents(ty.Benefits)
 	in.Ordinary, in.Interest, in.EarlyWithdrawal = cents(ty.Ordinary), cents(ty.Interest), cents(ty.EarlyWithdrawal)
 	in.ShortTermGains, in.LongTermGains = cents(ty.ShortTermGains), cents(ty.LongTermGains)
 	in.DependentAges, in.Contrib529 = ages, contrib

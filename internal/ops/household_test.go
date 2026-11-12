@@ -108,6 +108,47 @@ func TestHouseholdMemberRefusals(t *testing.T) {
 	}
 }
 
+func TestHouseholdMemberBenefits(t *testing.T) {
+	st, rec := seed(t)
+	born := model.D(1980, time.February, 3)
+	good := model.HouseholdMember{Name: "Fed", Birth: born, Role: model.RoleSpouse, SSBenefit: 1500, SSClaimAge: 65,
+		FERSHigh3: 90000, FERSYears: 30, FERSSeparationAge: 57, FERSStartAge: 57, FERSSurvivor: model.SurvivorFull}
+	res, err := AddHouseholdMember(st, rec, good, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reload(t, st).Household.Members; got[len(got)-1] != good {
+		t.Errorf("stored %+v", got[len(got)-1])
+	}
+	for name, m := range map[string]model.HouseholdMember{
+		"dependent with a benefit": {Name: "Kid", Birth: born, Role: model.RoleDependent, SSBenefit: 100, SSClaimAge: 67},
+		"dependent with FERS":      {Name: "Kid", Birth: born, Role: model.RoleDependent, FERSHigh3: 1000, FERSYears: 10, FERSSeparationAge: 60, FERSStartAge: 60},
+		"claim age too low":        {Name: "New", Birth: born, Role: model.RoleEarner, SSBenefit: 100, SSClaimAge: 61},
+		"claim age too high":       {Name: "New", Birth: born, Role: model.RoleEarner, SSBenefit: 100, SSClaimAge: 71},
+		"benefit without an age":   {Name: "New", Birth: born, Role: model.RoleEarner, SSBenefit: 100},
+		"negative benefit":         {Name: "New", Birth: born, Role: model.RoleEarner, SSBenefit: -1, SSClaimAge: 67},
+		"years without high-3":     {Name: "New", Birth: born, Role: model.RoleEarner, FERSYears: 20},
+		"no service":               {Name: "New", Birth: born, Role: model.RoleEarner, FERSHigh3: 1000, FERSSeparationAge: 60, FERSStartAge: 60},
+		"start before separation":  {Name: "New", Birth: born, Role: model.RoleEarner, FERSHigh3: 1000, FERSYears: 30, FERSSeparationAge: 60, FERSStartAge: 58},
+		"start too early":          {Name: "New", Birth: born, Role: model.RoleEarner, FERSHigh3: 1000, FERSYears: 30, FERSSeparationAge: 50, FERSStartAge: 50},
+		"too little service":       {Name: "New", Birth: born, Role: model.RoleEarner, FERSHigh3: 1000, FERSYears: 9, FERSSeparationAge: 57, FERSStartAge: 57},
+		"odd survivor option":      {Name: "New", Birth: born, Role: model.RoleEarner, FERSHigh3: 1000, FERSYears: 30, FERSSeparationAge: 57, FERSStartAge: 57, FERSSurvivor: "most"},
+	} {
+		if _, err := AddHouseholdMember(st, res.Record, m, Options{}); !errors.Is(err, ErrInvalidValue) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// A refusal on edit names the reason, and a valid edit keeps the rest.
+	claim, role := 70, model.RoleDependent
+	res, err = EditHouseholdMember(st, res.Record, "Fed", MemberChange{SSClaimAge: &claim}, Options{})
+	if err != nil || res.Member.SSClaimAge != 70 || res.Member.FERSYears != 30 {
+		t.Fatalf("edit: %+v, %v", res.Member, err)
+	}
+	if _, err := EditHouseholdMember(st, res.Record, "Fed", MemberChange{Role: &role}, Options{}); !errors.Is(err, ErrInvalidValue) {
+		t.Errorf("a member with benefits made a dependent: %v", err)
+	}
+}
+
 func TestIncomeTypeOfItems(t *testing.T) {
 	st, rec := seed(t)
 	it := baseItem1()

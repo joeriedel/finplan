@@ -364,3 +364,21 @@ func TestCrashProjectionShocksAndRebalances(t *testing.T) {
 		t.Errorf("the shock alone realized %v short and %v long", shock.ShortTermGains, shock.LongTermGains)
 	}
 }
+
+func TestFamilyBenefits(t *testing.T) {
+	rec := Family()
+	a, b := rec.Household.Members[0], rec.Household.Members[1]
+	if a.SSBenefit != 3100 || a.SSClaimAge != 67 || a.HasFERS() {
+		t.Errorf("Parent A %+v", a)
+	}
+	if b.SSBenefit != 1200 || b.SSClaimAge != 62 || b.FERSHigh3 != 105000 || b.FERSYears != 30 || b.FERSStartAge != 57 || b.FERSSurvivor != model.SurvivorPartial {
+		t.Errorf("Parent B %+v", b)
+	}
+	got, _, err := engine.BenefitsOf(rec, "", 2060)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].SSOwn <= 0 || got[1].SSSpousal <= 0 || got[1].FERSAnnuity <= 0 {
+		t.Errorf("benefits in 2060: %+v", got)
+	}
+}

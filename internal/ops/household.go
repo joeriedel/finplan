@@ -4,8 +4,10 @@
 package ops
 
 import (
+	"math"
 	"strings"
 
+	"github.com/joeriedel/finplan/internal/benefits"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/store"
 	"github.com/joeriedel/finplan/internal/tax"
@@ -69,10 +71,48 @@ func checkHouseholdMember(rec *model.Record, m model.HouseholdMember, skip int) 
 	if y, _, _ := m.Birth.YMD(); m.Birth == 0 || y < 1900 || m.Birth > rec.Today {
 		return m, refuse(ErrInvalidValue, "the birth date %v must be from 1900 to today", m.Birth)
 	}
-	return m, nil
+	return m, checkBenefits(m)
 }
 
-// AddHouseholdMember adds a member to the household. The name must be unique among the members, ignoring case, the role earner, spouse or dependent, and the birth date a date from 1900 to the record's today.
+// checkBenefits refuses Social Security and FERS inputs that are out of range, set on a dependent, or a FERS annuity the service does not allow.
+func checkBenefits(m model.HouseholdMember) error {
+	hasSS := m.SSBenefit != 0 || m.SSClaimAge != 0
+	if m.Role == model.RoleDependent && (hasSS || m != (model.HouseholdMember{Name: m.Name, Birth: m.Birth, Role: m.Role})) {
+		return refuse(ErrInvalidValue, "a dependent has no Social Security or FERS benefits")
+	}
+	if m.SSBenefit < 0 || math.IsNaN(m.SSBenefit) || math.IsInf(m.SSBenefit, 0) {
+		return refuse(ErrInvalidValue, "the Social Security benefit %v must be zero or more", m.SSBenefit)
+	}
+	if (m.SSBenefit > 0 || m.SSClaimAge != 0) && (m.SSClaimAge < benefits.MinClaimAge || m.SSClaimAge > benefits.MaxClaimAge) {
+		return refuse(ErrInvalidValue, "the Social Security claim age %d must be from %d to %d", m.SSClaimAge, benefits.MinClaimAge, benefits.MaxClaimAge)
+	}
+	if !m.FERSSurvivor.Valid() {
+		return refuse(ErrInvalidValue, "the survivor option %q must be none, partial or full", m.FERSSurvivor)
+	}
+	if !m.HasFERS() {
+		if m.FERSHigh3 != 0 || m.FERSYears != 0 || m.FERSSeparationAge != 0 || m.FERSStartAge != 0 || (m.FERSSurvivor != "" && m.FERSSurvivor != model.SurvivorNone) {
+			return refuse(ErrInvalidValue, "the FERS inputs need a high-3 salary above zero")
+		}
+		return nil
+	}
+	switch {
+	case math.IsNaN(m.FERSHigh3) || math.IsInf(m.FERSHigh3, 0):
+		return refuse(ErrInvalidValue, "the FERS high-3 salary %v must be a number", m.FERSHigh3)
+	case m.FERSYears < 1 || m.FERSYears > 60:
+		return refuse(ErrInvalidValue, "the years of FERS service %d must be from 1 to 60", m.FERSYears)
+	case m.FERSSeparationAge < 18 || m.FERSSeparationAge > 90:
+		return refuse(ErrInvalidValue, "the FERS separation age %d must be from 18 to 90", m.FERSSeparationAge)
+	case m.FERSStartAge < m.FERSSeparationAge || m.FERSStartAge > 90:
+		return refuse(ErrInvalidValue, "the FERS annuity start age %d must be from the separation age %d to 90", m.FERSStartAge, m.FERSSeparationAge)
+	}
+	by, _, _ := m.Birth.YMD()
+	if _, err := benefits.Eligibility(by, m.FERSYears, m.FERSStartAge); err != nil {
+		return refuse(ErrInvalidValue, "%v", err)
+	}
+	return nil
+}
+
+// AddHouseholdMember adds a member to the household. The name must be unique among the members, ignoring case, the role earner, spouse or dependent, and the birth date a date from 1900 to the record's today. The Social Security and FERS inputs are checked as EditHouseholdMember does.
 func AddHouseholdMember(st *store.Store, rec *model.Record, m model.HouseholdMember, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		m, err := checkHouseholdMember(next, m, -1)
@@ -89,9 +129,18 @@ type MemberChange struct {
 	Name  *string
 	Birth *model.Date
 	Role  *model.Role
+
+	SSBenefit  *float64
+	SSClaimAge *int
+
+	FERSHigh3         *float64
+	FERSYears         *int
+	FERSSeparationAge *int
+	FERSStartAge      *int
+	FERSSurvivor      *model.Survivor
 }
 
-// EditHouseholdMember changes the member of the name. The same checks as AddHouseholdMember apply.
+// EditHouseholdMember changes the member of the name. The same checks as AddHouseholdMember apply, and the Social Security and FERS inputs are checked together: a claim age from 62 to 70 when there is a benefit (a spouse's claim age alone asks for the spousal benefit), a FERS annuity only with a high-3 salary, 1 to 60 years of service, a separation age from 18 and a start age not before it that the years of service allow, and none of them on a dependent.
 func EditHouseholdMember(st *store.Store, rec *model.Record, name string, c MemberChange, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		i := next.Household.Member(name)
@@ -107,6 +156,27 @@ func EditHouseholdMember(st *store.Store, rec *model.Record, name string, c Memb
 		}
 		if c.Role != nil {
 			m.Role = *c.Role
+		}
+		if c.SSBenefit != nil {
+			m.SSBenefit = *c.SSBenefit
+		}
+		if c.SSClaimAge != nil {
+			m.SSClaimAge = *c.SSClaimAge
+		}
+		if c.FERSHigh3 != nil {
+			m.FERSHigh3 = *c.FERSHigh3
+		}
+		if c.FERSYears != nil {
+			m.FERSYears = *c.FERSYears
+		}
+		if c.FERSSeparationAge != nil {
+			m.FERSSeparationAge = *c.FERSSeparationAge
+		}
+		if c.FERSStartAge != nil {
+			m.FERSStartAge = *c.FERSStartAge
+		}
+		if c.FERSSurvivor != nil {
+			m.FERSSurvivor = *c.FERSSurvivor
 		}
 		m, err := checkHouseholdMember(next, m, i)
 		if err != nil {

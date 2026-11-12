@@ -128,6 +128,8 @@ type run struct {
 	paths map[model.AccountID]*path
 	diag  Diagnostics
 	tax   *householdTax
+	// benefits are the Social Security and FERS items synthesized for the query.
+	benefits []benefit
 }
 
 func (r *run) eval(d model.Date) model.Evaluation {
@@ -322,6 +324,14 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 		}
 	}
 
+	// Social Security and FERS are income items of the query only.
+	r.benefits = memberBenefits(rec, infl, horizon, &r.diag)
+	kinds := map[string]benefitKind{}
+	for _, b := range r.benefits {
+		items = append(items, b.item)
+		kinds[b.item.ID] = b.kind
+	}
+
 	// Shocks hit every account holding the class; a rebalance names its account.
 	var shocks []model.Shock
 	rebalances := map[model.AccountID][]model.Rebalance{}
@@ -512,6 +522,7 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 	}
 	// The tax of a year depends on the interest of the savings and checking accounts and lands on the reconciliation account, so their paths are built with the target's, wherever they sit.
 	ht := newHouseholdTax(rec, items, amounts, growths, infl, plans, hyp, &r.diag)
+	ht.benefits = kinds
 	r.tax = ht
 	var all, savers []*path
 	seen := map[model.AccountID]bool{}
@@ -1052,7 +1063,7 @@ func (p *path) flows(rec *model.Record, it model.BudgetItem, d model.Date, amt f
 	switch it.Kind {
 	case model.ItemIncome:
 		if it.Account == p.acct.ID {
-			add(rankIncome, CauseIncome, amt, "")
+			add(rankIncome, p.ht.incomeCause(it.ID), amt, "")
 			if it.Income() == model.IncomeWages {
 				add(rankIncome, CauseTax, -p.ht.paycheckTax(it.ID, d), "")
 			}

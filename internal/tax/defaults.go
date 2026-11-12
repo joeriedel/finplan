@@ -19,17 +19,18 @@ func brackets(tops ...float64) []Bracket {
 	return bs
 }
 
-// fedStatuses builds the rules by filing status. The thresholds of the additional Medicare tax and the net investment income tax (26 U.S.C. 3101(b)(2), 1411) and the start of the child tax credit phase-out (26 U.S.C. 24(b)) are statutory and the same every year.
+// fedStatuses builds the rules by filing status. The thresholds of the additional Medicare tax and the net investment income tax (26 U.S.C. 3101(b)(2), 1411), the start of the child tax credit phase-out (26 U.S.C. 24(b)) and the thresholds of the taxation of Social Security benefits (26 U.S.C. 86) are statutory and the same every year.
 func fedStatuses(mfj, single, hoh, mfs FedStatus) map[FilingStatus]FedStatus {
-	set := func(s FedStatus, phaseOut, medicare float64) FedStatus {
+	set := func(s FedStatus, phaseOut, medicare, benefitBase, benefitAdjusted float64) FedStatus {
 		s.ChildCreditPhaseOut, s.AdditionalMedicareThreshold, s.NIITThreshold = phaseOut, medicare, medicare
+		s.BenefitBase, s.BenefitAdjusted = benefitBase, benefitAdjusted
 		return s
 	}
 	return map[FilingStatus]FedStatus{
-		MarriedJoint:    set(mfj, 400000, 250000),
-		Single:          set(single, 200000, 200000),
-		HeadOfHousehold: set(hoh, 200000, 200000),
-		MarriedSeparate: set(mfs, 200000, 125000),
+		MarriedJoint:    set(mfj, 400000, 250000, 32000, 44000),
+		Single:          set(single, 200000, 200000, 25000, 34000),
+		HeadOfHousehold: set(hoh, 200000, 200000, 25000, 34000),
+		MarriedSeparate: set(mfs, 200000, 125000, 0, 0),
 	}
 }
 

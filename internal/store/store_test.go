@@ -121,7 +121,7 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	want := demodata.Family()
 	mustSave(t, s, want)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 9 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 10 {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
 	// Format 1 documents have no mode and no growth; a schedule of no growth is not stored.
@@ -1448,6 +1448,27 @@ func TestHouseholdAndTaxTablesRoundTrip(t *testing.T) {
 	mustSave(t, s, want)
 	if got := mustLoad(t, s); !reflect.DeepEqual(got, want) {
 		t.Fatalf("loaded household %+v and tables differ from the saved ones", got.Household)
+	}
+}
+
+func TestMemberBenefitsRoundTripAndOldMembersHaveNone(t *testing.T) {
+	s, _ := openTemp(t)
+	want := demodata.Family()
+	want.Household.Members[0].SSBenefit, want.Household.Members[0].SSClaimAge = 2500, 68
+	want.Household.Members[1].FERSHigh3, want.Household.Members[1].FERSYears = 90000, 25
+	want.Household.Members[1].FERSSeparationAge, want.Household.Members[1].FERSStartAge = 60, 60
+	want.Household.Members[1].FERSSurvivor = model.SurvivorFull
+	mustSave(t, s, want)
+	if got := mustLoad(t, s); !reflect.DeepEqual(got.Household, want.Household) {
+		t.Fatalf("loaded members %+v differ from the saved ones %+v", got.Household.Members, want.Household.Members)
+	}
+	old := fmt.Sprintf(`{"members":[{"name":"Old","birth":%d,"role":"earner"}],"filing":"mfj","state":"VA"}`, model.D(1980, 1, 2))
+	if _, err := s.db.Exec(`UPDATE documents SET body = ?, format = 9 WHERE kind = ?`, old, kindHousehold); err != nil {
+		t.Fatal(err)
+	}
+	m := mustLoad(t, s).Household.Members
+	if len(m) != 1 || m[0].Name != "Old" || m[0].SSBenefit != 0 || m[0].HasFERS() {
+		t.Errorf("a format 9 member loads as %+v", m)
 	}
 }
 

@@ -94,7 +94,7 @@ func (s *taxState) renameProjection(from, to string) {
 // taxRows lists the year's figures in the order the CLI's tax year command reports them. Pre-tax deductions are what the tax rules deducted after the contribution limits, so they can be less than the contributions.
 func taxRows(rec *model.Record, ty *engine.TaxYear) []taxRow {
 	r := ty.Result
-	income := ty.Wages + ty.VestWages + ty.Ordinary + ty.EarlyWithdrawal + tax.GainsInAGI(ty.ShortTermGains, ty.LongTermGains, ty.Input.Status)
+	income := ty.Wages + ty.VestWages + ty.Ordinary + r.TaxableBenefits + ty.EarlyWithdrawal + tax.GainsInAGI(ty.ShortTermGains, ty.LongTermGains, ty.Input.Status)
 	deducted := income - r.AGI
 	state := "State tax"
 	if ty.Input.State != "" {
@@ -105,6 +105,9 @@ func taxRows(rec *model.Record, ty *engine.TaxYear) []taxRow {
 		{"Wages", formatDollars(ty.Wages), ""},
 		{"RSU vests", formatDollars(ty.VestWages), ""},
 		{"Other income", formatDollars(ty.Ordinary), "interest " + formatDollars(ty.Interest)},
+	}
+	if ty.Benefits != 0 {
+		rows = append(rows, taxRow{"Social Security", formatDollars(ty.Benefits), formatDollars(r.TaxableBenefits) + " taxable"})
 	}
 	if ty.EarlyWithdrawal != 0 {
 		rows = append(rows, taxRow{"Early withdrawals", formatDollars(ty.EarlyWithdrawal), ""})

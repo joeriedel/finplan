@@ -44,6 +44,8 @@ type TaxYear struct {
 	Wages, VestWages float64
 	// K401, IRA and HSA are the year's pre-tax contributions before the limits apply.
 	K401, IRA, HSA float64
+	// Benefits are the Social Security benefits received; Result.TaxableBenefits is the part that is taxed.
+	Benefits float64
 	// Ordinary is the income that is not wages: other-ordinary income items, interest and taxable withdrawals that are not early.
 	Ordinary float64
 	// Interest is the interest and growth earned on savings and checking accounts.
@@ -67,6 +69,17 @@ func (t *TaxYear) Withheld() float64 { return t.WithheldPaychecks + t.WithheldVe
 
 // TaxYearOf returns the household's tax for the calendar year under the projection, "" for reality.
 func TaxYearOf(rec *model.Record, projection string, year int) (*TaxYear, error) {
+	r, err := taxRun(rec, projection, year)
+	if err != nil {
+		return nil, err
+	}
+	out := r.tax.result(year)
+	out.Diagnostics = r.diag
+	return out, nil
+}
+
+// taxRun prepares a query that reconciles the tax of the calendar year.
+func taxRun(rec *model.Record, projection string, year int) (*run, error) {
 	view, err := rec.For(projection)
 	if err != nil {
 		return nil, err
@@ -80,13 +93,7 @@ func TaxYearOf(rec *model.Record, projection string, year int) (*TaxYear, error)
 	default:
 		return nil, fmt.Errorf("engine: the record has no accounts")
 	}
-	r, err := prepare(rec, projection, target, model.D(year+1, time.April, reconciliationDay))
-	if err != nil {
-		return nil, err
-	}
-	out := r.tax.result(year)
-	out.Diagnostics = r.diag
-	return out, nil
+	return prepare(rec, projection, target, model.D(year+1, time.April, reconciliationDay))
 }
 
 // paycheck is one wages payment of an income item.
@@ -110,6 +117,7 @@ type vestPay struct {
 type yearInputs struct {
 	paychecks    []paycheck
 	wages        float64
+	benefits     float64 // Social Security benefits
 	ordinary     float64 // other-ordinary income items and taxable withdrawals that are not early
 	early        float64
 	vests        float64
@@ -145,6 +153,8 @@ type householdTax struct {
 	savers []*path
 	// lots are the paths of taxable investment accounts, whose sales realize gains.
 	lots []*path
+	// benefits maps the id of a synthesized benefit item to its kind.
+	benefits map[string]benefitKind
 }
 
 func newHouseholdTax(rec *model.Record, items []model.BudgetItem, amounts, growths map[string]model.Schedule, infl model.Schedule, plans []*equityPlan, hypothetical map[string]model.Date, diag *Diagnostics) *householdTax {
@@ -231,6 +241,8 @@ func (h *householdTax) year(y int) *yearInputs {
 				if it.Income() == model.IncomeWages {
 					in.paychecks = append(in.paychecks, paycheck{it.ID, d, amt})
 					in.wages += amt
+				} else if k, ok := h.benefits[it.ID]; ok && k.socialSecurity() {
+					in.benefits += amt
 				} else {
 					in.ordinary += amt
 				}
@@ -457,6 +469,7 @@ func (h *householdTax) compute(y int, interest []*path) *TaxYear {
 		WithheldPaychecks: in.paycheckWithheld, WithheldVests: in.vestWithheld,
 		ReconciliationDate: model.D(y+1, time.April, reconciliationDay), ReconciliationAccount: ReconciliationAccount(h.rec, model.D(y+1, time.April, reconciliationDay)),
 	}
+	t.Benefits = in.benefits
 	t.Interest = h.interest(y, interest)
 	t.Ordinary = in.ordinary + t.Interest
 	for _, p := range h.lots {
@@ -467,7 +480,7 @@ func (h *householdTax) compute(y int, interest []*path) *TaxYear {
 	t.Input = tax.Input{
 		Year: y, Status: hh.Filing, State: hh.State, DependentAges: hh.DependentAges(y), Inflation: h.inflation(y),
 		Earners:     []tax.Earner{{Wages: in.wages + in.vests, K401: in.k401, IRA: in.ira, HSA: in.hsa}},
-		OtherIncome: t.Ordinary, NetInvestmentIncome: t.Interest, EarlyWithdrawal: in.early,
+		OtherIncome: t.Ordinary, BenefitIncome: t.Benefits, NetInvestmentIncome: t.Interest, EarlyWithdrawal: in.early,
 		ShortTermGains: t.ShortTermGains, LongTermGains: t.LongTermGains,
 	}
 	for _, a := range h.rec.Accounts {

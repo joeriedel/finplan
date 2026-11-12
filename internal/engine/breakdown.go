@@ -14,34 +14,36 @@ import (
 // Cause names why a balance changed.
 type Cause string
 
-// Causes. GainsTax is the part of a year's tax that the capital gains realized in taxable accounts add, and Shock the change a market shock made to the holdings of a class (a line with a Class). Grant is the value of new RSU grants added to an equity account and Vest the net proceeds of its vests, which leave it for the deposit account; the withholding of a vest is Tax. Match is the employer's deposit on a paycheck. Interest is what a credit card owing money compounds, or the interest part of a mortgage payment, and Principal the part of a payment that pays the mortgage down; a mortgage payment shows on the paying account as interest and principal and on the mortgage as principal. Unexplained is the part of an actual change that snapshots show and transactions do not.
+// Causes. SocialSecurity and FERS are the benefits the household's members receive, which Income would otherwise show. GainsTax is the part of a year's tax that the capital gains realized in taxable accounts add, and Shock the change a market shock made to the holdings of a class (a line with a Class). Grant is the value of new RSU grants added to an equity account and Vest the net proceeds of its vests, which leave it for the deposit account; the withholding of a vest is Tax. Match is the employer's deposit on a paycheck. Interest is what a credit card owing money compounds, or the interest part of a mortgage payment, and Principal the part of a payment that pays the mortgage down; a mortgage payment shows on the paying account as interest and principal and on the mortgage as principal. Unexplained is the part of an actual change that snapshots show and transactions do not.
 // Default is a change that comes from default balances, including a hand-off between defaults and
 // actual data.
 const (
-	CauseIncome       Cause = "income"
-	CauseExpense      Cause = "expense"
-	CauseTransfer     Cause = "transfer"
-	CauseContribution Cause = "contribution"
-	CauseWithdrawal   Cause = "withdrawal"
-	CauseMatch        Cause = "match"
-	CauseInterest     Cause = "interest"
-	CausePrincipal    Cause = "principal"
-	CauseTax          Cause = "tax"
-	CauseGainsTax     Cause = "gains tax"
-	CauseShock        Cause = "shock"
-	CauseGrant        Cause = "grant"
-	CauseVest         Cause = "vest"
-	CauseGrowth       Cause = "growth"
-	CauseOpening      Cause = "opening"
-	CauseUnexplained  Cause = "unexplained"
-	CauseDefault      Cause = "default"
+	CauseIncome         Cause = "income"
+	CauseSocialSecurity Cause = "social security"
+	CauseFERS           Cause = "fers"
+	CauseExpense        Cause = "expense"
+	CauseTransfer       Cause = "transfer"
+	CauseContribution   Cause = "contribution"
+	CauseWithdrawal     Cause = "withdrawal"
+	CauseMatch          Cause = "match"
+	CauseInterest       Cause = "interest"
+	CausePrincipal      Cause = "principal"
+	CauseTax            Cause = "tax"
+	CauseGainsTax       Cause = "gains tax"
+	CauseShock          Cause = "shock"
+	CauseGrant          Cause = "grant"
+	CauseVest           Cause = "vest"
+	CauseGrowth         Cause = "growth"
+	CauseOpening        Cause = "opening"
+	CauseUnexplained    Cause = "unexplained"
+	CauseDefault        Cause = "default"
 )
 
 // residualTolerance is the size below which a leftover is float rounding, not a change to report.
 const residualTolerance = 1e-6
 
 var causeOrder = []Cause{
-	CauseIncome, CauseExpense, CauseTransfer, CauseContribution, CauseMatch, CauseWithdrawal, CausePrincipal, CauseInterest,
+	CauseIncome, CauseSocialSecurity, CauseFERS, CauseExpense, CauseTransfer, CauseContribution, CauseMatch, CauseWithdrawal, CausePrincipal, CauseInterest,
 	CauseGrant, CauseVest, CauseTax, CauseGainsTax, CauseGrowth, CauseShock, CauseOpening, CauseUnexplained, CauseDefault,
 }
 

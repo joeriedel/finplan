@@ -85,6 +85,8 @@ var fedSpec = taxSpec[tax.Federal]{
 		fedStatusField("fedniit", "NIIT threshold", func(s *tax.FedStatus) *float64 { return &s.NIITThreshold }),
 		fedStatusField("fedltcg15", "Long-term gains 15% over", func(s *tax.FedStatus) *float64 { return &s.LongTermGains15Over }),
 		fedStatusField("fedltcg20", "Long-term gains 20% over", func(s *tax.FedStatus) *float64 { return &s.LongTermGains20Over }),
+		fedStatusField("fedbenbase", "Benefit tax base", func(s *tax.FedStatus) *float64 { return &s.BenefitBase }),
+		fedStatusField("fedbenadj", "Benefit tax adjusted", func(s *tax.FedStatus) *float64 { return &s.BenefitAdjusted }),
 		fedField("fedchild", "Child credit", false, func(f *tax.Federal) *float64 { return &f.ChildCredit }),
 		fedField("fedother", "Other dependent credit", false, func(f *tax.Federal) *float64 { return &f.OtherDependentCredit }),
 		fedField("fedpenalty", "Early withdrawal penalty", true, func(f *tax.Federal) *float64 { return &f.PenaltyRate }),

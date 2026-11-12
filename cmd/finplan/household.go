@@ -5,6 +5,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -76,8 +77,111 @@ func memberChange(field, text string) (ops.MemberChange, error) {
 		ch.Birth = &d
 	case "role":
 		ch.Role = model.Ptr(model.Role(text))
+	case "ssbenefit", "high3":
+		v := 0.0
+		if text != "" {
+			var err error
+			if v, err = parseMoneyText(text); err != nil {
+				return ch, err
+			}
+		}
+		if field == "ssbenefit" {
+			ch.SSBenefit = &v
+		} else {
+			ch.FERSHigh3 = &v
+		}
+	case "ssclaim", "years", "sep", "start":
+		n := 0
+		if text != "" {
+			var err error
+			if n, err = strconv.Atoi(text); err != nil {
+				return ch, fmt.Errorf("%q is not a whole number", text)
+			}
+		}
+		switch field {
+		case "ssclaim":
+			ch.SSClaimAge = &n
+		case "years":
+			ch.FERSYears = &n
+		case "sep":
+			ch.FERSSeparationAge = &n
+		default:
+			ch.FERSStartAge = &n
+		}
+	case "survivor":
+		ch.FERSSurvivor = model.Ptr(model.Survivor(text))
 	}
 	return ch, nil
+}
+
+// intText is the text of a whole-number field: empty for zero.
+func intText(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return strconv.Itoa(n)
+}
+
+// moneyText is the text of an amount field: empty for zero.
+func moneyText(v float64) string {
+	if v == 0 {
+		return ""
+	}
+	return formatMoneyText(v)
+}
+
+// survivorLabels are the display names of model.Survivors, in the same order.
+var survivorLabels = []string{"None", "Partial (5%)", "Full (10%)"}
+
+// benefits draws the collapsible Benefits section of member i, which is open for this frame if force: the Social Security and FERS inputs, each edited through ops.EditHouseholdMember.
+func (t *acctTab) benefits(i int, m model.HouseholdMember, force bool) {
+	em := imgui.FontSize()
+	n := strconv.Itoa(i)
+	if force {
+		imgui.SetNextItemOpenV(true, imgui.CondAlways)
+	}
+	if !imgui.CollapsingHeaderTreeNodeFlags("Benefits##hhbenefits") {
+		return
+	}
+	imgui.PushIDStr("benefits")
+	defer imgui.PopID()
+	row := func(label, field, hint, value, note string) {
+		t.label(label)
+		if s, done := t.field("hh"+field+n, hint, value, em*8); done {
+			t.editMember(i, field, s)
+		}
+		if note != "" {
+			imgui.SameLine()
+			disabledText(note)
+		}
+	}
+	row("Social Security", "ssbenefit", "none", moneyText(m.SSBenefit), "a month at full retirement age, today's dollars")
+	row("Claim age", "ssclaim", "62-70", intText(m.SSClaimAge), "")
+	row("FERS high-3", "high3", "none", moneyText(m.FERSHigh3), "a year, today's dollars")
+	row("Years of service", "years", "", intText(m.FERSYears), "")
+	row("Separation age", "sep", "", intText(m.FERSSeparationAge), "")
+	row("Annuity start age", "start", "", intText(m.FERSStartAge), "")
+	t.label("Survivor option")
+	survivor := m.FERSSurvivor
+	if survivor == "" {
+		survivor = model.SurvivorNone
+	}
+	if k := pick("hhsurvivor"+n, survivorLabels[slices.Index(model.Survivors, survivor)], em*10, survivorLabels, slices.Index(model.Survivors, survivor)); k >= 0 {
+		t.editMember(i, "survivor", string(model.Survivors[k]))
+	}
+	if e := t.errs["hhsurvivor"+n]; e != "" {
+		errorBeside("Not changed: " + e)
+	}
+	if m.SSBenefit > 0 || m.HasFERS() {
+		var parts []string
+		if m.SSBenefit > 0 {
+			parts = append(parts, formatDollars(m.SSBenefit)+" a month of Social Security at "+strconv.Itoa(m.SSClaimAge))
+		}
+		if m.HasFERS() {
+			parts = append(parts, "FERS on a high-3 of "+formatDollars(m.FERSHigh3))
+		}
+		disabledText(strings.Join(parts, ", "))
+	}
 }
 
 // stateNames lists the names of the state tax tables the record has, in the order of its tables.
@@ -182,8 +286,12 @@ func (t *acctTab) household() {
 				return ops.RemoveHouseholdMember(t.a.st, t.a.rec, m.Name, ops.Options{})
 			})
 		}
+		if m.Role != model.RoleDependent {
+			t.benefits(i, m, t.openBenefits)
+		}
 		imgui.PopID()
 	}
+	t.openBenefits = false
 
 	f := &t.hh
 	imgui.AlignTextToFramePadding()

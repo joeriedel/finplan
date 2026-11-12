@@ -38,6 +38,8 @@ type Input struct {
 	EarlyWithdrawal float64
 	// ShortTermGains and LongTermGains are the year's net realized capital gains on assets held a year or less and more than a year; a loss is negative. Short-term gains are ordinary income and long-term gains are taxed at the preferential rates on top of the ordinary taxable income. A net loss deducts up to 3,000 (1,500 married filing separately) from ordinary income, and what is left is not carried forward. Both kinds of gains count in the adjusted gross income and the net investment income.
 	ShortTermGains, LongTermGains float64
+	// BenefitIncome is the year's Social Security benefits received. Part of it is taxable by the provisional income formula and the state does not tax it. It is not the payroll tax, which is Result.SocialSecurity.
+	BenefitIncome float64
 	// Inflation is the annual rate that indexes a year past the last federal table.
 	Inflation float64
 }
@@ -64,6 +66,8 @@ type Result struct {
 	SocialSecurity     float64
 	Medicare           float64
 	AdditionalMedicare float64
+	// TaxableBenefits is the part of the Social Security benefits in the adjusted gross income.
+	TaxableBenefits float64
 	// Total is the federal tax after credits, the NIIT, the penalty, the state tax and the payroll taxes.
 	Total float64
 }
@@ -175,6 +179,21 @@ func GainsInAGI(short, long float64, status FilingStatus) float64 {
 	return ordinary + preferred - deduction
 }
 
+// taxableBenefits is the part of the benefits that the federal formula taxes: the lesser of 85% of the benefits and half of the provisional income over the base threshold plus another 35% over the adjusted threshold (the first tier capped at half of the benefits). other is the adjusted gross income without the benefits.
+func taxableBenefits(benefits, other, base, adjusted float64) float64 {
+	if benefits <= 0 {
+		return 0
+	}
+	provisional := other + benefits/2
+	if provisional <= base {
+		return 0
+	}
+	first := math.Min(provisional-base, adjusted-base) / 2
+	first = math.Min(first, benefits/2)
+	second := 0.85 * math.Max(0, provisional-adjusted)
+	return math.Min(0.85*benefits, first+second)
+}
+
 // longTermTax is the tax on gains stacked on top of the ordinary taxable income base: 0% below over15, 15% up to over20 and 20% above.
 func longTermTax(base, gains, over15, over20 float64) float64 {
 	top := base + gains
@@ -224,6 +243,17 @@ func Compute(t Tables, in Input) (Result, error) {
 
 	ordinaryGains, preferred, lossDeduction := netGains(in.ShortTermGains, in.LongTermGains, in.Status)
 	r.AGI = wages + in.OtherIncome + in.EarlyWithdrawal + ordinaryGains + preferred - lossDeduction - deductions
+	if in.BenefitIncome > 0 {
+		base, adjusted := rules.BenefitBase, rules.BenefitAdjusted
+		if base == 0 && adjusted == 0 {
+			// A stored table from before these thresholds existed has none: use the shipped ones for the year.
+			if d, err := Defaults().federalFor(in.Year, in.Inflation); err == nil {
+				base, adjusted = d.Status[in.Status].BenefitBase, d.Status[in.Status].BenefitAdjusted
+			}
+		}
+		r.TaxableBenefits = taxableBenefits(in.BenefitIncome, r.AGI, base, adjusted)
+		r.AGI += r.TaxableBenefits
+	}
 	r.FederalTaxable = math.Max(0, r.AGI-rules.StandardDeduction)
 	preferredTaxable := math.Min(preferred, r.FederalTaxable)
 	r.FederalTax = bracketTax(rules.Brackets, r.FederalTaxable-preferredTaxable)
@@ -259,7 +289,8 @@ func Compute(t Tables, in Input) (Result, error) {
 		if err != nil {
 			return r, err
 		}
-		income := r.AGI - s.StandardDeduction[in.Status] -
+		// The state does not tax Social Security benefits.
+		income := r.AGI - r.TaxableBenefits - s.StandardDeduction[in.Status] -
 			s.Exemption*float64(in.Status.Filers()) - s.DependentExemption*float64(len(in.DependentAges))
 		for _, c := range in.Contrib529 {
 			income -= capped(c, s.Cap529)

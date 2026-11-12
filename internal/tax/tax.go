@@ -64,6 +64,9 @@ type FedStatus struct {
 	// LongTermGains15Over and LongTermGains20Over are the taxable income above which long-term capital gains are taxed at 15% and at 20%; below the first they are taxed at 0%. They are indexed like the brackets. A table that sets neither borrows the shipped values.
 	LongTermGains15Over float64 `json:"long_term_gains_15_over"`
 	LongTermGains20Over float64 `json:"long_term_gains_20_over"`
+	// BenefitBase and BenefitAdjusted are the two provisional income thresholds of the taxation of Social Security benefits (26 U.S.C. 86): up to half of the benefits above the base and 85% above the adjusted threshold are taxable. Both are set by statute and not indexed. A table that sets neither borrows the shipped values.
+	BenefitBase     float64 `json:"benefit_base"`
+	BenefitAdjusted float64 `json:"benefit_adjusted"`
 }
 
 // Federal is one year of federal income tax and payroll tax rules.
@@ -266,6 +269,9 @@ func (f Federal) Validate() error {
 		if err := checkBrackets(s.Brackets); err != nil {
 			return fmt.Errorf("%s: %w", k, err)
 		}
+		if s.BenefitAdjusted < s.BenefitBase {
+			return fmt.Errorf("%s: the adjusted benefit threshold %v must not be below the base threshold %v", k, s.BenefitAdjusted, s.BenefitBase)
+		}
 		if s.LongTermGains20Over < s.LongTermGains15Over {
 			return fmt.Errorf("%s: the 20%% long-term gains threshold %v must not be below the 15%% threshold %v", k, s.LongTermGains20Over, s.LongTermGains15Over)
 		}
@@ -274,7 +280,8 @@ func (f Federal) Validate() error {
 			v    float64
 		}{{"standard deduction", s.StandardDeduction}, {"child credit phase-out", s.ChildCreditPhaseOut},
 			{"additional Medicare threshold", s.AdditionalMedicareThreshold}, {"NIIT threshold", s.NIITThreshold},
-			{"long-term gains 15% threshold", s.LongTermGains15Over}, {"long-term gains 20% threshold", s.LongTermGains20Over}} {
+			{"long-term gains 15% threshold", s.LongTermGains15Over}, {"long-term gains 20% threshold", s.LongTermGains20Over},
+			{"benefit base threshold", s.BenefitBase}, {"benefit adjusted threshold", s.BenefitAdjusted}} {
 			if err := checkMoney(v.name, v.v); err != nil {
 				return fmt.Errorf("%s: %w", k, err)
 			}

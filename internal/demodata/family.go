@@ -172,8 +172,9 @@ func Family() *model.Record {
 	rec.Budget = familyBudget()
 	rec.Household = model.Household{
 		Members: []model.HouseholdMember{
-			{Name: "Parent A", Birth: model.D(1985, time.March, 12), Role: model.RoleEarner},
-			{Name: "Parent B", Birth: model.D(1986, time.July, 4), Role: model.RoleSpouse},
+			{Name: "Parent A", Birth: model.D(1985, time.March, 12), Role: model.RoleEarner, SSBenefit: 3100, SSClaimAge: 67},
+			{Name: "Parent B", Birth: model.D(1986, time.July, 4), Role: model.RoleSpouse, SSBenefit: 1200, SSClaimAge: 62,
+				FERSHigh3: 105000, FERSYears: 30, FERSSeparationAge: 57, FERSStartAge: 57, FERSSurvivor: model.SurvivorPartial},
 			{Name: "Child 1", Birth: model.D(2008, time.April, 9), Role: model.RoleDependent},
 			{Name: "Child 2", Birth: model.D(2012, time.September, 20), Role: model.RoleDependent},
 			{Name: "Child 3", Birth: model.D(2015, time.May, 2), Role: model.RoleDependent},
