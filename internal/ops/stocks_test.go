@@ -28,13 +28,13 @@ func goodFocal() model.FocalGrant {
 
 func TestStockMods(t *testing.T) {
 	st, rec := seed(t)
-	for name, m := range map[string]model.Modification{
-		"set":   stockMod(demodata.Symbol, "", 0.15),
-		"scale": stockMod(demodata.Symbol, model.ModeScale, 0.5),
+	for i, m := range []model.Modification{
+		stockMod(demodata.Symbol, "", 0.15),
+		stockMod(demodata.Symbol, model.ModeScale, 0.5),
 	} {
 		res, err := AddMod(st, rec, demodata.ProjBase, m, Options{})
 		if err != nil {
-			t.Fatalf("%s: %v", name, err)
+			t.Fatalf("mod %d: %v", i, err)
 		}
 		rec = res.Record
 	}
