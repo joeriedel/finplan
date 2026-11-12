@@ -22,8 +22,8 @@ type shownSchedule []struct {
 	Value float64
 }
 
-// brokerageGrowth reads the New job brokerage growth modification through the CLI: its index and its schedule.
-func brokerageGrowth(t *testing.T, path string) (int, shownSchedule) {
+// classGrowth reads the New job us-large-cap class growth modification through the CLI: its index and its schedule.
+func classGrowth(t *testing.T, path string) (int, shownSchedule) {
 	t.Helper()
 	var show struct {
 		Modifications []struct {
@@ -35,11 +35,11 @@ func brokerageGrowth(t *testing.T, path string) (int, shownSchedule) {
 	}
 	cliJSON(t, &show, "--db", path, "projection", "show", "New job")
 	for _, m := range show.Modifications {
-		if m.Target.ID == "brokerage" && m.Property == model.PropGrowth {
+		if m.Target.Kind == string(model.KindClass) && m.Target.ID == "us-large-cap" && m.Property == model.PropGrowth {
 			return m.Index, m.Schedule
 		}
 	}
-	t.Fatal("New job has no brokerage growth modification")
+	t.Fatal("New job has no us-large-cap class growth modification")
 	return 0, nil
 }
 
@@ -112,7 +112,7 @@ func dragBrokerage(t *testing.T, s model.Schedule) model.Schedule {
 
 func TestTimelineScenarioThroughCLI(t *testing.T) {
 	path := seededFile(t)
-	idx, shown := brokerageGrowth(t, path)
+	idx, shown := classGrowth(t, path)
 	s := segmentsOf(t, shown)
 	want := []model.Segment{
 		{From: model.MinDate, Value: 0.04},
@@ -147,7 +147,7 @@ func TestTimelineScenarioThroughCLI(t *testing.T) {
 	}
 	write(t, path, string(body), "mod", "edit", "New job", itoa(idx))
 
-	_, got := brokerageGrowth(t, path)
+	_, got := classGrowth(t, path)
 	wantShown := shownSchedule{
 		{From: model.Ptr("1900-01-01"), End: model.Ptr("2027-12-31"), Value: 0.04},
 		{From: model.Ptr(pushedFrom(edited)), Value: 0.02},
@@ -160,7 +160,7 @@ func TestTimelineScenarioThroughCLI(t *testing.T) {
 // TestTimelineScenarioKeepsBeginning writes the same result the way the editor does, through ops, which can say "from the beginning".
 func TestTimelineScenarioKeepsBeginning(t *testing.T) {
 	path := seededFile(t)
-	idx, shown := brokerageGrowth(t, path)
+	idx, shown := classGrowth(t, path)
 	edited := dragBrokerage(t, segmentsOf(t, shown))
 
 	st, err := store.Open(path)
@@ -176,7 +176,7 @@ func TestTimelineScenarioKeepsBeginning(t *testing.T) {
 	}
 	st.Close()
 
-	_, got := brokerageGrowth(t, path)
+	_, got := classGrowth(t, path)
 	if len(got) != 2 || got[0].From != nil || got[0].End == nil || *got[0].End != "2027-12-31" || got[1].From == nil || *got[1].From != pushedFrom(edited) {
 		t.Errorf("after SetModValues: %+v", got)
 	}
@@ -185,7 +185,7 @@ func TestTimelineScenarioKeepsBeginning(t *testing.T) {
 // TestTimelineLastSegmentRefusedThroughCLI checks that the one schedule the editor refuses to make, an empty one, is also refused by the CLI.
 func TestTimelineLastSegmentRefusedThroughCLI(t *testing.T) {
 	path := seededFile(t)
-	idx, _ := brokerageGrowth(t, path)
+	idx, _ := classGrowth(t, path)
 	refusedWrite(t, path, "[]", 2, "usage", "mod", "edit", "New job", itoa(idx))
 }
 
@@ -291,7 +291,7 @@ func coversDate(s model.Schedule, d model.Date) bool {
 // TestTypedDateReaches2045ThroughCLI types dates in 2045 into the demo schedule, writes the result as the editor does and reads it back through the CLI.
 func TestTypedDateReaches2045ThroughCLI(t *testing.T) {
 	path := seededFile(t)
-	idx, shown := brokerageGrowth(t, path)
+	idx, shown := classGrowth(t, path)
 	s := segmentsOf(t, shown)
 	if coversDate(s, mustDate(t, "2045-03-01")) {
 		t.Fatal("the demo schedule already covers 2045")
@@ -326,7 +326,7 @@ func TestTypedDateReaches2045ThroughCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Close()
-	_, got := brokerageGrowth(t, path)
+	_, got := classGrowth(t, path)
 	if len(got) != 3 || got[1].From == nil || *got[1].From != "2045-03-01" {
 		t.Errorf("after SetModValues: %+v", got)
 	}

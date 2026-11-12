@@ -836,12 +836,14 @@ func TestMigrateFromVersion3(t *testing.T) {
 	defer s.Close()
 	var v int
 	s.db.QueryRow(`PRAGMA user_version`).Scan(&v)
-	if v != 4 {
-		t.Errorf("user_version = %d, want 4", v)
+	if v != len(migrations) {
+		t.Errorf("user_version = %d, want %d", v, len(migrations))
 	}
 	copyFacts(t, s, srcPath)
 	if got := mustLoad(t, s); !reflect.DeepEqual(got, want) {
 		t.Error("migrated database loads differently")
+	} else if !reflect.DeepEqual(got.Classes, model.DefaultClasses()) {
+		t.Errorf("migrated classes = %v, want the shipped classes", got.Classes)
 	}
 	if err := s.VoidFact(facts[1].ID, "gone"); err != nil {
 		t.Error(err)
