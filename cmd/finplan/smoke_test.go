@@ -68,6 +68,7 @@ func TestScreenshotSmoke(t *testing.T) {
 		{"assets-selected", "Assets", "Net worth", ""},
 		{"add-line", "Graph", "", "add-line"},
 		{"about", "Graph", "", "about"},
+		{"graph-monte-carlo", "Graph", "Base", "monte-carlo"},
 		// The Graph under a projection draws the Acme RSUs and Brokerage lines: vests step one down and the other up.
 		{"graph-base", "Graph", "Base", ""},
 		{"graph-acme-up", "Graph", "Acme +15%", ""},

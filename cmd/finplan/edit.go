@@ -246,7 +246,7 @@ func (g *graphTab) setRecord(rec *model.Record) {
 		}
 		seed = len(g.lines.All()) == 0
 	}
-	g.rec, g.cache, g.dataStart = rec, newDataCache(rec), graph.DataStart(rec)
+	g.rec, g.cache, g.mc, g.dataStart = rec, newDataCache(rec), newMCCache(rec), graph.DataStart(rec)
 	if seed {
 		for _, id := range defaultLines(rec, g.demo) {
 			g.lines.Add(id, false, "", graph.AssetColor(rec, id))

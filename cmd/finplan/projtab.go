@@ -57,6 +57,8 @@ type projTab struct {
 	starts    []engine.AccountStart
 	startsErr error
 	startsFor string
+	// goal is the Earliest retirement date section of the selected projection.
+	goal goalPanel
 	// tl is the timeline editor under the modifications table.
 	tl timelineState
 	// itemTl is the timeline editor of the amount or growth of a budget item that a modification adds.
@@ -86,6 +88,7 @@ type projTab struct {
 
 func (t *projTab) reset() {
 	t.bufs, t.errs, t.overwrites, t.missing, t.startsFor = map[string]string{}, map[string]string{}, nil, nil, ""
+	t.goal.stop()
 }
 
 // setErr records the error that refused an edit of field id; the edit path runs on a projTab that was never reset.
@@ -401,6 +404,7 @@ func (t *projTab) header(p *model.Projection) {
 	t.label("Inflation")
 	t.inflation(p, w)
 	t.retirement(p, w)
+	t.earliestRetirement(p, w)
 
 	if imgui.Button("Pin to Graph") {
 		t.showOnGraph(p.Name)

@@ -93,5 +93,12 @@ func familyPresets(rec *model.Record) []graph.Preset {
 		from, to := span(-365, 20*365)
 		out = append(out, graph.Capture("Early withdrawal cost", l, from, to))
 	}
+	if has(demodata.ProjBase) && rec.Asset(demodata.NetWorth) != nil {
+		l := graph.NewLines(demodata.ProjBase)
+		id := l.Add(demodata.NetWorth, false, "", graph.AssetColor(rec, demodata.NetWorth))
+		l.SetMonteCarlo(id, true)
+		from, to := span(-365, 30*365)
+		out = append(out, graph.Capture("Monte Carlo net worth", l, from, to))
+	}
 	return out
 }

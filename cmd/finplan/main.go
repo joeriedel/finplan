@@ -94,6 +94,9 @@ func openStore(demo bool) (*store.Store, func(), error) {
 	return st, func() { st.Close() }, nil
 }
 
+// shotMonteCarloWait is the longest a screenshot waits for the Monte Carlo jobs; the scan of widget IDs and the smoke test's case timeout come after it.
+const shotMonteCarloWait = 15 * time.Second
+
 // run shows the window until it is closed or a SIGINT or SIGTERM arrives, or, with shot set, draws the screenshot.
 func run(demo bool, shot *shotOptions) error {
 	// Notify before the demo folder exists, so a signal during setup is still handled, and before backend.Init: SDL installs its own SIGINT handler only over the default one.
@@ -152,6 +155,7 @@ func run(demo bool, shot *shotOptions) error {
 	uiScale = scale
 
 	frames := settleFrames
+	shotStart := time.Now()
 	for {
 		timeout := idleWaitMs
 		if frames > 0 {
@@ -206,10 +210,20 @@ func run(demo bool, shot *shotOptions) error {
 			uiScale = s
 		}
 
+		// A screenshot waits for the Monte Carlo jobs, which run in the background, so that it shows their bands.
+		mcWasBusy := shot != nil && app.graph.mc.busy()
 		backend.NewFrame()
 		imgui.NewFrame()
 		app.draw()
 		imgui.Render()
+		if shotLeft == 1 && (mcWasBusy || app.graph.mc.busy()) {
+			if time.Since(shotStart) > shotMonteCarloWait {
+				return fmt.Errorf("the Monte Carlo jobs were still running after %v", shotMonteCarloWait)
+			}
+			backend.Render()
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
 		if shotLeft == 1 {
 			img, err := backend.RenderCapture()
 			if err != nil {

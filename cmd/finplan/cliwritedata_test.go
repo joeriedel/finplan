@@ -870,13 +870,13 @@ func entryIDs(list []wentry) map[int64]bool {
 
 func TestCLIDeleteListsAndRemovesPresetLines(t *testing.T) {
 	path := seededFile(t)
-	presetLines := func() int {
+	presetLines := func(name string) int {
 		st, err := store.Open(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer st.Close()
-		row, err := st.Preset("Retirement overview")
+		row, err := st.Preset(name)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -886,13 +886,22 @@ func TestCLIDeleteListsAndRemovesPresetLines(t *testing.T) {
 		}
 		return len(p.Lines)
 	}
-	n := presetLines()
+	names := []string{"Retirement overview", "Monte Carlo net worth"}
+	var n [2]int
+	for i, name := range names {
+		n[i] = presetLines(name)
+	}
 	affected := errorAffected(t, path, "confirm_required", "asset", "delete", "net-worth")
-	if countKind(affected, "view preset") != 1 {
+	if countKind(affected, "view preset") != len(names) {
 		t.Fatalf("affected %+v", affected)
 	}
 	w := data(t, path, "", "asset", "delete", "net-worth", "--force")
-	if countKind(w.Affected, "view preset") != 1 || presetLines() != n-1 {
-		t.Errorf("delete %+v, %d lines of %d", w, presetLines(), n)
+	if countKind(w.Affected, "view preset") != len(names) {
+		t.Errorf("delete %+v", w)
+	}
+	for i, name := range names {
+		if got := presetLines(name); got != n[i]-1 {
+			t.Errorf("%s: %d lines of %d", name, got, n[i])
+		}
 	}
 }

@@ -21,6 +21,7 @@ func TestPresetRoundTrip(t *testing.T) {
 	l.SetColor(c, RGB(0xabcdef))
 	l.SetVisible(c, false)
 	l.ToggleSolo(a)
+	l.SetMonteCarlo(c, true)
 	l.Select(b)
 	ab := l.AddBand(b, a, RGB(0x010203))
 	l.SetBandHatch(ab, true)
@@ -41,6 +42,16 @@ func TestPresetRoundTrip(t *testing.T) {
 	}
 	if r.Switcher() != "Base" || r.SoloCount() != 1 {
 		t.Error("switcher or solo lost")
+	}
+	if got := r.All(); got[0].MonteCarlo || got[1].MonteCarlo || !got[2].MonteCarlo {
+		t.Errorf("Monte Carlo flags after restore: %+v", got)
+	}
+	body, err := EncodePreset(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back, err := DecodePreset("mine", PresetFormat, body); err != nil || !reflect.DeepEqual(back, p) {
+		t.Errorf("encode and decode: %v\n got %+v\nwant %+v", err, back, p)
 	}
 	// The restored list is independent of the original.
 	l.Remove(a)
@@ -174,5 +185,28 @@ func TestPresetRemoveAssets(t *testing.T) {
 	}
 	if none, _, _ := p.RemoveAssets("a", "b", "c"); len(none.Lines) != 0 || len(none.Bands) != 0 {
 		t.Errorf("all lines removed: %+v", none)
+	}
+}
+
+// TestDecodePresetWithoutMonteCarlo reads a body written before lines had the Monte Carlo flag.
+func TestDecodePresetWithoutMonteCarlo(t *testing.T) {
+	body := `{"switcher":"Base","lines":[{"asset":"cash","pinned":false,"projection":"","color":1122867,"visible":true,"soloed":false}],"bands":[],"from":1,"to":2}`
+	p, err := DecodePreset("old", PresetFormat, []byte(body))
+	if err != nil || len(p.Lines) != 1 || p.Lines[0].MonteCarlo || p.Lines[0].Asset != "cash" {
+		t.Errorf("old body: %v %+v", err, p)
+	}
+}
+
+func TestSetMonteCarlo(t *testing.T) {
+	l := NewLines("Base")
+	a := l.Add("cash", false, "", RGB(1))
+	l.SetMonteCarlo(a, true)
+	l.SetMonteCarlo(99, true)
+	if ln, _ := l.Get(a); !ln.MonteCarlo {
+		t.Error("Monte Carlo not set")
+	}
+	l.SetMonteCarlo(a, false)
+	if ln, _ := l.Get(a); ln.MonteCarlo {
+		t.Error("Monte Carlo not cleared")
 	}
 }

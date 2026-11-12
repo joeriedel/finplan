@@ -37,6 +37,7 @@ type PresetLine struct {
 	Color      Color
 	Visible    bool
 	Soloed     bool
+	MonteCarlo bool
 }
 
 // PresetBand is a band of a preset; Upper and Lower index Preset.Lines.
@@ -54,7 +55,7 @@ func Capture(name string, l *Lines, from, to float64) Preset {
 	at := map[LineID]int{}
 	for i, ln := range l.lines {
 		at[ln.ID] = i
-		p.Lines = append(p.Lines, PresetLine{ln.Asset, ln.Pinned, ln.Projection, ln.Color, ln.Visible, l.solo[ln.ID]})
+		p.Lines = append(p.Lines, PresetLine{ln.Asset, ln.Pinned, ln.Projection, ln.Color, ln.Visible, l.solo[ln.ID], ln.MonteCarlo})
 	}
 	for _, b := range l.bands {
 		p.Bands = append(p.Bands, PresetBand{at[b.Upper], at[b.Lower], b.Color, b.Hatch, b.TodayDollars, b.Visible})
@@ -136,6 +137,7 @@ func (p Preset) Restore(has func(asset model.AssetID, projection string) bool, p
 		ids[i] = l.Add(pl.Asset, pl.Pinned, pl.Projection, pl.Color)
 		l.SetColor(ids[i], pl.Color)
 		l.SetVisible(ids[i], pl.Visible)
+		l.SetMonteCarlo(ids[i], pl.MonteCarlo)
 		if pl.Soloed {
 			l.ToggleSolo(ids[i])
 		}
@@ -170,6 +172,8 @@ type lineDoc struct {
 	Color      uint32        `json:"color"` // 0xRRGGBB
 	Visible    bool          `json:"visible"`
 	Soloed     bool          `json:"soloed"`
+	// MonteCarlo is absent from presets saved before the bands existed, which decode with it off.
+	MonteCarlo bool `json:"monteCarlo,omitempty"`
 }
 
 type bandDoc struct {
@@ -187,7 +191,7 @@ func packColor(c Color) uint32 { return uint32(c.R)<<16 | uint32(c.G)<<8 | uint3
 func EncodePreset(p Preset) ([]byte, error) {
 	d := presetDoc{Switcher: p.Switcher, Lines: []lineDoc{}, Bands: []bandDoc{}, From: p.From, To: p.To}
 	for _, l := range p.Lines {
-		d.Lines = append(d.Lines, lineDoc{l.Asset, l.Pinned, l.Projection, packColor(l.Color), l.Visible, l.Soloed})
+		d.Lines = append(d.Lines, lineDoc{l.Asset, l.Pinned, l.Projection, packColor(l.Color), l.Visible, l.Soloed, l.MonteCarlo})
 	}
 	for _, b := range p.Bands {
 		d.Bands = append(d.Bands, bandDoc{b.Upper, b.Lower, packColor(b.Color), b.Hatch, b.TodayDollars, b.Visible})
@@ -207,7 +211,7 @@ func DecodePreset(name string, format int, body []byte) (Preset, error) {
 	}
 	p := Preset{Name: name, Switcher: d.Switcher, From: d.From, To: d.To}
 	for _, l := range d.Lines {
-		p.Lines = append(p.Lines, PresetLine{l.Asset, l.Pinned, l.Projection, RGB(l.Color), l.Visible, l.Soloed})
+		p.Lines = append(p.Lines, PresetLine{l.Asset, l.Pinned, l.Projection, RGB(l.Color), l.Visible, l.Soloed, l.MonteCarlo})
 	}
 	for _, b := range d.Bands {
 		p.Bands = append(p.Bands, PresetBand{b.Upper, b.Lower, RGB(b.Color), b.Hatch, b.TodayDollars, b.Visible})

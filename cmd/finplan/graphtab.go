@@ -26,6 +26,9 @@ type lineView struct {
 	name    string
 	proj    string
 	samples []engine.Sample
+	// mc is the line's Monte Carlo state when the line asks for it, and mcSeries its bands once ready.
+	mc       mcState
+	mcSeries *mcSeries
 }
 
 // graphTab is the Graph tab: the line list on the left, the toolbar and plot on the right.
@@ -33,6 +36,7 @@ type graphTab struct {
 	rec       *model.Record
 	lines     *graph.Lines
 	cache     *dataCache
+	mc        *mcCache
 	dataStart model.Date
 	// demo is whether the database is the throwaway demo, which decides the lines a new Graph draws.
 	demo bool
@@ -121,7 +125,7 @@ func newGraphTab(rec *model.Record, presets []graph.Preset, st *store.Store, not
 	if len(rec.Projections) > 0 {
 		switcher = rec.Projections[0].Name
 	}
-	g := &graphTab{rec: rec, lines: graph.NewLines(switcher), cache: newDataCache(rec), dataStart: graph.DataStart(rec), preset: -1,
+	g := &graphTab{rec: rec, lines: graph.NewLines(switcher), cache: newDataCache(rec), mc: newMCCache(rec), dataStart: graph.DataStart(rec), preset: -1,
 		presets: presets, store: st, notify: notify, demo: demo}
 	for _, id := range defaultLines(rec, demo) {
 		g.lines.Add(id, false, "", graph.AssetColor(rec, id))
@@ -145,7 +149,7 @@ func (g *graphTab) reload(rec *model.Record, presets []graph.Preset) {
 	oldSel, selected := g.lines.Selected()
 	keep := graph.Capture("", g.lines, g.xMin, g.xMax)
 	has := recordHas(rec)
-	g.rec, g.cache, g.dataStart = rec, newDataCache(rec), graph.DataStart(rec)
+	g.rec, g.cache, g.mc, g.dataStart = rec, newDataCache(rec), newMCCache(rec), graph.DataStart(rec)
 	g.lines = keep.Restore(has, projectionNames(rec))
 	// Restore keeps the order of the lines it keeps, so the kept old lines pair up with the new ones.
 	newIDs := map[graph.LineID]graph.LineID{}
@@ -336,7 +340,11 @@ func (g *graphTab) visible(grid graph.Grid) []lineView {
 			continue
 		}
 		proj, _ := g.lines.Effective(ln.ID)
-		out = append(out, lineView{line: ln, name: g.assetName(ln.Asset), proj: proj, samples: g.cache.samples(ln.Asset, proj, grid)})
+		v := lineView{line: ln, name: g.assetName(ln.Asset), proj: proj, samples: g.cache.samples(ln.Asset, proj, grid)}
+		if ln.MonteCarlo {
+			v.mc, v.mcSeries = g.mc.get(ln.Asset, proj)
+		}
+		out = append(out, v)
 	}
 	return out
 }
@@ -346,6 +354,9 @@ func (g *graphTab) fitToData(views []lineView) {
 	series := make([][]engine.Sample, len(views))
 	for i, v := range views {
 		series[i] = v.samples
+		if v.mcSeries != nil {
+			series = append(series, v.mcSeries.samples(v.mcSeries.p10), v.mcSeries.samples(v.mcSeries.p90))
+		}
 	}
 	if lo, hi, ok := fitYRange(series, dateOf(g.xMin), dateOf(g.xMax)); ok {
 		g.yMin, g.yMax, g.applyY = lo, hi, true
@@ -378,7 +389,11 @@ func (g *graphTab) plotArea() {
 		width = 1000
 	}
 	grid := graph.SampleGrid(dateOf(g.xMin), dateOf(g.xMax), width)
+	fresh := g.mc.takeFresh()
 	views := g.visible(grid)
+	if fresh {
+		g.fitY = true
+	}
 	// Panning or zooming refits y to the lines in the new x range, so dragging y alone is left as the user set it.
 	if g.xMin != g.fitX0 || g.xMax != g.fitX1 {
 		g.fitX0, g.fitX1 = g.xMin, g.xMax

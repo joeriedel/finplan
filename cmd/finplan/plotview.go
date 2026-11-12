@@ -137,6 +137,7 @@ func (g *graphTab) drawPlot(views []lineView) {
 	for _, bv := range bands {
 		g.drawBand(dl, bv, polys[bv.upper], polys[bv.lower])
 	}
+	g.drawMonteCarlo(dl, views)
 	for pass := 0; pass < 2; pass++ {
 		for i, v := range views {
 			if (hasSel && v.line.ID == selID) == (pass == 1) && len(polys[i]) > 1 {
@@ -144,6 +145,8 @@ func (g *graphTab) drawPlot(views []lineView) {
 			}
 		}
 	}
+
+	g.drawMonteCarloLabels(dl, views)
 
 	// Handoff markers and stale labels.
 	for _, v := range views {
@@ -246,7 +249,19 @@ func (g *graphTab) crosshairTags(views []lineView, rows []crosshairRow, pts []cr
 // drawBand fills the area between the band's edges, and stripes it if hatched. The edges are the pixel polylines of
 // its upper and lower lines.
 func (g *graphTab) drawBand(dl *imgui.DrawList, bv bandView, upper, lower []graph.Pt) {
-	fill := u32(lineColor(bv.band.Color, 0.25))
+	g.fillBetween(dl, upper, lower, u32(lineColor(bv.band.Color, 0.25)))
+	left, right := g.plotPos.X, g.plotPos.X+g.plotSize.X
+	if bv.band.Hatch {
+		col := u32(lineColor(bv.band.Color, 0.6))
+		for _, sg := range graph.HatchStripes(upper, lower, hatchSpacing*uiScale,
+			graph.Pt{X: left, Y: g.plotPos.Y}, graph.Pt{X: right, Y: g.plotPos.Y + g.plotSize.Y}) {
+			dl.AddLineArgs(vec(sg.A), vec(sg.B), col, uiScale)
+		}
+	}
+}
+
+// fillBetween fills the area between two pixel polylines sampled at the same x positions, skipping the pieces outside the plot.
+func (g *graphTab) fillBetween(dl *imgui.DrawList, upper, lower []graph.Pt, fill uint32) {
 	left, right := g.plotPos.X, g.plotPos.X+g.plotSize.X
 	for _, poly := range graph.BandPolys(upper, lower) {
 		minX, maxX := poly[0].X, poly[0].X
@@ -257,13 +272,6 @@ func (g *graphTab) drawBand(dl *imgui.DrawList, bv bandView, upper, lower []grap
 			continue
 		}
 		dl.AddConvexPolyFilled(vecs(poly), int32(len(poly)), fill)
-	}
-	if bv.band.Hatch {
-		col := u32(lineColor(bv.band.Color, 0.6))
-		for _, sg := range graph.HatchStripes(upper, lower, hatchSpacing*uiScale,
-			graph.Pt{X: left, Y: g.plotPos.Y}, graph.Pt{X: right, Y: g.plotPos.Y + g.plotSize.Y}) {
-			dl.AddLineArgs(vec(sg.A), vec(sg.B), col, uiScale)
-		}
 	}
 }
 

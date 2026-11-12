@@ -21,6 +21,8 @@ type Line struct {
 	Projection string
 	Color      Color
 	Visible    bool
+	// MonteCarlo draws the percentile bands and the median of many random runs beneath the line.
+	MonteCarlo bool
 }
 
 // Lines is the Graph tab's line list with the projection switcher and the selection.
@@ -119,6 +121,13 @@ func (l *Lines) SetColor(id LineID, c Color) {
 func (l *Lines) SetVisible(id LineID, v bool) {
 	if i := l.index(id); i >= 0 {
 		l.lines[i].Visible = v
+	}
+}
+
+// SetMonteCarlo turns the line's Monte Carlo bands on or off.
+func (l *Lines) SetMonteCarlo(id LineID, on bool) {
+	if i := l.index(id); i >= 0 {
+		l.lines[i].MonteCarlo = on
 	}
 }
 

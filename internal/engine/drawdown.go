@@ -59,8 +59,11 @@ func stopAtRetirement(rec *model.Record, items []model.BudgetItem, retire model.
 }
 
 // firstEarner returns the household's first earner, whose age sets the required distributions and the early withdrawal penalty.
-func (h *householdTax) firstEarner() (model.HouseholdMember, bool) {
-	for _, m := range h.rec.Household.Members {
+func (h *householdTax) firstEarner() (model.HouseholdMember, bool) { return firstEarner(h.rec) }
+
+// firstEarner returns the first member of the record's household whose role is earner.
+func firstEarner(rec *model.Record) (model.HouseholdMember, bool) {
+	for _, m := range rec.Household.Members {
 		if m.Role == model.RoleEarner {
 			return m, true
 		}

@@ -295,6 +295,17 @@ func (g *graphTab) row(ln graph.Line) {
 		tooltipText(tip)
 	}
 
+	mcX := pinX - fh - 2*s
+	imgui.SetCursorScreenPos(imgui.NewVec2(mcX, p.Y+(h-fh)/2))
+	if imgui.InvisibleButton("##montecarlo", imgui.NewVec2(fh, fh)) {
+		g.lines.SetMonteCarlo(ln.ID, !ln.MonteCarlo)
+		g.fitY = true
+	}
+	mcHot, mcActive := imgui.IsItemHovered(), imgui.IsItemActive()
+	if mcHot {
+		tooltipText("Monte Carlo: draw the 10th-90th and 25th-75th percentile bands and the median of many random runs, and the share of runs that stay above zero")
+	}
+
 	removeX := p.X + w - fh - 2*s
 	imgui.SetCursorScreenPos(imgui.NewVec2(removeX, p.Y+(h-fh)/2))
 	if imgui.InvisibleButton("##remove", imgui.NewVec2(fh, fh)) {
@@ -305,7 +316,7 @@ func (g *graphTab) row(ln graph.Line) {
 	if removeHot {
 		tooltipText("Remove line")
 	}
-	showSolo, showPin, showRemove := rowControls(hovered, ln.Pinned, soloed, soloActive || pinActive || removeActive)
+	showSolo, showPin, showRemove := rowControls(hovered, ln.Pinned, soloed, soloActive || pinActive || removeActive || mcActive)
 
 	if showSolo {
 		sc := imgui.NewVec2(sx+fh/2, p.Y+h/2)
@@ -343,7 +354,7 @@ func (g *graphTab) row(ln graph.Line) {
 	drawKindIcon(dl, textX, nameCY, kind, iconColor())
 	iconHot := hovered && hoverIcon(textX, nameCY, kind)
 	// Names stop before the pin button, which can be drawn over their end.
-	clipX := pinX - 2*s
+	clipX := mcX - 2*s
 	dl.PushClipRectV(imgui.NewVec2(textX, p.Y), imgui.NewVec2(clipX, end.Y), true)
 	name := g.assetName(ln.Asset)
 	dl.AddTextVec2(imgui.NewVec2(textX+iconSlot(), p.Y+pad), u32(rgba(colText, 1)), name)
@@ -359,9 +370,25 @@ func (g *graphTab) row(ln graph.Line) {
 	}
 	dl.PopClipRect()
 	room := clipX - textX
-	if clipped := textClipped(iconSlot()+imgui.CalcTextSize(name).X, room) || textClipped(projX+imgui.CalcTextSize(proj).X, room); clipped && hovered && !iconHot && !soloHot && !pinHot && !removeHot &&
+	if clipped := textClipped(iconSlot()+imgui.CalcTextSize(name).X, room) || textClipped(projX+imgui.CalcTextSize(proj).X, room); clipped && hovered && !iconHot && !soloHot && !pinHot && !removeHot && !mcHot &&
 		imgui.IsMouseHoveringRectV(imgui.NewVec2(textX, p.Y), imgui.NewVec2(clipX, end.Y), true) {
 		tooltipText(name + "\n" + proj)
+	}
+
+	if showRemove || ln.MonteCarlo {
+		mc := imgui.NewVec2(mcX+fh/2, p.Y+h/2)
+		half := fh * 0.4
+		ma := float32(0.35)
+		if mcHot {
+			ma = 0.8
+		}
+		txtCol := u32(rgba(colText, ma))
+		if ln.MonteCarlo {
+			dl.AddRectFilledV(imgui.NewVec2(mc.X-half, mc.Y-half), imgui.NewVec2(mc.X+half, mc.Y+half), u32(rgba(colAccent, 1)), 3*s, 0)
+			txtCol = u32(rgba(colWindow, 1))
+		}
+		ts := imgui.CalcTextSize("M")
+		dl.AddTextVec2(imgui.NewVec2(mc.X-ts.X/2, mc.Y-ts.Y/2), txtCol, "M")
 	}
 
 	if showPin {

@@ -107,8 +107,9 @@ var commands = []*command{
 			{Name: "runs", Type: typeInt, Default: "1000", Description: "the number of random runs, at least 1"},
 			{Name: "seed", Type: typeInt, Default: "1", Description: "the seed of the random draws, 0 or more; the same seed gives the same bands"},
 			{Name: "percentiles", Type: typeString, Default: "10,25,50,75,90", Description: "comma-separated percentiles to report, each from 0 to 100"},
+			{Name: "success-age", Type: typeInt, Default: "95", Description: "the age of the household's first earner up to which a run must stay above zero to count as a success, 1 or more"},
 		},
-		Output: "{target (asset id), projection, from, to, step, runs, seed, percentiles: [numbers], dates: [date], bands: [{percentile, values: [value per date]}] (in the order of --percentiles)}. " + jsonNote,
+		Output: "{target (asset id), projection, from, to, step, runs, seed, percentiles: [numbers], dates: [date], bands: [{percentile, values: [value per date]}] (in the order of --percentiles), success_age, success_through (the earlier of --to and the date the first earner reaches the success age), success_percent (the percent of runs, 0 to 100, whose value is above zero at every sampled date from today through success_through; null when the household has no earner, the age is before today or no sampled date lies in that stretch)}. " + jsonNote,
 		run:    cmdMonteCarlo,
 	},
 	{
@@ -864,13 +865,13 @@ func cmdMonteCarlo(c *call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	runs, err := strconv.Atoi(c.str("runs"))
-	if err != nil || runs < 1 {
-		return nil, usageErr("--runs: %q is not a whole number of at least 1", c.str("runs"))
-	}
-	seed, err := strconv.ParseUint(c.str("seed"), 10, 63)
+	runs, seed, err := c.runsAndSeed()
 	if err != nil {
-		return nil, usageErr("--seed: %q is not a whole number of 0 or more", c.str("seed"))
+		return nil, err
+	}
+	successAge, err := c.successAge()
+	if err != nil {
+		return nil, err
 	}
 	var pcts []float64
 	for _, f := range strings.Split(c.str("percentiles"), ",") {
@@ -901,7 +902,17 @@ func cmdMonteCarlo(c *call) (any, error) {
 		Percentiles []float64 `json:"percentiles"`
 		Dates       []jdate   `json:"dates"`
 		Bands       []jband   `json:"bands"`
-	}{string(target), nullable(projection), jd(from), jd(to), step, res.Runs, res.Seed, res.Percentiles, []jdate{}, []jband{}}
+		SuccessAge  int       `json:"success_age"`
+		Through     *jdate    `json:"success_through"`
+		Success     *float64  `json:"success_percent"`
+	}{string(target), nullable(projection), jd(from), jd(to), step, res.Runs, res.Seed, res.Percentiles, []jdate{}, []jband{}, successAge, nil, nil}
+	if end, ok := engine.AgeDate(rec, successAge); ok {
+		through := min(to, end)
+		out.Through = jdp(&through)
+		if pct, err := engine.Success(res, rec.Today, through); err == nil {
+			out.Success = &pct
+		}
+	}
 	for _, d := range dates {
 		out.Dates = append(out.Dates, jd(d))
 	}
@@ -909,6 +920,28 @@ func cmdMonteCarlo(c *call) (any, error) {
 		out.Bands = append(out.Bands, jband{p, res.Bands[i]})
 	}
 	return out, nil
+}
+
+// runsAndSeed reads and checks the --runs and --seed flags.
+func (c *call) runsAndSeed() (runs int, seed uint64, err error) {
+	runs, err = strconv.Atoi(c.str("runs"))
+	if err != nil || runs < 1 {
+		return 0, 0, usageErr("--runs: %q is not a whole number of at least 1", c.str("runs"))
+	}
+	seed, err = strconv.ParseUint(c.str("seed"), 10, 63)
+	if err != nil {
+		return 0, 0, usageErr("--seed: %q is not a whole number of 0 or more", c.str("seed"))
+	}
+	return runs, seed, nil
+}
+
+// successAge reads and checks the --success-age flag.
+func (c *call) successAge() (int, error) {
+	age, err := strconv.Atoi(c.str("success-age"))
+	if err != nil || age < 1 {
+		return 0, usageErr("--success-age: %q is not a whole number of at least 1", c.str("success-age"))
+	}
+	return age, nil
 }
 
 // sampleDates returns from, then each later step up to and including to. Month and year steps are computed from from each time, so that a clamped day does not carry into later months.
