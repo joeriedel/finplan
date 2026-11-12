@@ -37,10 +37,17 @@ func SSOwnFactor(birthYear, claimAge int) float64 {
 	return 1 - (min(early, 36)*5.0/9+max(early-36, 0)*5.0/12)/100
 }
 
-// SSSpousalFactor is the share of the spousal benefit (half the other member's full-retirement-age benefit) paid on a claim at the age: 25/36 of 1% less for each month before the full retirement age up to 36 and 5/12 of 1% for each month beyond. A spousal benefit earns no delayed credits.
-func SSSpousalFactor(birthYear, claimAge int) float64 {
-	early := float64(max(FRAMonths(birthYear)-claimAge*12, 0))
+// SSSpousalFactor is the share of the spousal benefit (half the other member's full-retirement-age benefit) paid to someone born in the year who is ageMonths old when it starts: 25/36 of 1% less for each month before the full retirement age up to 36 and 5/12 of 1% for each month beyond. A spousal benefit earns no delayed credits.
+func SSSpousalFactor(birthYear, ageMonths int) float64 {
+	early := float64(max(FRAMonths(birthYear)-ageMonths, 0))
 	return 1 - (min(early, 36)*25.0/36+max(early-36, 0)*5.0/12)/100
+}
+
+// AgeMonths is the number of calendar months from the month of birth to the month of the date.
+func AgeMonths(birth, on model.Date) int {
+	by, bm, _ := birth.YMD()
+	y, m, _ := on.YMD()
+	return (y-by)*12 + int(m) - int(bm)
 }
 
 // AgeDate is the date the person born on birth reaches the age.

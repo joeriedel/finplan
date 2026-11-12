@@ -19,6 +19,11 @@ func allBlank(texts ...string) bool {
 	return true
 }
 
+// untouched reports whether nothing has been typed or picked in the Add FERS form.
+func (f fersForm) untouched() bool {
+	return allBlank(f.high3, f.years, f.sep, f.start) && f.survivor == ""
+}
+
 // untouched reports whether nothing has been typed or picked in the Add member form.
 func (f householdForm) untouched() bool { return allBlank(f.name, f.birth) && f.role == "" }
 

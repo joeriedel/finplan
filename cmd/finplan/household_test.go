@@ -141,3 +141,51 @@ func TestIncomeTypeOfBaseItemsIsEditable(t *testing.T) {
 		t.Errorf("added income type: %v", a.notices)
 	}
 }
+
+func TestFERSFormSaysWhatIsMissingAndAddsAsOneChange(t *testing.T) {
+	a := householdApp(t)
+	const name = "Parent A"
+	var f fersForm
+	if !f.untouched() {
+		t.Error("a blank form is touched")
+	}
+	steps := []struct {
+		field, text string
+		ok          bool
+	}{
+		{"high3", "90000", false},
+		{"years", "30", false},
+		{"sep", "soon", false},
+		{"sep", "57", false},
+		{"start", "50", false},
+		{"start", "57", true},
+	}
+	for _, s := range steps {
+		f.set(s.field, s.text)
+		if got := fersProblem(a.st, a.rec, name, f); (got == "") != s.ok {
+			t.Errorf("after %s=%q the problem is %q", s.field, s.text, got)
+		}
+	}
+	if f.untouched() {
+		t.Error("a filled form is untouched")
+	}
+	f.set("survivor", "full")
+	ch, err := f.change()
+	if err != nil || !a.edit("add FERS", func() (*ops.Result, error) {
+		return ops.EditHouseholdMember(a.st, a.rec, name, ch, ops.Options{})
+	}) {
+		t.Fatalf("form refused: %v %v", err, a.notices)
+	}
+	m := a.rec.Household.Members[0]
+	if m.FERSHigh3 != 90000 || m.FERSYears != 30 || m.FERSSeparationAge != 57 || m.FERSStartAge != 57 || m.FERSSurvivor != model.SurvivorFull {
+		t.Fatalf("member %+v", m)
+	}
+
+	if !a.accts.changeMember(name, "remove FERS", removeFERSChange()) {
+		t.Fatalf("remove refused: %v", a.notices)
+	}
+	m = a.rec.Household.Members[0]
+	if m.HasFERS() || m.FERSYears != 0 || m.FERSStartAge != 0 || m.FERSSeparationAge != 0 || m.FERSSurvivor != model.SurvivorNone {
+		t.Errorf("FERS left on the member: %+v", m)
+	}
+}

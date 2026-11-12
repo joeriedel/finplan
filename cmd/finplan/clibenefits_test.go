@@ -93,7 +93,7 @@ func TestCLIClaimingAge(t *testing.T) {
 	}
 }
 
-// Parent B claims at 62 and gets the spousal benefit, half of Parent A's, 65% of it for claiming five years early, once Parent A has claimed at 67.
+// Parent B claims at 62 and gets the spousal benefit, half of Parent A's once Parent A has claimed at 67, in April 2052, when she is 15 months short of her full retirement age: 25/36 of 1% less for each.
 func TestCLISpousalBenefit(t *testing.T) {
 	path := seededFile(t)
 	before := benefitsIn(t, path, "2050")
@@ -102,7 +102,7 @@ func TestCLISpousalBenefit(t *testing.T) {
 	}
 	after := benefitsIn(t, path, "2060")
 	b, a := after["Parent B"], after["Parent A"]
-	if b.own != 0 || a.own == 0 || !closeTo(b.spousal/a.own, 1550*0.65/3100) {
+	if b.own != 0 || a.own == 0 || !closeTo(b.spousal/a.own, 1550*(1-15*25.0/36/100)/3100) {
 		t.Errorf("after Parent A claims: spouse %+v, earner %+v", b, a)
 	}
 	var tb tBenefits

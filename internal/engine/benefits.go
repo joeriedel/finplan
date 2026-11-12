@@ -11,7 +11,7 @@ import (
 	"github.com/joeriedel/finplan/internal/model"
 )
 
-// Social Security and FERS income is synthesized from the household members: monthly income items paid into the reconciliation account, on the first of each month from the month after the member reaches the age the benefit starts at. They exist for the query only and are never written to the record. Social Security is indexed by inflation from the record's today; the FERS annuity is indexed to the separation date, then fixed until the year after the member is 62 and annuitant, and rises by the FERS cost-of-living adjustment from then on (see the benefits package).
+// Social Security and FERS income is synthesized from the household members: monthly income items paid into the reconciliation account, on the first of each month from the month after the member reaches the age the benefit starts at. They exist for the query only and are never written to the record. Social Security is indexed by inflation from the record's today; the FERS supplement is indexed to its start and then fixed, the FERS annuity is indexed to the separation date, then fixed until the year after the member is 62 and annuitant, and rises by the FERS cost-of-living adjustment from then on (see the benefits package).
 
 // benefitKind says which benefit an item pays.
 type benefitKind string
@@ -51,7 +51,7 @@ func memberBenefits(rec *model.Record, infl model.Schedule, horizon model.Date, 
 		}
 	}
 	add := func(m model.HouseholdMember, kind benefitKind, from model.Date, end *model.Date, amount model.Schedule, indexed bool) {
-		acct := ReconciliationAccount(rec, from)
+		acct := ReconciliationAccount(rec, max(from, rec.Today))
 		if acct == "" {
 			diag.Notes = append(diag.Notes, fmt.Sprintf("there is no open checking account on %s: the %s of %s is not paid", from, kind, m.Name))
 			return
@@ -77,8 +77,13 @@ func memberBenefits(rec *model.Record, infl model.Schedule, horizon model.Date, 
 			ownStart := benefits.PayStart(m.Birth, m.SSClaimAge)
 			var ownEnd *model.Date
 			if m.Role == model.RoleSpouse && earner != nil && earner.Name != m.Name {
-				spousal := earner.SSBenefit / 2 * benefits.SSSpousalFactor(by, m.SSClaimAge)
 				spousalStart := max(ownStart, benefits.PayStart(earner.Birth, earner.SSClaimAge))
+				// A claim at an exact age is reduced as at that age; a spousal benefit that waits for the earner is reduced by the age it starts at.
+				ageMonths := m.SSClaimAge * 12
+				if spousalStart > ownStart {
+					ageMonths = benefits.AgeMonths(m.Birth, spousalStart)
+				}
+				spousal := earner.SSBenefit / 2 * benefits.SSSpousalFactor(by, ageMonths)
 				if spousal > own {
 					add(m, benefitSSSpousal, spousalStart, nil, model.Constant(spousal), true)
 					if spousalStart > ownStart {
@@ -116,9 +121,10 @@ func memberBenefits(rec *model.Record, infl model.Schedule, horizon model.Date, 
 			segs = append(segs, model.Segment{From: jan, Value: monthly})
 		}
 		add(m, benefitAnnuity, start, nil, model.MustSchedule(segs...), false)
-		if ground == benefits.Unreduced && m.FERSStartAge < 62 && m.SSBenefit > 0 {
+		if ground == benefits.Unreduced && m.FERSStartAge < 62 && m.FERSSeparationAge == m.FERSStartAge && m.SSBenefit > 0 {
 			y, mo, _ := sixtyTwo.YMD()
-			add(m, benefitSupplement, start, model.Ptr(model.D(y, mo, 1)), model.Constant(benefits.Supplement(m.SSBenefit, m.FERSYears)), true)
+			supplement := benefits.Supplement(m.SSBenefit, m.FERSYears) * infl.Compound(rec.Today, start)
+			add(m, benefitSupplement, start, model.Ptr(model.D(y, mo, 1)), model.Constant(supplement), false)
 		}
 	}
 	return out

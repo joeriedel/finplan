@@ -99,14 +99,14 @@ func TestSpousalBenefitStartsWhenTheEarnerClaims(t *testing.T) {
 	b := member("B", model.RoleSpouse, 1976)
 	b.SSBenefit, b.SSClaimAge = 1000, 62
 	rec := benefitRecord(t, 0, a, b)
-	// B's own benefit is 70% of 1,000; the spousal benefit is 65% of 1,500 and starts in July 2045, when A claims.
+	// B's own benefit is 70% of 1,000; the spousal benefit starts in July 2045, when A claims and B is past her full retirement age, so it is all of 1,500.
 	if got := benefitsOf(t, rec, 2040, "B"); !near(got.SSOwn, 12*700) || got.SSSpousal != 0 {
 		t.Errorf("before A claims B gets %+v", got)
 	}
-	if got := benefitsOf(t, rec, 2045, "B"); !near(got.SSOwn, 6*700) || !near(got.SSSpousal, 6*975) {
+	if got := benefitsOf(t, rec, 2045, "B"); !near(got.SSOwn, 6*700) || !near(got.SSSpousal, 6*1500) {
 		t.Errorf("in the year A claims B gets %+v, want six months of each", got)
 	}
-	if got := benefitsOf(t, rec, 2046, "B"); got.SSOwn != 0 || !near(got.SSSpousal, 12*975) {
+	if got := benefitsOf(t, rec, 2046, "B"); got.SSOwn != 0 || !near(got.SSSpousal, 12*1500) {
 		t.Errorf("after A claims B gets %+v", got)
 	}
 }
@@ -216,5 +216,53 @@ func TestBenefitsAreTaxedAndBookedUnderTheirOwnCauses(t *testing.T) {
 	}
 	if l := line(bd, CauseIncome); l.Projected != 0 {
 		t.Errorf("income line %+v: the benefits are not plain income", l)
+	}
+}
+
+func TestSpousalReductionUsesTheAgeWhenItStarts(t *testing.T) {
+	a := model.HouseholdMember{Name: "A", Role: model.RoleEarner, Birth: d(1985, time.March, 12), SSBenefit: 3100, SSClaimAge: 67}
+	b := model.HouseholdMember{Name: "B", Role: model.RoleSpouse, Birth: d(1986, time.July, 4), SSBenefit: 1200, SSClaimAge: 62}
+	// The spousal benefit starts in April 2052, when B is 65 years 9 months old, 15 months before her full retirement age.
+	rec := benefitRecord(t, 0, a, b)
+	if got := benefitsOf(t, rec, 2060, "B"); !near(got.SSSpousal, 12*1550*(1-15*25.0/36/100)) || got.SSOwn != 0 {
+		t.Errorf("spouse gets %+v, want the spousal benefit reduced for 15 months", got)
+	}
+}
+
+func TestSupplementIsPaidOnlyOnImmediateRetirement(t *testing.T) {
+	m := fersMember()
+	m.FERSYears, m.FERSSeparationAge, m.FERSStartAge = 20, 50, 60
+	got := benefitsOf(t, benefitRecord(t, 0, m), 2036, "A")
+	if got.FERSAnnuity <= 0 || got.FERSSupplement != 0 {
+		t.Errorf("a deferred retirement pays %+v, want no supplement", got)
+	}
+}
+
+func TestSupplementIsIndexedOnceToItsStart(t *testing.T) {
+	m := fersMember()
+	rec := benefitRecord(t, 0.03, m)
+	// Pay starts in July 2032; the supplement is the same in every year it is paid.
+	want := 12 * 2400 * 30 / 40 * model.Constant(0.03).Compound(rec.Today, d(2032, time.July, 1))
+	for _, year := range []int{2033, 2036} {
+		if got := benefitsOf(t, rec, year, "A").FERSSupplement; !near(got, want) {
+			t.Errorf("supplement in %d is %v, want %v", year, got, want)
+		}
+	}
+}
+
+func TestBenefitFollowsTheCheckingAccountOpenToday(t *testing.T) {
+	m := member("A", model.RoleEarner, 1950)
+	m.SSBenefit, m.SSClaimAge = 2000, 67
+	rec := benefitRecord(t, 0, m)
+	other := &model.Account{ID: "other", Type: model.TypeChecking, Tax: model.Taxable}
+	other.AddSnapshot(d(2026, time.January, 1), 0)
+	must(t, rec.AddAccount(other))
+	// The benefit started in July 2017, while the first checking account was open; it follows the account open today.
+	closed := d(2020, time.June, 30)
+	rec.Account("chk").Closed = &closed
+	rec.Household.Checking = ""
+	items := memberBenefits(rec, model.Constant(0), d(2030, time.January, 1), &Diagnostics{})
+	if len(items) != 1 || items[0].item.Account != "other" {
+		t.Errorf("benefit items %+v, want one paid into the open account", items)
 	}
 }

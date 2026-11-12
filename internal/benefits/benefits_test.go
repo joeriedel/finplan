@@ -42,14 +42,28 @@ func TestOwnBenefitFactors(t *testing.T) {
 }
 
 func TestSpousalFactors(t *testing.T) {
-	if got := SSSpousalFactor(1985, 67); got != 1 {
+	if got := SSSpousalFactor(1985, 67*12); got != 1 {
 		t.Errorf("spousal factor at full retirement age %v", got)
 	}
-	if got := SSSpousalFactor(1985, 62); !near(got, 0.65) {
+	if got := SSSpousalFactor(1985, 62*12); !near(got, 0.65) {
 		t.Errorf("spousal factor at 62 %v, want 0.65", got)
 	}
-	if got := SSSpousalFactor(1985, 70); got != 1 {
+	if got := SSSpousalFactor(1985, 70*12); got != 1 {
 		t.Errorf("spousal factor at 70 %v: there are no delayed credits", got)
+	}
+}
+
+func TestSpousalFactorByAgeInMonths(t *testing.T) {
+	// 15 months before the full retirement age of 67 takes 25/36 of 1% for each.
+	if got := SSSpousalFactor(1986, 65*12+9); !near(got, 1-15*25.0/36/100) {
+		t.Errorf("spousal factor 15 months early %v", got)
+	}
+	// Beyond 36 months the reduction is 5/12 of 1% a month.
+	if got := SSSpousalFactor(1986, 62*12); !near(got, 0.65) {
+		t.Errorf("spousal factor 60 months early %v, want 0.65", got)
+	}
+	if got := AgeMonths(model.D(1986, time.July, 4), model.D(2052, time.April, 1)); got != 65*12+9 {
+		t.Errorf("age in months %d", got)
 	}
 }
 

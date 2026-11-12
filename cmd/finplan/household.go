@@ -130,6 +130,69 @@ func moneyText(v float64) string {
 	return formatMoneyText(v)
 }
 
+// fersForm is the form that gives a member without a FERS annuity one: every field is the text or choice as entered. The inputs are checked together, so they are submitted as one change.
+type fersForm struct {
+	high3, years, sep, start string
+	survivor                 model.Survivor
+}
+
+// set changes one field: high3, years, sep, start or survivor.
+func (f *fersForm) set(field, text string) {
+	switch field {
+	case "high3":
+		f.high3 = text
+	case "years":
+		f.years = text
+	case "sep":
+		f.sep = text
+	case "start":
+		f.start = text
+	case "survivor":
+		f.survivor = model.Survivor(text)
+	}
+}
+
+// change reads the form as the change that gives the member the annuity; ops checks the rest.
+func (f fersForm) change() (ops.MemberChange, error) {
+	var first error
+	read := func(field, text string) ops.MemberChange {
+		ch, err := memberChange(field, strings.TrimSpace(text))
+		if err != nil && first == nil {
+			first = err
+		}
+		return ch
+	}
+	ch := ops.MemberChange{
+		FERSHigh3:         read("high3", f.high3).FERSHigh3,
+		FERSYears:         read("years", f.years).FERSYears,
+		FERSSeparationAge: read("sep", f.sep).FERSSeparationAge,
+		FERSStartAge:      read("start", f.start).FERSStartAge,
+		FERSSurvivor:      model.Ptr(f.survivor),
+	}
+	if f.survivor == "" {
+		ch.FERSSurvivor = model.Ptr(model.SurvivorNone)
+	}
+	return ch, first
+}
+
+// fersProblem says why the member cannot be given the annuity the form describes, or "" if it can.
+func fersProblem(st *store.Store, rec *model.Record, name string, f fersForm) string {
+	ch, err := f.change()
+	if err != nil {
+		return err.Error()
+	}
+	_, err = ops.EditHouseholdMember(st, rec, name, ch, ops.Options{DryRun: true})
+	return reasonOf(err)
+}
+
+// removeFERSChange is the change that takes the FERS annuity off a member.
+func removeFERSChange() ops.MemberChange {
+	return ops.MemberChange{
+		FERSHigh3: model.Ptr(0.0), FERSYears: model.Ptr(0), FERSSeparationAge: model.Ptr(0), FERSStartAge: model.Ptr(0),
+		FERSSurvivor: model.Ptr(model.SurvivorNone),
+	}
+}
+
 // survivorLabels are the display names of model.Survivors, in the same order.
 var survivorLabels = []string{"None", "Partial (5%)", "Full (10%)"}
 
@@ -157,20 +220,27 @@ func (t *acctTab) benefits(i int, m model.HouseholdMember, force bool) {
 	}
 	row("Social Security", "ssbenefit", "none", moneyText(m.SSBenefit), "a month at full retirement age, today's dollars")
 	row("Claim age", "ssclaim", "62-70", intText(m.SSClaimAge), "")
-	row("FERS high-3", "high3", "none", moneyText(m.FERSHigh3), "a year, today's dollars")
-	row("Years of service", "years", "", intText(m.FERSYears), "")
-	row("Separation age", "sep", "", intText(m.FERSSeparationAge), "")
-	row("Annuity start age", "start", "", intText(m.FERSStartAge), "")
-	t.label("Survivor option")
-	survivor := m.FERSSurvivor
-	if survivor == "" {
-		survivor = model.SurvivorNone
-	}
-	if k := pick("hhsurvivor"+n, survivorLabels[slices.Index(model.Survivors, survivor)], em*10, survivorLabels, slices.Index(model.Survivors, survivor)); k >= 0 {
-		t.editMember(i, "survivor", string(model.Survivors[k]))
-	}
-	if e := t.errs["hhsurvivor"+n]; e != "" {
-		errorBeside("Not changed: " + e)
+	if m.HasFERS() {
+		row("FERS high-3", "high3", "none", moneyText(m.FERSHigh3), "a year, today's dollars")
+		row("Years of service", "years", "", intText(m.FERSYears), "")
+		row("Separation age", "sep", "", intText(m.FERSSeparationAge), "")
+		row("Annuity start age", "start", "", intText(m.FERSStartAge), "")
+		t.label("Survivor option")
+		survivor := m.FERSSurvivor
+		if survivor == "" {
+			survivor = model.SurvivorNone
+		}
+		if k := pick("hhsurvivor"+n, survivorLabels[slices.Index(model.Survivors, survivor)], em*10, survivorLabels, slices.Index(model.Survivors, survivor)); k >= 0 {
+			t.editMember(i, "survivor", string(model.Survivors[k]))
+		}
+		if e := t.errs["hhsurvivor"+n]; e != "" {
+			errorBeside("Not changed: " + e)
+		}
+		if imgui.Button("Remove FERS##hhremovefers") {
+			t.changeMember(m.Name, "remove FERS", removeFERSChange())
+		}
+	} else {
+		t.addFERS(m)
 	}
 	if m.SSBenefit > 0 || m.HasFERS() {
 		var parts []string
@@ -182,6 +252,56 @@ func (t *acctTab) benefits(i int, m model.HouseholdMember, force bool) {
 		}
 		disabledText(strings.Join(parts, ", "))
 	}
+}
+
+// addFERS draws the form that gives the member a FERS annuity.
+func (t *acctTab) addFERS(m model.HouseholdMember) {
+	em := imgui.FontSize()
+	f := t.fers[m.Name]
+	imgui.AlignTextToFramePadding()
+	disabledText("FERS")
+	for _, in := range []struct {
+		field, hint string
+		text        *string
+		width       float32
+	}{
+		{"high3", "high-3 a year", &f.high3, em * 8},
+		{"years", "years", &f.years, em * 4},
+		{"sep", "separation age", &f.sep, em * 8},
+		{"start", "start age", &f.start, em * 6},
+	} {
+		imgui.SameLine()
+		s := *in.text
+		imgui.SetNextItemWidth(in.width)
+		if imgui.InputTextWithHint("##hhfers"+in.field, in.hint, &s, 0, nil) {
+			f.set(in.field, s)
+		}
+	}
+	survivor := f.survivor
+	if survivor == "" {
+		survivor = model.SurvivorNone
+	}
+	if k := pick("hhfserssurvivor", survivorLabels[slices.Index(model.Survivors, survivor)], em*10, survivorLabels, slices.Index(model.Survivors, survivor)); k >= 0 {
+		f.set("survivor", string(model.Survivors[k]))
+	}
+	if t.fers == nil {
+		t.fers = map[string]fersForm{}
+	}
+	t.fers[m.Name] = f
+	imgui.SameLine()
+	formButton("Add FERS##hhaddfers", t.fersCheck.get(problemKey(t.a.rec, m.Name, f), func() string { return fersProblem(t.a.st, t.a.rec, m.Name, f) }), f.untouched(), func() {
+		ch, _ := f.change()
+		if t.changeMember(m.Name, "add FERS", ch) {
+			delete(t.fers, m.Name)
+		}
+	})
+}
+
+// changeMember applies the change to the member through ops.EditHouseholdMember as one undoable edit. It reports whether it did.
+func (t *acctTab) changeMember(name, what string, ch ops.MemberChange) bool {
+	return t.a.edit(what, func() (*ops.Result, error) {
+		return ops.EditHouseholdMember(t.a.st, t.a.rec, name, ch, ops.Options{})
+	})
 }
 
 // stateNames lists the names of the state tax tables the record has, in the order of its tables.
