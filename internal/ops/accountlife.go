@@ -92,7 +92,7 @@ func checkNotCounter(st *store.Store, id model.AccountID) error {
 	return nil
 }
 
-// RestoreDocuments replaces the record's accounts, assets, base budget and projections with copies of those of src, an earlier state of this record: how an editor undoes and redoes an edit of them. Record entries are not restored: an account keeps the entries it has, and one that has entries, or is the counter account of any, cannot be removed (ErrInUse), so such a restore saves nothing. A restore after which a live grant has no vest calendar, one that no longer plans its vests, an account that is not an equity account, or a proceeds account that is missing or not a brokerage account, is ErrInUse too.
+// RestoreDocuments replaces the record's accounts, assets, base budget, projections, household and tax tables with copies of those of src, an earlier state of this record: how an editor undoes and redoes an edit of them. Record entries are not restored: an account keeps the entries it has, and one that has entries, or is the counter account of any, cannot be removed (ErrInUse), so such a restore saves nothing. A restore after which a live grant has no vest calendar, one that no longer plans its vests, an account that is not an equity account, or a proceeds account that is missing or not a brokerage account, is ErrInUse too.
 func RestoreDocuments(st *store.Store, rec *model.Record, src *model.Record, o Options) (*Result, error) {
 	next := rec.WithDocuments(src)
 	for _, a := range rec.Accounts {

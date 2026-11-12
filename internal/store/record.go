@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/tax"
 )
 
 // encodeRecord turns everything in the record except the entries into document rows.
@@ -29,6 +31,19 @@ func encodeRecord(r *model.Record) ([]docRow, error) {
 	}
 	if err := add(kindBudget, "", 0, budgetDoc{Items: mapSlice(r.Budget.Items, itemDoc)}); err != nil {
 		return nil, err
+	}
+	if err := add(kindHousehold, "", 0, householdToDoc(r.Household)); err != nil {
+		return nil, err
+	}
+	for i, f := range r.Tax.Federal {
+		if err := add(kindTaxFederal, strconv.Itoa(f.Year), i, f); err != nil {
+			return nil, err
+		}
+	}
+	for i, st := range r.Tax.State {
+		if err := add(kindTaxState, st.Name+"/"+strconv.Itoa(st.Year), i, st); err != nil {
+			return nil, err
+		}
 	}
 	for i, a := range r.Accounts {
 		d := accountDoc{a.ID, a.Name, a.Type, a.Tax, a.StatedRate, defaultDoc(a.Default), a.Closed}
@@ -89,6 +104,9 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 		projs   []projectionDoc
 		cals    []calendarDoc
 		stocks  = map[string][]segDoc{}
+
+		household *householdDoc
+		taxes     tax.Tables
 	)
 	for _, row := range rows {
 		var err error
@@ -99,6 +117,11 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 			today = d.Today
 		case kindBudget:
 			err = decodeDoc(row, &budget)
+			if row.format < 6 {
+				for i := range budget.Items {
+					upgradeIncome(&budget.Items[i])
+				}
+			}
 		case kindAccount:
 			var d accountDoc
 			err = decodeDoc(row, &d)
@@ -123,9 +146,40 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 			var d []segDoc
 			err = decodeDoc(row, &d)
 			stocks[row.key] = d
+		case kindHousehold:
+			var d householdDoc
+			err = decodeDoc(row, &d)
+			household = &d
+		case kindTaxFederal:
+			var d tax.Federal
+			err = decodeDoc(row, &d)
+			if err == nil {
+				err = d.Validate()
+				if err != nil {
+					err = fmt.Errorf("store: %s %q: %w", row.kind, row.key, err)
+				}
+			}
+			taxes.Federal = append(taxes.Federal, d)
+		case kindTaxState:
+			var d tax.State
+			err = decodeDoc(row, &d)
+			if err == nil {
+				err = d.Validate()
+				if err != nil {
+					err = fmt.Errorf("store: %s %q: %w", row.kind, row.key, err)
+				}
+			}
+			taxes.State = append(taxes.State, d)
 		case kindProjection:
 			var d projectionDoc
 			err = decodeDoc(row, &d)
+			if row.format < 6 {
+				for _, m := range d.Mods {
+					if m.Item != nil {
+						upgradeIncome(m.Item)
+					}
+				}
+			}
 			projs = append(projs, d)
 		default:
 			return nil, fmt.Errorf("store: unknown document kind %q", row.kind)
@@ -136,6 +190,12 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 	}
 
 	rec := model.NewRecord(today)
+	if household != nil {
+		rec.Household = docHousehold(*household)
+	}
+	if taxes.Federal != nil || taxes.State != nil {
+		rec.Tax = taxes
+	}
 	if budget.Items != nil {
 		rec.Budget.Items = make([]model.BudgetItem, 0, len(budget.Items))
 	}

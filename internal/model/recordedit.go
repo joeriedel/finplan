@@ -39,7 +39,7 @@ func cloneSchedules(m map[string]Schedule) map[string]Schedule {
 	return c
 }
 
-// Clone returns a deep copy of the record: nothing in it is shared with the original, and the copy's indexes and member numbering are its own. It is what an edit of accounts, assets or the budget changes while the original stays as it was.
+// Clone returns a deep copy of the record: nothing in it is shared with the original, and the copy's indexes and member numbering are its own. It is what an edit of accounts, assets, the budget, the household or the tax tables changes while the original stays as it was.
 func (r *Record) Clone() *Record {
 	c := r.WithProjections(r.Projections)
 	if r.Projections == nil {
@@ -49,6 +49,8 @@ func (r *Record) Clone() *Record {
 	c.Classes = slices.Clone(r.Classes)
 	c.Prices = r.Prices.clone()
 	c.StockGrowth = cloneSchedules(r.StockGrowth)
+	c.Household = r.Household.Clone()
+	c.Tax = r.Tax.Clone()
 	c.Calendars = nil
 	for _, cal := range r.Calendars {
 		c.Calendars = append(c.Calendars, cal.Clone())
@@ -179,7 +181,7 @@ func (r *Record) RemoveAccount(id AccountID) error {
 	return nil
 }
 
-// WithDocuments returns a copy of r whose accounts, assets, base budget and projections are copies of src's, as an editor's undo needs. The entries stay r's: an account src has takes r's snapshots and transactions, or none if r lacks it.
+// WithDocuments returns a copy of r whose accounts, assets, base budget, projections, household and tax tables are copies of src's, as an editor's undo needs. The entries stay r's: an account src has takes r's snapshots and transactions, or none if r lacks it.
 func (r *Record) WithDocuments(src *Record) *Record {
 	n := src.Clone()
 	for _, a := range n.Accounts {
@@ -191,6 +193,7 @@ func (r *Record) WithDocuments(src *Record) *Record {
 	}
 	c := r.Clone()
 	c.Budget, c.Projections, c.Calendars, c.StockGrowth = n.Budget, n.Projections, n.Calendars, n.StockGrowth
+	c.Household, c.Tax = n.Household, n.Tax
 	c.Accounts, c.Assets, c.accountIdx, c.assetIdx, c.seq = n.Accounts, n.Assets, n.accountIdx, n.assetIdx, n.seq
 	for _, a := range c.Accounts {
 		a.prices = c.Prices

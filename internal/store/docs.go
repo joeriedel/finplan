@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/tax"
 )
 
 // formatCurrent is the document format version this build writes. Every document row carries its own
@@ -16,8 +17,8 @@ import (
 // converts it. Format 2 added the modification mode and the budget item growth to format 1's shape; a
 // format 1 document has neither and reads as set and zero, and the bump makes an older build refuse a
 // document whose scale modifications it would otherwise silently ignore. Format 3 added the accounts a
-// projection defines; a format 1 or 2 document has none and reads as an empty list. Format 4 added the close date of an account; an older document has none and reads as an open account, and the bump makes an older build refuse a document whose closed accounts it would otherwise show as open. Format 5 stores a budget item's amount and growth as segment arrays and adds the count and unit of a custom recurrence; an older document has numbers there, which read as a one-segment schedule (a zero growth as none), and the bump makes an older build refuse a document whose schedules it would otherwise misread.
-const formatCurrent = 5
+// projection defines; a format 1 or 2 document has none and reads as an empty list. Format 4 added the close date of an account; an older document has none and reads as an open account, and the bump makes an older build refuse a document whose closed accounts it would otherwise show as open. Format 5 stores a budget item's amount and growth as segment arrays and adds the count and unit of a custom recurrence; an older document has numbers there, which read as a one-segment schedule (a zero growth as none), and the bump makes an older build refuse a document whose schedules it would otherwise misread. Format 6 adds the income type of a budget item, the household and the tax tables; a budget item of an older document has no income type, which an income item reads as wages, and a record with no tax tables is given the shipped ones when it is loaded.
+const formatCurrent = 6
 
 // Document kinds.
 const (
@@ -30,9 +31,12 @@ const (
 	kindProjection = "projection"
 	kindCalendar   = "calendar"
 	kindStock      = "stock"
+	kindHousehold  = "household"
+	kindTaxFederal = "taxfed"
+	kindTaxState   = "taxstate"
 )
 
-// The DTOs below are the stored shape of formats 1 to 5. They are separate from the model types so that
+// The DTOs below are the stored shape of formats 1 to 6. They are separate from the model types so that
 // renaming a model field cannot change what is on disk.
 
 type recordDoc struct {
@@ -116,10 +120,39 @@ type budgetItemDoc struct {
 	Account    model.AccountID `json:"account"`
 	From       model.AccountID `json:"from"`
 	To         model.AccountID `json:"to"`
+	// IncomeType is empty for an income item written before format 6, which reads as wages, and for the other kinds.
+	IncomeType model.IncomeType `json:"income_type,omitempty"`
 }
 
 type budgetDoc struct {
 	Items []budgetItemDoc `json:"items"`
+}
+
+type householdMemberDoc struct {
+	Name  string     `json:"name"`
+	Birth model.Date `json:"birth"`
+	Role  model.Role `json:"role"`
+}
+
+type householdDoc struct {
+	Members  []householdMemberDoc `json:"members"`
+	Filing   tax.FilingStatus     `json:"filing"`
+	State    string               `json:"state"`
+	Checking model.AccountID      `json:"checking,omitempty"`
+}
+
+// The tax tables are stored in the shape of the tax package's types, whose JSON is also what the tax table commands read and print, so the two cannot differ.
+
+func householdToDoc(h model.Household) householdDoc {
+	return householdDoc{mapSlice(h.Members, func(m model.HouseholdMember) householdMemberDoc {
+		return householdMemberDoc{m.Name, m.Birth, m.Role}
+	}), h.Filing, h.State, h.Checking}
+}
+
+func docHousehold(d householdDoc) model.Household {
+	return model.Household{Members: mapSlice(d.Members, func(m householdMemberDoc) model.HouseholdMember {
+		return model.HouseholdMember{Name: m.Name, Birth: m.Birth, Role: m.Role}
+	}), Filing: d.Filing, State: d.State, Checking: d.Checking}
 }
 
 type classDoc struct {
@@ -262,7 +295,7 @@ type docRow struct {
 // decodeDoc decodes a document body of the given format version into v, the current shape.
 func decodeDoc(row docRow, v any) error {
 	switch row.format {
-	case 1, 2, 3, 4, 5:
+	case 1, 2, 3, 4, 5, 6:
 		if err := json.Unmarshal(row.body, v); err != nil {
 			return fmt.Errorf("store: %s %q: %w", row.kind, row.key, err)
 		}
@@ -334,7 +367,14 @@ func docDefault(d []intervalDoc) model.DefaultBalance {
 func itemDoc(b model.BudgetItem) budgetItemDoc {
 	r := b.Recurrence
 	return budgetItemDoc{b.ID, b.Name, b.Kind, scheduleDoc(b.Amount), recurrenceDoc{r.Kind, r.Anchor, int(r.Month), r.Day, r.Day2, r.Count, r.Unit},
-		b.Start, b.End, b.Indexed, scheduleDoc(b.Growth), b.Account, b.From, b.To}
+		b.Start, b.End, b.Indexed, scheduleDoc(b.Growth), b.Account, b.From, b.To, b.IncomeType}
+}
+
+// upgradeIncome gives an income item of a document older than format 6 the income type it was always taxed as.
+func upgradeIncome(it *budgetItemDoc) {
+	if it.Kind == model.ItemIncome && it.IncomeType == "" {
+		it.IncomeType = model.IncomeWages
+	}
 }
 
 func docItem(d budgetItemDoc) (model.BudgetItem, error) {
@@ -353,7 +393,7 @@ func docItem(d budgetItemDoc) (model.BudgetItem, error) {
 	}
 	return model.BudgetItem{ID: d.ID, Name: d.Name, Kind: d.Kind, Amount: amount,
 		Recurrence: model.Recurrence{Kind: r.Kind, Anchor: r.Anchor, Month: time.Month(r.Month), Day: r.Day, Day2: r.Day2, Count: r.Count, Unit: r.Unit},
-		Start:      d.Start, End: d.End, Indexed: d.Indexed, Growth: growth, Account: d.Account, From: d.From, To: d.To}, nil
+		Start:      d.Start, End: d.End, Indexed: d.Indexed, Growth: growth, Account: d.Account, From: d.From, To: d.To, IncomeType: d.IncomeType}, nil
 }
 
 func memberToDoc(m model.Member) memberDoc {

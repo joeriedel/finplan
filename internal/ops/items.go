@@ -56,6 +56,11 @@ func checkItemAs(rec *model.Record, it model.BudgetItem, existing *model.BudgetI
 	default:
 		return it, refuse(ErrInvalidValue, "unknown item kind %q", it.Kind)
 	}
+	if it.Kind != model.ItemIncome {
+		it.IncomeType = ""
+	} else if it.IncomeType != "" && !it.IncomeType.Valid() {
+		return it, refuse(ErrInvalidValue, "the income type %q must be wages, ordinary or tax-free", it.IncomeType)
+	}
 	r := it.Recurrence
 	// A legacy item may stay without a start if its recurrence is unchanged or needs no phase; otherwise an anchor phases it.
 	legacy := existing != nil && existing.Start == nil

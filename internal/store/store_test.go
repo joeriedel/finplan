@@ -17,6 +17,7 @@ import (
 
 	"github.com/joeriedel/finplan/internal/demodata"
 	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/tax"
 )
 
 func openTemp(t *testing.T) (*Store, string) {
@@ -114,7 +115,7 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	want := demodata.Family()
 	mustSave(t, s, want)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 5 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 6 {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
 	// Format 1 documents have no mode and no growth; a schedule of no growth is not stored.
@@ -1185,8 +1186,8 @@ func TestFormat4BudgetDocumentsLoadUnchanged(t *testing.T) {
 	at := func(y int, m time.Month, d int) *model.Date { return model.Ptr(model.D(y, m, d)) }
 	want := []model.BudgetItem{
 		{ID: "rent", Name: "Rent", Kind: model.ItemExpense, Amount: model.Constant(1500), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 31}, Start: at(2025, 1, 1), End: at(2030, 12, 31), Indexed: true, Growth: model.Constant(0.03), Account: "checking"},
-		{ID: "pay-a", Name: "Pay A", Kind: model.ItemIncome, Amount: model.Constant(2000), Recurrence: model.Recurrence{Kind: model.Semimonthly, Day: 15, Day2: 31}, Account: "checking"},
-		{ID: "pay-b", Name: "Pay B", Kind: model.ItemIncome, Amount: model.Constant(1800), Recurrence: model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2024, 11, 8)}, Account: "checking"},
+		{ID: "pay-a", Name: "Pay A", Kind: model.ItemIncome, Amount: model.Constant(2000), Recurrence: model.Recurrence{Kind: model.Semimonthly, Day: 15, Day2: 31}, Account: "checking", IncomeType: model.IncomeWages},
+		{ID: "pay-b", Name: "Pay B", Kind: model.ItemIncome, Amount: model.Constant(1800), Recurrence: model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2024, 11, 8)}, Account: "checking", IncomeType: model.IncomeWages},
 		{ID: "trip", Name: "Trip", Kind: model.ItemExpense, Amount: model.Constant(3000), Recurrence: model.Recurrence{Kind: model.Annual, Month: time.June, Day: 15}, Account: "checking"},
 		{ID: "gift", Name: "Gift", Kind: model.ItemTransfer, Amount: model.Constant(250), Recurrence: model.Recurrence{Kind: model.OneTime, Anchor: model.D(2027, 6, 1)}, Start: at(2027, 6, 1), From: "checking", To: "outside"},
 	}
@@ -1194,7 +1195,7 @@ func TestFormat4BudgetDocumentsLoadUnchanged(t *testing.T) {
 		t.Fatalf("budget items load as %+v, want %+v", got.Budget.Items, want)
 	}
 	added := got.Projection("New job").Mods[0].Item
-	wantAdded := model.BudgetItem{ID: "side", Name: "Side", Kind: model.ItemIncome, Amount: model.Constant(400), Recurrence: model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2027, 1, 8)}, Start: at(2027, 1, 8), Growth: model.Constant(0.02), Account: "checking"}
+	wantAdded := model.BudgetItem{ID: "side", Name: "Side", Kind: model.ItemIncome, Amount: model.Constant(400), Recurrence: model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2027, 1, 8)}, Start: at(2027, 1, 8), Growth: model.Constant(0.02), Account: "checking", IncomeType: model.IncomeWages}
 	if added == nil || !reflect.DeepEqual(*added, wantAdded) {
 		t.Fatalf("added item loads as %+v, want %+v", added, wantAdded)
 	}
@@ -1365,5 +1366,66 @@ func TestStockGrowthAndFocalGrantRoundTrip(t *testing.T) {
 	mustSave(t, s, rec)
 	if got := mustLoad(t, s); len(got.StockGrowth) != 0 {
 		t.Errorf("deleted stock growth is still stored: %v", got.StockGrowth)
+	}
+}
+
+func TestHouseholdAndTaxTablesRoundTrip(t *testing.T) {
+	s, _ := openTemp(t)
+	want := demodata.Family()
+	want.Household.Filing = tax.Single
+	want.Household.State = "FLAT"
+	want.Household.Checking = demodata.Checking
+	flat := tax.State{Name: "FLAT", Year: 2025, Brackets: []tax.Bracket{{Over: 0, Rate: 0.04}}, StandardDeduction: map[tax.FilingStatus]float64{tax.Single: 1000}}
+	want.Tax.SetState(flat)
+	want.Tax.Federal[1].Status[tax.MarriedJoint].Brackets[1].Rate = 0.13
+	mustSave(t, s, want)
+	if got := mustLoad(t, s); !reflect.DeepEqual(got, want) {
+		t.Fatalf("loaded household %+v and tables differ from the saved ones", got.Household)
+	}
+}
+
+func TestRecordWithoutTaxTablesGetsTheShippedOnes(t *testing.T) {
+	s, _ := openTemp(t)
+	want := demodata.Family()
+	want.Household = model.DefaultHousehold()
+	mustSave(t, s, want)
+	if _, err := s.db.Exec(`DELETE FROM documents WHERE kind IN (?, ?, ?)`, kindHousehold, kindTaxFederal, kindTaxState); err != nil {
+		t.Fatal(err)
+	}
+	got := mustLoad(t, s)
+	if !reflect.DeepEqual(got.Tax, tax.Defaults()) || !reflect.DeepEqual(got.Household, model.DefaultHousehold()) {
+		t.Errorf("a record without tax documents loads with household %+v and %d federal tables", got.Household, len(got.Tax.Federal))
+	}
+	// A save writes the shipped tables, so the next load reads them back.
+	mustSave(t, s, got)
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM documents WHERE kind IN (?, ?)`, kindTaxFederal, kindTaxState).Scan(&n); err != nil || n != 6 {
+		t.Errorf("%d tax table documents after a save, %v", n, err)
+	}
+}
+
+func TestIncomeTypeOfLegacyItemsIsWages(t *testing.T) {
+	s, _ := openTemp(t)
+	rec := demodata.Family()
+	rec.Budget.Items = []model.BudgetItem{
+		{ID: "pay", Name: "Pay", Kind: model.ItemIncome, Amount: model.Constant(1), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, Account: demodata.Checking},
+		{ID: "interest", Name: "Interest", Kind: model.ItemIncome, Amount: model.Constant(1), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, Account: demodata.Checking, IncomeType: model.IncomeOrdinary},
+		{ID: "rent", Name: "Rent", Kind: model.ItemExpense, Amount: model.Constant(1), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, Account: demodata.Checking},
+	}
+	mustSave(t, s, rec)
+	if got := mustLoad(t, s); !reflect.DeepEqual(got.Budget.Items, rec.Budget.Items) {
+		t.Fatalf("items load as %+v", got.Budget.Items)
+	}
+	// A document written before format 6 has no income type.
+	if _, err := s.db.Exec(`UPDATE documents SET format = 5 WHERE kind = ?`, kindBudget); err != nil {
+		t.Fatal(err)
+	}
+	var legacy string
+	if err := s.db.QueryRow(`SELECT body FROM documents WHERE kind = ?`, kindBudget).Scan(&legacy); err != nil || strings.Contains(legacy, `"income_type":"wages"`) {
+		t.Fatalf("the unset income type was stored: %s, %v", legacy, err)
+	}
+	items := mustLoad(t, s).Budget.Items
+	if items[0].IncomeType != model.IncomeWages || items[1].IncomeType != model.IncomeOrdinary || items[2].IncomeType != "" {
+		t.Errorf("income types %q, %q, %q", items[0].IncomeType, items[1].IncomeType, items[2].IncomeType)
 	}
 }

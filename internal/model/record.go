@@ -6,9 +6,11 @@ package model
 import (
 	"fmt"
 	"slices"
+
+	"github.com/joeriedel/finplan/internal/tax"
 )
 
-// Record is everything entered: accounts, assets, the base budget, global parameters and projections.
+// Record is everything entered: accounts, assets, the base budget, global parameters, projections, the household and the tax tables.
 // Today is the record's reference date; it stands in for a clock so the engine stays a pure function.
 // Change the accounts, assets and members only through the Add and Remove methods, which keep the indexes and the member sequence consistent; the budget, globals, classes and projections are plain fields. An edit changes a copy, a Clone or (for projections only) an EditableCopy, so the original stays as it was until the edit is accepted.
 type Record struct {
@@ -26,6 +28,10 @@ type Record struct {
 	// StockGrowth is each stock's base growth schedule by symbol; a stock with none is projected flat.
 	StockGrowth map[string]Schedule
 
+	// Household is who files the tax return, and Tax the rules it is taxed by.
+	Household Household
+	Tax       tax.Tables
+
 	seq        int
 	accountIdx map[AccountID]int
 	assetIdx   map[AssetID]int
@@ -38,6 +44,8 @@ func NewRecord(today Date) *Record {
 		Globals:     map[string]Schedule{},
 		Prices:      &PriceBook{},
 		StockGrowth: map[string]Schedule{},
+		Household:   DefaultHousehold(),
+		Tax:         tax.Defaults(),
 		accountIdx:  map[AccountID]int{},
 		assetIdx:    map[AssetID]int{},
 	}

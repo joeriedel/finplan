@@ -14,6 +14,7 @@ import (
 	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/store"
+	"github.com/joeriedel/finplan/internal/tax"
 )
 
 // The reasons an operation refuses. Errors returned by operations match these with errors.Is, as well as model.ErrCycle.
@@ -113,6 +114,12 @@ type Result struct {
 	Grant *model.Grant
 	Vest  *model.RecordedVest
 	Price *model.PriceObservation
+	// Household is the household a household edit changed, in Record; Member the member a member edit changed or added, or for a removal the member as it was.
+	Household *model.Household
+	Member    *model.HouseholdMember
+	// Federal and State are the tax table a table edit set or reverted, in Record.
+	Federal *tax.Federal
+	State   *tax.State
 	// Removed is the name of the projection or id of the asset or account a delete removed.
 	Removed string
 	// Rename is set when the edit renamed a projection.
@@ -150,14 +157,15 @@ func edit(st *store.Store, rec *model.Record, o Options, change func(next *model
 	return commit(st, next, res, o)
 }
 
-// editRecord is edit for a change to the accounts, assets or budget. It runs the change on a deep copy of the record and refuses a change that leaves them as they were.
+// editRecord is edit for a change to the accounts, assets, budget, household or tax tables. It runs the change on a deep copy of the record and refuses a change that leaves them as they were.
 func editRecord(st *store.Store, rec *model.Record, o Options, change func(next *model.Record) (Result, error)) (*Result, error) {
 	next := rec.Clone()
 	res, err := change(next)
 	if err != nil {
 		return nil, err
 	}
-	if reflect.DeepEqual(rec.Accounts, next.Accounts) && reflect.DeepEqual(rec.Assets, next.Assets) && reflect.DeepEqual(rec.Budget, next.Budget) {
+	if reflect.DeepEqual(rec.Accounts, next.Accounts) && reflect.DeepEqual(rec.Assets, next.Assets) && reflect.DeepEqual(rec.Budget, next.Budget) &&
+		reflect.DeepEqual(rec.Household, next.Household) && reflect.DeepEqual(rec.Tax, next.Tax) {
 		return nil, ErrNoChange
 	}
 	return commit(st, next, res, o)

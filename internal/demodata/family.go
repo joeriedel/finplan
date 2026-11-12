@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/tax"
 )
 
 // FamilyToday is the fixed reference date of the Family record, so the data is deterministic.
@@ -100,7 +101,7 @@ func monthly(day int) model.Recurrence {
 
 func familyBudget() model.Budget {
 	income := func(id, name string, amount float64, rec model.Recurrence) model.BudgetItem {
-		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemIncome, Amount: model.Constant(amount), Recurrence: rec, Indexed: true, Account: Checking}
+		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemIncome, Amount: model.Constant(amount), Recurrence: rec, Indexed: true, Account: Checking, IncomeType: model.IncomeWages}
 	}
 	expense := func(id, name string, from model.AccountID, amount float64, rec model.Recurrence) model.BudgetItem {
 		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemExpense, Amount: model.Constant(amount), Recurrence: rec, Indexed: true, Account: from}
@@ -139,6 +140,18 @@ func Family() *model.Record {
 	rec := model.NewRecord(FamilyToday)
 	rec.Globals[model.PropInflation] = model.Constant(0.025)
 	rec.Budget = familyBudget()
+	rec.Household = model.Household{
+		Members: []model.HouseholdMember{
+			{Name: "Parent A", Birth: model.D(1985, time.March, 12), Role: model.RoleEarner},
+			{Name: "Parent B", Birth: model.D(1986, time.July, 4), Role: model.RoleSpouse},
+			{Name: "Child 1", Birth: model.D(2008, time.April, 9), Role: model.RoleDependent},
+			{Name: "Child 2", Birth: model.D(2012, time.September, 20), Role: model.RoleDependent},
+			{Name: "Child 3", Birth: model.D(2015, time.May, 2), Role: model.RoleDependent},
+			{Name: "Child 4", Birth: model.D(2018, time.January, 15), Role: model.RoleDependent},
+		},
+		Filing: tax.MarriedJoint,
+		State:  tax.VA,
+	}
 	rsu := familyRSU()
 
 	for _, s := range accountSpecs {

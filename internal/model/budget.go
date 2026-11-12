@@ -18,6 +18,25 @@ const (
 	ItemTransfer ItemKind = "transfer"
 )
 
+// IncomeType says how an income item is taxed. The zero value of an income item is wages.
+type IncomeType string
+
+// Income types.
+const (
+	// IncomeWages is pay subject to income tax and payroll tax.
+	IncomeWages IncomeType = "wages"
+	// IncomeOrdinary is other taxable income, such as interest: income tax but no payroll tax.
+	IncomeOrdinary IncomeType = "ordinary"
+	// IncomeTaxFree is not taxed.
+	IncomeTaxFree IncomeType = "tax-free"
+)
+
+// IncomeTypes lists the income types.
+var IncomeTypes = []IncomeType{IncomeWages, IncomeOrdinary, IncomeTaxFree}
+
+// Valid reports whether t is one of the income types.
+func (t IncomeType) Valid() bool { return slices.Contains(IncomeTypes, t) }
+
 // RecurrenceKind is a calendar rule.
 type RecurrenceKind string
 
@@ -187,6 +206,16 @@ type BudgetItem struct {
 	Growth   Schedule
 	Account  AccountID
 	From, To AccountID
+	// IncomeType is how an income item is taxed; empty reads as wages, and it is empty for the other kinds.
+	IncomeType IncomeType
+}
+
+// Income returns how the item is taxed: its income type, wages when it has none. It is meaningful for an income item only.
+func (b BudgetItem) Income() IncomeType {
+	if b.IncomeType == "" {
+		return IncomeWages
+	}
+	return b.IncomeType
 }
 
 // Dates returns the dates after..upTo on which the item recurs; interval kinds take their phase from the recurrence's anchor, or from the item's start when it has none.
