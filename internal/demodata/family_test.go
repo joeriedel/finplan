@@ -20,8 +20,8 @@ func TestFamilyStructure(t *testing.T) {
 	if rec.Today != FamilyToday {
 		t.Errorf("today: got %v", rec.Today)
 	}
-	if len(rec.Accounts) != 13 {
-		t.Errorf("accounts: got %d, want 13", len(rec.Accounts))
+	if len(rec.Accounts) != 14 {
+		t.Errorf("accounts: got %d, want 14", len(rec.Accounts))
 	}
 	for _, a := range rec.Accounts {
 		if rec.Asset(model.DefaultAssetID(a.ID)) == nil {
@@ -36,7 +36,7 @@ func TestFamilyStructure(t *testing.T) {
 	if got := rec.Projection(ProjNewJob); got.Parent != ProjBase || len(got.Mods) != 2 {
 		t.Errorf("New job: got %+v", got)
 	}
-	wantAccounts := map[model.AssetID]int{AllCash: 2, Retirement: 3, Colleges: 3, NetWorth: 13, Liquid: 3}
+	wantAccounts := map[model.AssetID]int{AllCash: 2, Retirement: 3, Colleges: 4, NetWorth: 14, Liquid: 3}
 	for id, n := range wantAccounts {
 		res, err := rec.Resolve(id)
 		if err != nil {
@@ -430,5 +430,55 @@ func TestFamilyCardStaysBounded(t *testing.T) {
 		if math.Abs(s.Amount) >= 5000 {
 			t.Errorf("the card is not small on %v: %v", s.Date, s.Amount)
 		}
+	}
+}
+
+func TestFamilyCollegeSavings(t *testing.T) {
+	rec := Family()
+	bills := map[string]int{}
+	for _, it := range rec.Budget.Items {
+		if a := rec.Account(it.Account); it.Kind == model.ItemExpense && a != nil && a.Type == model.Type529 {
+			bills[a.Beneficiary]++
+			if it.Start == nil || it.End == nil {
+				t.Errorf("%s has no college years", it.ID)
+			}
+		}
+	}
+	n := 0
+	for _, a := range rec.Accounts {
+		if a.Type != model.Type529 {
+			continue
+		}
+		n++
+		i := rec.Household.Member(a.Beneficiary)
+		if i < 0 || rec.Household.Members[i].Role != model.RoleDependent {
+			t.Errorf("%s: beneficiary %q is not a dependent", a.ID, a.Beneficiary)
+			continue
+		}
+		last := a.Snapshots[len(a.Snapshots)-1].Balance
+		if a.Basis == nil || *a.Basis >= last || *a.Basis <= 0 {
+			t.Errorf("%s: basis %v, balance %v", a.ID, a.Basis, last)
+		}
+		if bills[a.Beneficiary] != 8 {
+			t.Errorf("%s: %d college bills, want 8", a.ID, bills[a.Beneficiary])
+		}
+	}
+	if n != 4 {
+		t.Errorf("%d 529 accounts, want 4", n)
+	}
+	// The oldest child is in college today and the others start later, each after turning 18.
+	for _, c := range colleges {
+		m := rec.Household.Members[rec.Household.Member(c.child)]
+		by, bm, _ := m.Birth.YMD()
+		year := by + 18
+		if bm >= time.August {
+			year++
+		}
+		if c.first != model.D(year, time.August, 1) {
+			t.Errorf("%s starts college on %s, want the August after turning 18", c.child, c.first)
+		}
+	}
+	if colleges[0].first > FamilyToday {
+		t.Error("the oldest child is in college today")
 	}
 }

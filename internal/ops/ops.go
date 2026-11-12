@@ -117,6 +117,8 @@ type Result struct {
 	// Household is the household a household edit changed, in Record; Member the member a member edit changed or added, or for a removal the member as it was.
 	Household *model.Household
 	Member    *model.HouseholdMember
+	// Affected lists the accounts a removal of a household member cleared as the beneficiary of.
+	Affected []Affected
 	// Federal and State are the tax table a table edit set or reverted, in Record.
 	Federal *tax.Federal
 	State   *tax.State

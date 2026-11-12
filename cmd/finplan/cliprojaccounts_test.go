@@ -89,12 +89,12 @@ func TestCLIHouseScenario(t *testing.T) {
 	}
 	var starts []struct{ Account string }
 	cliJSON(t, &starts, "--db", path, "starts", "--projection", "New job + house")
-	if len(starts) != 15 {
-		t.Errorf("starts under the new projection lists %d accounts, want 15", len(starts))
+	if len(starts) != 16 {
+		t.Errorf("starts under the new projection lists %d accounts, want 16", len(starts))
 	}
 	cliJSON(t, &starts, "--db", path, "starts")
-	if len(starts) != 13 {
-		t.Errorf("starts with no projection lists %d accounts, want 13", len(starts))
+	if len(starts) != 14 {
+		t.Errorf("starts with no projection lists %d accounts, want 14", len(starts))
 	}
 
 	// A mod can aim at the projection's own account, and a child inherits it.

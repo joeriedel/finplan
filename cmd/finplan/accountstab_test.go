@@ -510,7 +510,7 @@ func TestGroupHeaderTextAndEquityTax(t *testing.T) {
 		if want := g.Title + " · " + strconv.Itoa(len(g.Rows)) + " · " + graph.FormatMoney(sum); groupHeaderText(g) != want {
 			t.Errorf("header %q, want %q", groupHeaderText(g), want)
 		}
-		if g.Title == accountTypeName(model.Type529) && (len(g.Rows) != 3 || !groupHasHeader(g)) {
+		if g.Title == accountTypeName(model.Type529) && (len(g.Rows) != 4 || !groupHasHeader(g)) {
 			t.Errorf("529 group %+v", g)
 		}
 	}

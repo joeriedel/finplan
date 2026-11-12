@@ -95,7 +95,7 @@ func TestAccountsInTheTab(t *testing.T) {
 	if n := len(objectsFor(a.rec, model.KindAsset, child, 0)); n != len(objectsFor(a.rec, model.KindAsset, demodata.ProjBase, 0)) {
 		t.Errorf("default assets leaked into the asset choices: %d", n)
 	}
-	if len(effective(a.rec, child).Accounts) != len(a.rec.Accounts)+1 || len(a.rec.Accounts) != 13 {
+	if len(effective(a.rec, child).Accounts) != len(a.rec.Accounts)+1 || len(a.rec.Accounts) != 14 {
 		t.Error("effective view")
 	}
 

@@ -119,6 +119,12 @@ func TestCompute(t *testing.T) {
 			want: Result{AGI: 10000, Penalty: 1000, Total: 1000},
 		},
 		{
+			name: "non-qualified 529 earnings are income and take the penalty",
+			in:   Input{Year: 2025, Status: MarriedJoint, OtherIncome: 100000, NonQualified529: 5000},
+			want: Result{AGI: 105000, FederalTaxable: 73500, FederalTax: 2385 + 0.12*(73500-23850), Penalty: 500,
+				Total: 2385 + 0.12*(73500-23850) + 500},
+		},
+		{
 			name: "NIIT on the investment income above the threshold",
 			in:   Input{Year: 2025, Status: MarriedJoint, OtherIncome: 300000, NetInvestmentIncome: 100000},
 			want: Result{AGI: 300000, FederalTaxable: 268500, FederalTax: 2385 + 8772 + 0.22*(206700-96950) + 0.24*(268500-206700),

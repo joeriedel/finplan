@@ -99,6 +99,10 @@ type Account struct {
 	TermMonths     int
 	FirstPayment   *Date
 	PaidFrom       AccountID
+	// Beneficiary is the name of the dependent household member a 529 account is for; empty means none. Only a 529 has one.
+	Beneficiary string
+	// Basis is a 529 account's total contributions as of its latest balance; nil means the basis is the balance, so there are no earnings. Only a 529 has one.
+	Basis *float64
 	// Default is the fallback balance for dates with no actual data.
 	Default DefaultBalance
 	// Opens is set only on a projection's own accounts (see ProjAccount): the account has no value before that date and projects from it.

@@ -329,7 +329,7 @@ func TestCLITaxYearMatchesBreakdown(t *testing.T) {
 	var y26, y27 ttaxYear
 	cliJSON(t, &y26, "--demo", "tax", "year", "2026", "--projection", "Base")
 	cliJSON(t, &y27, "--demo", "tax", "year", "2027", "--projection", "Base")
-	if y27.Year != 2027 || y27.Inputs.Wages < 200000 || y27.Inputs.VestWages <= 0 || y27.Inputs.PreTax.K401 < 20000 || len(y27.Inputs.DependentAges) != 4 || len(y27.Inputs.Contrib529) != 3 {
+	if y27.Year != 2027 || y27.Inputs.Wages < 200000 || y27.Inputs.VestWages <= 0 || y27.Inputs.PreTax.K401 < 20000 || len(y27.Inputs.DependentAges) != 4 || len(y27.Inputs.Contrib529) != 4 {
 		t.Fatalf("2027 inputs = %+v", y27.Inputs)
 	}
 	if y27.Reconciliation.Date != "2028-04-15" || y27.Reconciliation.Account == nil || *y27.Reconciliation.Account != "checking" {

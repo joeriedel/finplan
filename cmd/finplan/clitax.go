@@ -85,7 +85,7 @@ var taxReadCommands = []*command{
 		Name: "tax year", Summary: "the household's tax for a calendar year under a projection, as the engine books it: the year's income, contributions and withdrawals, the tax by kind, what paychecks and vests withheld and the reconciliation on 15 April of the next year",
 		Args:   []argDef{{Name: "year", Description: "the calendar year", Required: true}},
 		Flags:  []flagDef{{Name: "projection", Type: typeString, Description: projDesc}},
-		Output: "{year, projection, filing_status, state, inputs: {wages (paychecks), vest_wages, pre_tax: {k401, ira, hsa} (before the limits), ordinary_income (other-ordinary items, interest, required distributions, Roth conversions and taxable withdrawals that are not early), social_security_benefits (Social Security received; not in ordinary_income), interest (included in ordinary_income), early_withdrawal, retirement_withdrawals (taken from tax-deferred accounts to cover expenses after the projection's retirement date, early ones included; in ordinary_income or early_withdrawal), required_distributions (the year's required minimum distribution, taken from tax-deferred accounts once the first earner reaches 73, or 75 if born 1960 or later; in ordinary_income), roth_conversion (moved from tax-deferred accounts to a Roth IRA under the projection's Roth bracket; in ordinary_income), short_term_gains and long_term_gains (realized by sales in taxable accounts, a loss negative; not in ordinary_income), dependent_ages, contrib_529: [one per 529 account]}, tax: {agi, federal_taxable, federal_tax (before credits), credits, niit, early_withdrawal_penalty, state_taxable, state_tax, social_security, medicare, additional_medicare, total, gains_tax (the part of total the gains add)}, withheld: {paychecks, vests, total} (those before the projection's start included), due_minus_withheld, reconciliation: {date, account (null without a checking account), amount (positive paid, negative refunded)}, " + diagShape + "}; dollars rounded to cents",
+		Output: "{year, projection, filing_status, state, inputs: {wages (paychecks), vest_wages, pre_tax: {k401, ira, hsa} (before the limits), ordinary_income (other-ordinary items, interest, required distributions, Roth conversions and taxable withdrawals that are not early), social_security_benefits (Social Security received; not in ordinary_income), interest (included in ordinary_income), early_withdrawal, nonqualified_529 (the earnings part of transfers out of 529 accounts to other kinds of account, taxed as ordinary income with the early withdrawal penalty rate; not in ordinary_income), retirement_withdrawals (taken from tax-deferred accounts to cover expenses after the projection's retirement date, early ones included; in ordinary_income or early_withdrawal), required_distributions (the year's required minimum distribution, taken from tax-deferred accounts once the first earner reaches 73, or 75 if born 1960 or later; in ordinary_income), roth_conversion (moved from tax-deferred accounts to a Roth IRA under the projection's Roth bracket; in ordinary_income), short_term_gains and long_term_gains (realized by sales in taxable accounts, a loss negative; not in ordinary_income), dependent_ages, contrib_529: [one per 529 account]}, tax: {agi, federal_taxable, federal_tax (before credits), credits, niit, early_withdrawal_penalty, state_taxable, state_tax, social_security, medicare, additional_medicare, total, gains_tax (the part of total the gains add)}, withheld: {paychecks, vests, total} (those before the projection's start included), due_minus_withheld, reconciliation: {date, account (null without a checking account), amount (positive paid, negative refunded)}, " + diagShape + "}; dollars rounded to cents",
 		run:    cmdTaxYear,
 	},
 	{
@@ -101,6 +101,7 @@ var taxReadCommands = []*command{
 			{Name: "short-term-gains", Type: typeNumber, Description: "net realized capital gains on assets held a year or less (a loss is negative): ordinary income, and net investment income; 0 when omitted"},
 			{Name: "long-term-gains", Type: typeNumber, Description: "net realized capital gains on assets held more than a year (a loss is negative): taxed at the long-term rates on top of ordinary taxable income, and net investment income; a net loss deducts up to 3,000 from ordinary income; 0 when omitted"},
 			{Name: "early-withdrawal", Type: typeNumber, Description: "a taxable withdrawal before age 59 and a half: ordinary income with the early withdrawal penalty"},
+			{Name: "nonqualified-529", Type: typeNumber, Description: "the earnings part of 529 withdrawals not spent on qualified education: ordinary income with the additional tax"},
 			{Name: "contrib-529", Type: typeString, Description: "the year's contributions to each 529 account, comma separated, e.g. 4000,2500; each deducted from state income up to the state's cap"},
 			{Name: "inflation", Type: typeNumber, Description: "annual inflation as a fraction, indexing a year past the last federal table; the record's inflation today when omitted"},
 		},
@@ -144,7 +145,7 @@ var taxCommands = []*command{
 	{
 		Name: "household member remove", Summary: "remove a person from the household",
 		Args:   []argDef{{Name: "name", Description: "the member's name", Required: true}},
-		Output: "{dry_run, changed, removed: name, member: the member as it was, household: as household show prints it, after the edit}",
+		Output: "{dry_run, changed, removed: name, member: the member as it was, household: as household show prints it, after the edit, affected: [{kind, in, detail, effect}] the 529 accounts whose beneficiary it cleared}",
 		run:    cmdMemberRemove,
 	},
 	{
@@ -427,6 +428,7 @@ func cmdMemberRemove(c *call) (any, error) {
 	}
 	if res != nil {
 		out["removed"] = res.Removed
+		out["affected"] = affectedList(ops.DeletePlan{Affected: res.Affected})
 	}
 	return out, nil
 }
@@ -602,7 +604,7 @@ func cmdTaxCompute(c *call) (any, error) {
 		out  *float64
 	}{
 		{"other-income", &in.OtherIncome},
-		{"net-investment-income", &in.NetInvestmentIncome}, {"short-term-gains", &in.ShortTermGains}, {"long-term-gains", &in.LongTermGains}, {"early-withdrawal", &in.EarlyWithdrawal}, {"inflation", &in.Inflation},
+		{"net-investment-income", &in.NetInvestmentIncome}, {"short-term-gains", &in.ShortTermGains}, {"long-term-gains", &in.LongTermGains}, {"early-withdrawal", &in.EarlyWithdrawal}, {"nonqualified-529", &in.NonQualified529}, {"inflation", &in.Inflation},
 	} {
 		if v, ok, err := c.number(f.name); err != nil {
 			return nil, err
@@ -708,6 +710,7 @@ type jtaxYear struct {
 		Benefits        float64   `json:"social_security_benefits"`
 		Interest        float64   `json:"interest"`
 		EarlyWithdrawal float64   `json:"early_withdrawal"`
+		NonQualified529 float64   `json:"nonqualified_529"`
 		Withdrawals     float64   `json:"retirement_withdrawals"`
 		RMD             float64   `json:"required_distributions"`
 		RothConversion  float64   `json:"roth_conversion"`
@@ -766,6 +769,7 @@ func cmdTaxYear(c *call) (any, error) {
 	in.PreTax.K401, in.PreTax.IRA, in.PreTax.HSA = cents(ty.K401), cents(ty.IRA), cents(ty.HSA)
 	in.Benefits = cents(ty.Benefits)
 	in.Ordinary, in.Interest, in.EarlyWithdrawal = cents(ty.Ordinary), cents(ty.Interest), cents(ty.EarlyWithdrawal)
+	in.NonQualified529 = cents(ty.NonQualified529)
 	in.Withdrawals, in.RMD, in.RothConversion = cents(ty.Drawn), cents(ty.RMD), cents(ty.Conversion)
 	in.ShortTermGains, in.LongTermGains = cents(ty.ShortTermGains), cents(ty.LongTermGains)
 	in.DependentAges, in.Contrib529 = ages, contrib

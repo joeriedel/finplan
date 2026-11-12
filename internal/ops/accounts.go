@@ -31,7 +31,7 @@ func checkAttrs(typ model.AccountType, tax model.TaxTreatment, rate float64) err
 	return nil
 }
 
-// NewAccount adds an account with no record entries, and its default asset. The account needs a name, a type and a tax treatment; an empty ID is made from the name, and an ID that an account or asset has is ErrNameTaken, and so is a name that another account or an asset has, ignoring case. Snapshots, transactions and default balances in acct are ignored.
+// NewAccount adds an account with no record entries, and its default asset. The account needs a name, a type and a tax treatment; an empty ID is made from the name, and an ID that an account or asset has is ErrNameTaken, and so is a name that another account or an asset has, ignoring case. The beneficiary and basis of a 529 are checked as EditAccount checks them. Snapshots, transactions and default balances in acct are ignored.
 func NewAccount(st *store.Store, rec *model.Record, acct model.Account, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		name := strings.TrimSpace(acct.Name)
@@ -51,7 +51,10 @@ func NewAccount(st *store.Store, rec *model.Record, acct model.Account, o Option
 		if next.Asset(model.DefaultAssetID(model.AccountID(id))) != nil {
 			return Result{}, refuse(ErrNameTaken, "there is already an asset %q", model.DefaultAssetID(model.AccountID(id)))
 		}
-		a := &model.Account{ID: model.AccountID(id), Name: name, Type: acct.Type, Tax: acct.Tax, StatedRate: acct.StatedRate}
+		a := &model.Account{ID: model.AccountID(id), Name: name, Type: acct.Type, Tax: acct.Tax, StatedRate: acct.StatedRate, Beneficiary: acct.Beneficiary, Basis: copyPtr(acct.Basis)}
+		if err := edit529(next, a, AccountChange{}); err != nil {
+			return Result{}, err
+		}
 		if err := next.AddAccount(a); err != nil {
 			return Result{}, refuse(ErrInvalidValue, "%v", err)
 		}
@@ -71,6 +74,10 @@ type AccountChange struct {
 	FirstPayment   *model.Date
 	PaidFrom       *model.AccountID
 	ClearTerms     bool
+	// Beneficiary is the dependent a 529 is for; an empty name clears it. Basis is a 529's contributions as of its latest balance; ClearBasis unsets it first. Only a 529 has them (ErrInvalidValue).
+	Beneficiary *string
+	Basis       *float64
+	ClearBasis  bool
 }
 
 // EditAccount changes attributes of an account. Renaming the account renames its default asset too; a name that another account or an asset has is ErrNameTaken.
@@ -119,6 +126,9 @@ func EditAccount(st *store.Store, rec *model.Record, id model.AccountID, ch Acco
 		if err := editTerms(next, a, ch); err != nil {
 			return Result{}, err
 		}
+		if err := edit529(next, a, ch); err != nil {
+			return Result{}, err
+		}
 		if err := next.CheckAllocation(a.Type, a.Allocation); err != nil {
 			return Result{}, refuse(ErrInvalidValue, "%v: clear the allocation first", err)
 		}
@@ -154,6 +164,34 @@ func editTerms(rec *model.Record, a *model.Account, ch AccountChange) error {
 		return unknownAccount(a.PaidFrom)
 	case a.Type != model.TypeMortgage && (a.OriginalAmount != 0 || a.TermMonths != 0 || a.FirstPayment != nil || a.PaidFrom != ""):
 		return refuse(ErrInvalidValue, "only a mortgage account has an original amount, term, first payment and paying account: clear them first")
+	}
+	return nil
+}
+
+// edit529 applies the beneficiary and basis of ch to the account and refuses a basis below zero or out of range, a beneficiary who is not a dependent of the household, and either on an account that is not a 529.
+func edit529(rec *model.Record, a *model.Account, ch AccountChange) error {
+	if ch.Beneficiary != nil {
+		a.Beneficiary = strings.TrimSpace(*ch.Beneficiary)
+	}
+	if ch.ClearBasis {
+		a.Basis = nil
+	}
+	if ch.Basis != nil {
+		a.Basis = copyPtr(ch.Basis)
+	}
+	switch {
+	case a.Basis != nil && (!finite(*a.Basis) || *a.Basis < 0):
+		return refuse(ErrInvalidValue, "the basis %v must be zero or above and within range", *a.Basis)
+	case a.Type != model.Type529 && (a.Beneficiary != "" || a.Basis != nil):
+		return refuse(ErrInvalidValue, "only a 529 account has a beneficiary and basis: clear them first")
+	case a.Beneficiary != "":
+		i := rec.Household.Member(a.Beneficiary)
+		if i < 0 {
+			return refuse(ErrUnknownObject, "there is no household member %q", a.Beneficiary)
+		}
+		if rec.Household.Members[i].Role != model.RoleDependent {
+			return refuse(ErrInvalidValue, "%q is not a dependent: a 529 beneficiary must be", a.Beneficiary)
+		}
 	}
 	return nil
 }

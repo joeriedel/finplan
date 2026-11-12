@@ -68,7 +68,7 @@ func newAcctProblem(st *store.Store, rec *model.Record, f newAcctForm) string {
 	return reasonOf(err)
 }
 
-// accountChange reads the new text of one attribute of an account being edited: name or rate (a percentage), the choice of type or tax, or a mortgage's original amount, term in months, first payment date or paying account (the id; blank for none, which for the amount and the term is 0).
+// accountChange reads the new text of one attribute of an account being edited: name or rate (a percentage), the choice of type or tax, a mortgage's original amount, term in months, first payment date or paying account (the id; blank for none, which for the amount and the term is 0), or a 529's beneficiary (a member's name; blank for none) or basis (blank for unset).
 func accountChange(field, text string) (ops.AccountChange, error) {
 	var ch ops.AccountChange
 	switch field {
@@ -110,6 +110,18 @@ func accountChange(field, text string) (ops.AccountChange, error) {
 		ch.FirstPayment = &d
 	case "paidfrom":
 		ch.PaidFrom = model.Ptr(model.AccountID(text))
+	case "beneficiary":
+		ch.Beneficiary = model.Ptr(text)
+	case "basis":
+		if text == "" {
+			ch.ClearBasis = true
+			break
+		}
+		v, err := parseValue(model.PropAmount, model.ModeSet, text)
+		if err != nil {
+			return ch, err
+		}
+		ch.Basis = &v
 	}
 	return ch, nil
 }
@@ -484,6 +496,9 @@ func (t *acctTab) detail(acct *model.Account) {
 
 	if acct.Type == model.TypeMortgage {
 		t.mortgage(acct)
+	}
+	if acct.Type == model.Type529 {
+		t.college(acct)
 	}
 	if model.Investable(acct.Type) {
 		t.allocation(acct)

@@ -121,7 +121,7 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	want := demodata.Family()
 	mustSave(t, s, want)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 11 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 12 {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
 	// Format 1 documents have no mode and no growth; a schedule of no growth is not stored.
@@ -1548,6 +1548,40 @@ func TestMortgageTermsAndMatchesRoundTripAndFormat8Loads(t *testing.T) {
 	}
 	if got := mustLoad(t, old); !reflect.DeepEqual(got, want) {
 		t.Fatal("the format 8 record loaded differently")
+	}
+}
+
+func TestCollegeBeneficiaryAndBasisRoundTripAndOlderAccountsHaveNone(t *testing.T) {
+	s, _ := openTemp(t)
+	rec := demodata.Family()
+	mustSave(t, s, rec)
+	got := mustLoad(t, s)
+	for _, c := range []model.AccountID{demodata.College1, demodata.College2, demodata.College3, demodata.College4} {
+		a, want := got.Account(c), rec.Account(c)
+		if a.Beneficiary == "" || a.Beneficiary != want.Beneficiary || a.Basis == nil || *a.Basis != *want.Basis {
+			t.Errorf("%s loaded with beneficiary %q and basis %v, want %q and %v", c, a.Beneficiary, a.Basis, want.Beneficiary, want.Basis)
+		}
+	}
+	if a := got.Account(demodata.Checking); a.Beneficiary != "" || a.Basis != nil {
+		t.Errorf("checking loaded with %q and %v", a.Beneficiary, a.Basis)
+	}
+
+	// A document written before format 12 has neither field.
+	old, _ := openTemp(t)
+	want := demodata.Family()
+	for _, a := range want.Accounts {
+		a.Beneficiary, a.Basis = "", nil
+	}
+	mustSave(t, old, want)
+	var withNew int
+	if err := old.db.QueryRow(`SELECT COUNT(*) FROM documents WHERE body LIKE '%beneficiary%' OR body LIKE '%"basis"%'`).Scan(&withNew); err != nil || withNew != 0 {
+		t.Fatalf("documents with new fields: %d, %v", withNew, err)
+	}
+	if _, err := old.db.Exec(`UPDATE documents SET format = 11`); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoad(t, old); !reflect.DeepEqual(got, want) {
+		t.Fatal("the format 11 record loaded differently")
 	}
 }
 

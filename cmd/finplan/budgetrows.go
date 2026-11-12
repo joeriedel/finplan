@@ -64,6 +64,9 @@ func budgetRowOf(rec *model.Record, it model.BudgetItem) budgetRow {
 		row.Accounts = budgetAccountName(rec, it.From) + " to " + budgetAccountName(rec, it.To)
 	} else {
 		row.Accounts = budgetAccountName(rec, it.Account)
+		if a := rec.Account(it.Account); it.Kind == model.ItemExpense && a != nil && a.Type == model.Type529 {
+			row.Accounts += " (college cost)"
+		}
 	}
 	if it.Kind == model.ItemIncome {
 		row.Taxed = incomeTypeName(it.Income())

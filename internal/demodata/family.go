@@ -32,6 +32,7 @@ const (
 	College1  model.AccountID = "529-oldest"
 	College2  model.AccountID = "529-middle"
 	College3  model.AccountID = "529-youngest"
+	College4  model.AccountID = "529-child4"
 	// Equity holds the restricted stock units of an invented employer, Acme Corp, whose ticker is Symbol.
 	Equity model.AccountID = "equity"
 )
@@ -97,6 +98,23 @@ var accountSpecs = []accountSpec{
 	{College1, "529 oldest", model.Type529, model.Tax529, 0.05, 38000, 0},
 	{College2, "529 middle", model.Type529, model.Tax529, 0.05, 26000, 0},
 	{College3, "529 youngest", model.Type529, model.Tax529, 0.05, 14000, 0},
+	{College4, "529 Child 4", model.Type529, model.Tax529, 0.05, 6000, 0},
+}
+
+// college is a child's 529 account and college years in the Family record: the beneficiary, the contribution basis as of today, the first and last day of the four academic years (the August after the child turns 18 to the following May of the fourth year) and the amount of each of the two bills a year, tuition with room and board, in today's dollars.
+type college struct {
+	id          model.AccountID
+	child       string
+	basis       float64
+	first, last model.Date
+	bill        float64
+}
+
+var colleges = []college{
+	{College1, "Child 1", 24000, model.D(2026, time.August, 1), model.D(2030, time.May, 31), 14000},
+	{College2, "Child 2", 25000, model.D(2031, time.August, 1), model.D(2035, time.May, 31), 15000},
+	{College3, "Child 3", 15000, model.D(2033, time.August, 1), model.D(2037, time.May, 31), 15000},
+	{College4, "Child 4", 8000, model.D(2036, time.August, 1), model.D(2040, time.May, 31), 16000},
 }
 
 func monthly(day int) model.Recurrence {
@@ -146,7 +164,19 @@ func familyBudget() model.Budget {
 	cardPayment.Indexed = true
 	cardPayoff := transfer("card-payoff", "Credit card opening balance", Checking, Card, 550, 2)
 	cardPayoff.Start, cardPayoff.End = model.Ptr(FamilyToday), model.Ptr(model.D(2027, time.November, 30))
-	return model.Budget{Items: []model.BudgetItem{
+	var collegeBills []model.BudgetItem
+	for _, c := range colleges {
+		for _, term := range []struct {
+			id, name string
+			month    time.Month
+			day      int
+		}{{"fall", "fall bill", time.August, 15}, {"spring", "spring bill", time.January, 15}} {
+			bill := expense("college-"+string(c.id)+"-"+term.id, c.child+" college "+term.name, c.id, c.bill, model.Recurrence{Kind: model.Annual, Month: term.month, Day: term.day})
+			bill.Start, bill.End = model.Ptr(c.first), model.Ptr(c.last)
+			collegeBills = append(collegeBills, bill)
+		}
+	}
+	items := []model.BudgetItem{
 		salaryA,
 		salaryB,
 		cardPayment,
@@ -166,11 +196,13 @@ func familyBudget() model.Budget {
 		transfer("save-529-1", "529 contribution (oldest)", Checking, College1, 170, 25),
 		transfer("save-529-2", "529 contribution (middle)", Checking, College2, 170, 25),
 		transfer("save-529-3", "529 contribution (youngest)", Checking, College3, 170, 25),
-	}}
+		transfer("save-529-4", "529 contribution (Child 4)", Checking, College4, 170, 25),
+	}
+	return model.Budget{Items: append(items, collegeBills...)}
 }
 
-// Family returns an invented record for a family of six: thirteen accounts with two years of history,
-// a basic budget, aggregate assets and three projections. Every number is invented. The TSP is
+// Family returns an invented record for a family of six: fourteen accounts with two years of history,
+// a basic budget with each child's college bills, aggregate assets and three projections. Every number is invented. The TSP is
 // entered by hand, so its data ends months before the synced accounts', and the home has only
 // occasional valuations. One parent's employer pays in restricted stock units: the equity account has two grants, seven vests recorded with their brokerage deposits, and a price history. The Liquid asset contains an overlapping member.
 func Family() *model.Record {
@@ -200,6 +232,11 @@ func Family() *model.Record {
 		}
 		if s.id == Mortgage {
 			setMortgageTerms(a)
+		}
+		for _, c := range colleges {
+			if c.id == s.id {
+				a.Beneficiary, a.Basis = c.child, model.Ptr(c.basis)
+			}
 		}
 		must(rec.AddAccount(a))
 		if s.id == Brokerage {

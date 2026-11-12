@@ -36,6 +36,8 @@ type Input struct {
 	Contrib529 []float64
 	// EarlyWithdrawal is a taxable withdrawal before age 59 and a half: ordinary income and subject to the penalty.
 	EarlyWithdrawal float64
+	// NonQualified529 is the earnings part of withdrawals from 529 accounts that did not pay qualified education expenses: ordinary income and subject to the penalty.
+	NonQualified529 float64
 	// ShortTermGains and LongTermGains are the year's net realized capital gains on assets held a year or less and more than a year; a loss is negative. Short-term gains are ordinary income and long-term gains are taxed at the preferential rates on top of the ordinary taxable income. A net loss deducts up to 3,000 (1,500 married filing separately) from ordinary income, and what is left is not carried forward. Both kinds of gains count in the adjusted gross income and the net investment income.
 	ShortTermGains, LongTermGains float64
 	// BenefitIncome is the year's Social Security benefits received. Part of it is taxable by the provisional income formula and the state does not tax it. It is not the payroll tax, which is Result.SocialSecurity.
@@ -244,7 +246,7 @@ func Compute(t Tables, in Input) (Result, error) {
 	r.AdditionalMedicare = f.AdditionalMedicareRate * math.Max(0, medicareWages-rules.AdditionalMedicareThreshold)
 
 	ordinaryGains, preferred, lossDeduction := netGains(in.ShortTermGains, in.LongTermGains, in.Status)
-	r.AGI = wages + in.OtherIncome + in.EarlyWithdrawal + ordinaryGains + preferred - lossDeduction - deductions
+	r.AGI = wages + in.OtherIncome + in.EarlyWithdrawal + in.NonQualified529 + ordinaryGains + preferred - lossDeduction - deductions
 	if in.BenefitIncome > 0 {
 		base, adjusted := rules.BenefitBase, rules.BenefitAdjusted
 		if base == 0 && adjusted == 0 {
@@ -285,7 +287,7 @@ func Compute(t Tables, in Input) (Result, error) {
 	r.Credits = capped(credit, r.FederalTax)
 
 	r.NIIT = f.NIITRate * math.Max(0, math.Min(in.NetInvestmentIncome+ordinaryGains+preferred, r.AGI-rules.NIITThreshold))
-	r.Penalty = f.PenaltyRate * math.Max(0, in.EarlyWithdrawal)
+	r.Penalty = f.PenaltyRate * (math.Max(0, in.EarlyWithdrawal) + math.Max(0, in.NonQualified529))
 
 	if in.State != "" {
 		s, err := t.stateFor(in.State, in.Year)

@@ -182,6 +182,20 @@ func EditHouseholdMember(st *store.Store, rec *model.Record, name string, c Memb
 		if err != nil {
 			return Result{}, err
 		}
+		if m.Role != model.RoleDependent {
+			for _, a := range next.Accounts {
+				if a.Beneficiary == name {
+					return Result{}, refuse(ErrInUse, "%q is the beneficiary of account %q: only a dependent can be one", name, a.ID)
+				}
+			}
+		}
+		if m.Name != name {
+			for _, a := range next.Accounts {
+				if a.Beneficiary == name {
+					a.Beneficiary = m.Name
+				}
+			}
+		}
 		next.Household.Members[i] = m
 		return Result{Household: &next.Household, Member: &m}, nil
 	})
@@ -196,6 +210,13 @@ func RemoveHouseholdMember(st *store.Store, rec *model.Record, name string, o Op
 		}
 		m := next.Household.Members[i]
 		next.Household.Members = append(next.Household.Members[:i], next.Household.Members[i+1:]...)
-		return Result{Household: &next.Household, Member: &m, Removed: m.Name}, nil
+		var affected []Affected
+		for _, a := range next.Accounts {
+			if a.Beneficiary == name {
+				a.Beneficiary = ""
+				affected = append(affected, Affected{AffectedBeneficiary, string(a.ID), "beneficiary " + name, EffectRemoved})
+			}
+		}
+		return Result{Household: &next.Household, Member: &m, Removed: m.Name, Affected: affected}, nil
 	})
 }

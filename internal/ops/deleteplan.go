@@ -22,6 +22,7 @@ const (
 	AffectedPreset       = "view preset"
 	AffectedHousehold    = "household"
 	AffectedTerms        = "mortgage terms"
+	AffectedBeneficiary  = "beneficiary"
 )
 
 // Effects of a delete on an Affected object.

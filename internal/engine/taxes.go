@@ -52,6 +52,8 @@ type TaxYear struct {
 	Interest float64
 	// EarlyWithdrawal is the withdrawals from tax-deferred accounts before 59 and a half.
 	EarlyWithdrawal float64
+	// NonQualified529 is the earnings part of the year's withdrawals from 529 accounts to other accounts, which are ordinary income and bear the additional tax.
+	NonQualified529 float64
 	// RMD and Conversion are the required minimum distribution and the Roth conversion of the year, and Drawn what the household withdrew from tax-deferred accounts to live on, early withdrawals included; all are in the income above.
 	RMD, Conversion, Drawn float64
 	// ShortTermGains and LongTermGains are the capital gains the year's sales in taxable accounts realized, on lots held a year or less and longer; a loss is negative. GainsTax is the part of Result.Total they add.
@@ -156,6 +158,8 @@ type householdTax struct {
 	savers []*path
 	// lots are the paths of taxable investment accounts, whose sales realize gains.
 	lots []*path
+	// p529 are the paths of 529 accounts, whose non-qualified withdrawals are taxed.
+	p529 []*path
 	// benefits maps the id of a synthesized benefit item to its kind.
 	benefits map[string]benefitKind
 	// draw is the projection's retirement settings; draws the income its drawdown, distributions and conversions add to each year, and ranOut is set once money has run out.
@@ -486,6 +490,9 @@ func (h *householdTax) compute(y int, interest []*path) *TaxYear {
 		dr = *d
 	}
 	t.EarlyWithdrawal += dr.early
+	for _, p := range h.p529 {
+		t.NonQualified529 += p.earningsIn(y)
+	}
 	t.RMD, t.Conversion, t.Drawn = dr.rmd, dr.conversion, dr.drawn+dr.early
 	t.Ordinary = in.ordinary + dr.drawn + dr.rmd + dr.conversion + t.Interest
 	for _, p := range h.lots {
@@ -496,7 +503,7 @@ func (h *householdTax) compute(y int, interest []*path) *TaxYear {
 	t.Input = tax.Input{
 		Year: y, Status: hh.Filing, State: hh.State, DependentAges: hh.DependentAges(y), Inflation: h.inflation(y),
 		Earners:     []tax.Earner{{Wages: in.wages + in.vests, K401: in.k401, IRA: in.ira, HSA: in.hsa}},
-		OtherIncome: t.Ordinary, BenefitIncome: t.Benefits, NetInvestmentIncome: t.Interest, EarlyWithdrawal: t.EarlyWithdrawal,
+		OtherIncome: t.Ordinary, BenefitIncome: t.Benefits, NetInvestmentIncome: t.Interest, EarlyWithdrawal: t.EarlyWithdrawal, NonQualified529: t.NonQualified529,
 		ShortTermGains: t.ShortTermGains, LongTermGains: t.LongTermGains,
 	}
 	for _, a := range h.rec.Accounts {

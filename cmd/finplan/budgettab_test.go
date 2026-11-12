@@ -30,7 +30,7 @@ func TestBudgetTabGroupsRowsAndTotals(t *testing.T) {
 	if len(groups) != 3 || groups[0].Kind != model.ItemIncome || groups[1].Kind != model.ItemExpense || groups[2].Kind != model.ItemTransfer {
 		t.Fatalf("groups %+v", groups)
 	}
-	if len(groups[0].Rows) != 2 || len(groups[1].Rows) != 7 || len(groups[2].Rows) != 10 {
+	if len(groups[0].Rows) != 2 || len(groups[1].Rows) != 15 || len(groups[2].Rows) != 11 {
 		t.Errorf("rows %d, %d, %d", len(groups[0].Rows), len(groups[1].Rows), len(groups[2].Rows))
 	}
 	if groups[0].Title != "Income" || groups[1].Title != "Expense" || groups[2].Title != "Transfer" {
@@ -67,7 +67,7 @@ func TestBudgetTabGroupsRowsAndTotals(t *testing.T) {
 	}
 
 	income, expenses, net := budgetTotalsText(a.rec)
-	if income != "$18,017" || expenses != "$6,150" || net != "$11,867" {
+	if income != "$18,017" || expenses != "$8,483" || net != "$9,533" {
 		t.Errorf("totals %s, %s, %s", income, expenses, net)
 	}
 }
@@ -103,7 +103,7 @@ func TestBudgetTabAddWithUndoAndRedo(t *testing.T) {
 	if bt.addItem.name != "" || bt.addItem.kind != model.ItemExpense {
 		t.Errorf("form after add %+v", bt.addItem)
 	}
-	if _, expenses, _ := budgetTotalsText(a.rec); expenses != "$6,210" {
+	if _, expenses, _ := budgetTotalsText(a.rec); expenses != "$8,543" {
 		t.Errorf("expenses %s", expenses)
 	}
 

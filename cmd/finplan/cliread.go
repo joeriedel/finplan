@@ -22,7 +22,7 @@ const (
 	dateNote  = "YYYY-MM-DD, or YYYY-MM for the first day of the month"
 	endNote   = "YYYY-MM-DD, or YYYY-MM for the last day of the month"
 	projDesc  = "projection to evaluate under, whose own accounts and those it inherits can be targets; reality when omitted"
-	diagShape = "diagnostics {skipped: [{projection, index, target: {kind, id}, property, reason}], overlaps: [{asset, seq, member, duplicates, against}], notes: [problems with the tax calculation, contributions the 401(k) limit refused, the date money runs out under a retirement date, and a Roth conversion bracket with no Roth IRA to convert into]}"
+	diagShape = "diagnostics {skipped: [{projection, index, target: {kind, id}, property, reason}], overlaps: [{asset, seq, member, duplicates, against}], notes: [problems with the tax calculation, contributions the 401(k) limit refused, the date money runs out under a retirement date, the date a 529 account runs out and checking takes over its college costs, and a Roth conversion bracket with no Roth IRA to convert into]}"
 	jsonNote  = "Dates are YYYY-MM-DD, null when absent or unbounded. Money is a plain number. Statuses are lowercase: default, actual, projected, partly_projected."
 )
 
@@ -36,7 +36,7 @@ var commands = []*command{
 	},
 	{
 		Name: "account list", Summary: "list the accounts",
-		Output: "[{id, name, type, tax, stated_rate (a fraction per year), default: [{from, to, value}], closed, allocation: [{class, percent}], rebalance_yearly, balance, last_data, stale}]; allocation is the account's split among market classes in percent, empty for an account with none, which grows at its stated_rate; rebalance_yearly is true if projections rebalance the account to its allocation every 1 January; default is the default balance intervals in the order added, the last added winning where they overlap; closed is the date the account was closed, null while it is open, and it reads 0 after that date; balance is the balance on the record's today (0 once today is after the account's close date); last_data is the date of the latest record entry, null without a snapshot; stale is true for an open account whose last_data is more than 45 days before the record's today, as the Graph labels it",
+		Output: "[{id, name, type, tax, stated_rate (a fraction per year), default: [{from, to, value}], closed, allocation: [{class, percent}], rebalance_yearly, beneficiary, basis, balance, last_data, stale}]; beneficiary and basis are a 529's beneficiary (a dependent's name) and contributions as of its latest balance, null on any other account and while unset; allocation is the account's split among market classes in percent, empty for an account with none, which grows at its stated_rate; rebalance_yearly is true if projections rebalance the account to its allocation every 1 January; default is the default balance intervals in the order added, the last added winning where they overlap; closed is the date the account was closed, null while it is open, and it reads 0 after that date; balance is the balance on the record's today (0 once today is after the account's close date); last_data is the date of the latest record entry, null without a snapshot; stale is true for an open account whose last_data is more than 45 days before the record's today, as the Graph labels it",
 		run:    cmdAccountList,
 	},
 	{
@@ -310,6 +310,9 @@ type jaccount struct {
 	FirstPayment   *jdate   `json:"first_payment"`
 	PaidFrom       *string  `json:"paid_from"`
 	MonthlyPayment *float64 `json:"monthly_payment"`
+	// The dependent a 529 is for and its contributions as of its latest balance; null on any other account, and while unset on a 529.
+	Beneficiary *string  `json:"beneficiary"`
+	Basis       *float64 `json:"basis"`
 }
 
 // jaccountRow is an account with what account list adds to it.
@@ -329,6 +332,9 @@ func accountJSON(a *model.Account) jaccount {
 		if a.Amortized() {
 			j.MonthlyPayment = model.Ptr(a.MonthlyPayment())
 		}
+	}
+	if a.Type == model.Type529 {
+		j.Beneficiary, j.Basis = nullable(a.Beneficiary), a.Basis
 	}
 	return j
 }

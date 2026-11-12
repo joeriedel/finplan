@@ -569,6 +569,10 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 			if !a.Tax.Sheltered() && model.Investable(a.Type) && !equityMode(a.ID) {
 				add(a.ID)
 			}
+			// A 529 account that items touch pays college costs and takes non-qualified withdrawals, which land on other accounts and in the tax.
+			if a.Type == model.Type529 && slices.ContainsFunc(items, func(it model.BudgetItem) bool { return it.Touches(a.ID) }) {
+				add(a.ID)
+			}
 			// Retirement draws on the accounts of the buckets, wherever they sit.
 			if _, ok := bucketOf(a); ok && ht.active(horizon) {
 				add(a.ID)
@@ -617,6 +621,7 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 			p.amortize(byID[p.acct.PaidFrom], horizon)
 		}
 	}
+	ht.settle529(all, byID)
 	for _, p := range all {
 		p.settle()
 	}
@@ -738,6 +743,9 @@ type path struct {
 	points  []point  // balance after each date with a flow, from start
 	// mirrored are the transfers other accounts recorded with this one as counter after this account's data ends.
 	mirrored []change
+	// college are the expense items paid from a 529 account, and nonQualified the earnings its transfers to other kinds of account took; both are made by settle529.
+	college      []collegeCost
+	nonQualified []earning
 	// ht is the household's tax, which withholds from the paychecks the path receives.
 	ht *householdTax
 	// idle is set when the query ends on or before start, so nothing is extrapolated.
@@ -1093,6 +1101,10 @@ func (p *path) flows(rec *model.Record, it model.BudgetItem, d model.Date, amt f
 			}
 		}
 	case model.ItemExpense:
+		if p.acct.Type == model.Type529 {
+			p.college = append(p.college, collegeCost{d, itemLabel(it), amt})
+			return
+		}
 		add(rankExpense, CauseExpense, -amt, "")
 	case model.ItemTransfer:
 		amt = p.ht.moved(it, d, amt)
@@ -1109,16 +1121,28 @@ func (p *path) flows(rec *model.Record, it model.BudgetItem, d model.Date, amt f
 	}
 }
 
+// itemLabel is the name of the item, else its id.
+func itemLabel(it model.BudgetItem) string {
+	if it.Name != "" {
+		return it.Name
+	}
+	return it.ID
+}
+
 // transferCause classifies money moving from src to dst: a withdrawal out of a tax-advantaged account
-// to one that is not, a contribution into one, otherwise a plain transfer. Accounts absent from the
-// record count as unsheltered.
+// to one that is not, or out of a 529 account to any other kind of account, a contribution into one,
+// otherwise a plain transfer. Accounts absent from the record count as unsheltered.
 func transferCause(rec *model.Record, src, dst model.AccountID) Cause {
 	sheltered := func(id model.AccountID) bool {
 		a := rec.Account(id)
 		return a != nil && a.Tax.Sheltered()
 	}
+	is529 := func(id model.AccountID) bool {
+		a := rec.Account(id)
+		return a != nil && a.Type == model.Type529
+	}
 	switch {
-	case sheltered(src) && !sheltered(dst):
+	case sheltered(src) && !sheltered(dst), is529(src) && !is529(dst):
 		return CauseWithdrawal
 	case !sheltered(src) && sheltered(dst):
 		return CauseContribution

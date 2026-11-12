@@ -94,7 +94,7 @@ func (s *taxState) renameProjection(from, to string) {
 // taxRows lists the year's figures in the order the CLI's tax year command reports them. Pre-tax deductions are what the tax rules deducted after the contribution limits, so they can be less than the contributions.
 func taxRows(rec *model.Record, ty *engine.TaxYear) []taxRow {
 	r := ty.Result
-	income := ty.Wages + ty.VestWages + ty.Ordinary + r.TaxableBenefits + ty.EarlyWithdrawal + tax.GainsInAGI(ty.ShortTermGains, ty.LongTermGains, ty.Input.Status)
+	income := ty.Wages + ty.VestWages + ty.Ordinary + r.TaxableBenefits + ty.EarlyWithdrawal + ty.NonQualified529 + tax.GainsInAGI(ty.ShortTermGains, ty.LongTermGains, ty.Input.Status)
 	deducted := income - r.AGI
 	state := "State tax"
 	if ty.Input.State != "" {
@@ -111,6 +111,9 @@ func taxRows(rec *model.Record, ty *engine.TaxYear) []taxRow {
 	}
 	if ty.EarlyWithdrawal != 0 {
 		rows = append(rows, taxRow{"Early withdrawals", formatDollars(ty.EarlyWithdrawal), ""})
+	}
+	if ty.NonQualified529 != 0 {
+		rows = append(rows, taxRow{"Non-qualified 529 earnings", formatDollars(ty.NonQualified529), ""})
 	}
 	if ty.ShortTermGains != 0 || ty.LongTermGains != 0 {
 		rows = append(rows, taxRow{"Realized gains", formatDollars(ty.ShortTermGains + ty.LongTermGains), "short-term " + formatDollars(ty.ShortTermGains) + ", long-term " + formatDollars(ty.LongTermGains)})

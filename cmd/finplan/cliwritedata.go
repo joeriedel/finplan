@@ -152,6 +152,8 @@ var dataCommands = []*command{
 			{Name: "tax", Type: typeEnum, Required: true, Choices: taxTreatments, Description: "tax treatment"},
 			{Name: "rate", Type: typeNumber, Description: "stated rate, the default growth when the account is projected: a fraction per year between -1 and 1; 0 when omitted"},
 			{Name: "id", Type: typeString, Description: "the account's id; made from the name when omitted. It must differ from every account and asset id"},
+			{Name: "beneficiary", Type: typeString, Description: "a 529's beneficiary, the name of a household member who is a dependent"},
+			{Name: "basis", Type: typeNumber, Description: "a 529's contributions as of its latest balance, zero or above; unset, the basis is the balance and a withdrawal has no earnings"},
 		},
 		Output: accountOut + "; the default asset follows as asset list prints it in asset",
 		run:    cmdAccountNew,
@@ -169,6 +171,10 @@ var dataCommands = []*command{
 			{Name: "first-payment", Type: typeDate, Description: "the date of a mortgage's first payment; later payments fall on its day of the month: " + dateNote},
 			{Name: "paid-from", Type: typeString, Description: "id of the account a mortgage's payments are taken from; none unsets it"},
 			{Name: "clear-terms", Type: typeBool, Default: "false", Description: "unset all of a mortgage's terms first; the others given are then set"},
+			{Name: "beneficiary", Type: typeString, Description: "a 529's beneficiary, the name of a household member who is a dependent; an empty name clears it. Expense items paid from the 529 are qualified college costs: it pays them while it has money and checking pays the rest. A transfer out of a 529 to another kind of account is non-qualified: its earnings are taxed with the additional tax"},
+			{Name: "clear-beneficiary", Type: typeBool, Default: "false", Description: "unset a 529's beneficiary"},
+			{Name: "basis", Type: typeNumber, Description: "a 529's contributions as of its latest balance, zero or above; withdrawals take basis in proportion to the balance, and the earnings part of a non-qualified one is taxed"},
+			{Name: "clear-basis", Type: typeBool, Default: "false", Description: "unset a 529's basis, so that it equals the balance"},
 		},
 		Output: accountOut,
 		run:    cmdAccountEdit,
@@ -606,7 +612,12 @@ func cmdAccountNew(c *call) (any, error) {
 	}
 	acct := model.Account{
 		ID: model.AccountID(c.str("id")), Name: c.args[0], Type: model.AccountType(c.str("type")),
-		Tax: model.TaxTreatment(c.str("tax")), StatedRate: rate,
+		Tax: model.TaxTreatment(c.str("tax")), StatedRate: rate, Beneficiary: c.str("beneficiary"),
+	}
+	if v, ok, err := c.number("basis"); err != nil {
+		return nil, err
+	} else if ok {
+		acct.Basis = &v
 	}
 	res, err := ops.NewAccount(st, rec, acct, c.options())
 	if err != nil {
@@ -663,8 +674,26 @@ func cmdAccountEdit(c *call) (any, error) {
 		ch.PaidFrom = &from
 	}
 	ch.ClearTerms = c.str("clear-terms") == "true"
+	if c.set["beneficiary"] {
+		ch.Beneficiary = model.Ptr(c.str("beneficiary"))
+	}
+	if c.str("clear-beneficiary") == "true" {
+		if c.set["beneficiary"] {
+			return nil, usageErr("--clear-beneficiary cannot be combined with --beneficiary")
+		}
+		ch.Beneficiary = model.Ptr("")
+	}
+	if v, ok, err := c.number("basis"); err != nil {
+		return nil, err
+	} else if ok {
+		ch.Basis = &v
+	}
+	ch.ClearBasis = c.str("clear-basis") == "true"
+	if ch.ClearBasis && ch.Basis != nil {
+		return nil, usageErr("--clear-basis cannot be combined with --basis")
+	}
 	if ch == (ops.AccountChange{}) {
-		return nil, usageErr("account edit needs at least one of --name, --type, --tax, --rate, --original, --term-months, --first-payment, --paid-from and --clear-terms")
+		return nil, usageErr("account edit needs at least one of --name, --type, --tax, --rate, --original, --term-months, --first-payment, --paid-from, --clear-terms, --beneficiary, --clear-beneficiary, --basis and --clear-basis")
 	}
 	res, err := ops.EditAccount(c.st, c.rec, id, ch, c.options())
 	return c.accountResult(res, err, id)

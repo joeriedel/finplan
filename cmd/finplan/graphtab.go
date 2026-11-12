@@ -85,9 +85,10 @@ type bandView struct {
 var demoLines = []model.AssetID{
 	demodata.NetWorth, demodata.AllCash, demodata.Retirement,
 	model.DefaultAssetID(demodata.Brokerage), model.DefaultAssetID(demodata.TSP), model.DefaultAssetID(demodata.Mortgage),
+	model.DefaultAssetID(demodata.College1), model.DefaultAssetID(demodata.College2), model.DefaultAssetID(demodata.College3), model.DefaultAssetID(demodata.College4),
 }
 
-// defaultLines returns the assets a new Graph draws. The demo draws its own six. Any other record draws every aggregate asset (a user asset that has an asset or a rule among its members) in record order, or, with none, every account's default asset in record order.
+// defaultLines returns the assets a new Graph draws. The demo draws its own ten: the aggregates, three accounts and the four 529 accounts, whose college years overlap. Any other record draws every aggregate asset (a user asset that has an asset or a rule among its members) in record order, or, with none, every account's default asset in record order.
 func defaultLines(rec *model.Record, demo bool) []model.AssetID {
 	var out []model.AssetID
 	if demo {

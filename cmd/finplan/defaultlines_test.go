@@ -52,6 +52,7 @@ func TestDefaultLines(t *testing.T) {
 	want = []model.AssetID{
 		demodata.NetWorth, demodata.AllCash, demodata.Retirement,
 		model.DefaultAssetID(demodata.Brokerage), model.DefaultAssetID(demodata.TSP), model.DefaultAssetID(demodata.Mortgage),
+		model.DefaultAssetID(demodata.College1), model.DefaultAssetID(demodata.College2), model.DefaultAssetID(demodata.College3), model.DefaultAssetID(demodata.College4),
 	}
 	if got := defaultLines(demodata.Family(), true); !reflect.DeepEqual(got, want) {
 		t.Errorf("demo: %v, want %v", got, want)
