@@ -209,7 +209,7 @@ func (t *budgetTab) taxes() {
 	}
 	imgui.SameLine()
 	if imgui.Button("Household...##taxhousehold") {
-		a.forceTab = "Accounts"
+		a.showHousehold()
 	}
 	tooltipOn("Open the household editor on the Accounts tab")
 
