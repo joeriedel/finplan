@@ -39,7 +39,7 @@ func TestBudgetTabGroupsRowsAndTotals(t *testing.T) {
 	salary := groups[0].Rows[0]
 	want := budgetRow{
 		ID: "salary-a", Name: "Salary (Parent A)", Schedule: "twice a month, days 15 and 31", Amount: "$5,000",
-		Accounts: accountName(a.rec, demodata.Checking), Start: "-", End: "-", Indexed: "Yes", Monthly: "$10,000",
+		Accounts: accountName(a.rec, demodata.Checking), Taxed: "Wages", Start: "-", End: "-", Indexed: "Yes", Monthly: "$10,000",
 	}
 	if salary != want {
 		t.Errorf("salary row %+v, want %+v", salary, want)
@@ -399,7 +399,7 @@ func TestBudgetRowFormatting(t *testing.T) {
 	if r := budgetRowOf(a.rec, it); r.Amount != "$1,234.50" {
 		t.Errorf("amount %q", r.Amount)
 	}
-	if got := strings.Join(budgetHeaders, ","); got != "Name,Repeats,Amount,Accounts,Starts,Ends,Indexed,Growth,Per month" {
+	if got := strings.Join(budgetHeaders, ","); got != "Name,Repeats,Amount,Accounts,Taxed as,Starts,Ends,Indexed,Growth,Per month" {
 		t.Errorf("headers %s", got)
 	}
 }

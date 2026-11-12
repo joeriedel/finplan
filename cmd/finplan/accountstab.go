@@ -176,7 +176,10 @@ type acctTab struct {
 	del  deleteDialog
 	fieldEditor
 
-	add                   newAcctForm
+	add newAcctForm
+	// hh is the Add member form of the household editor, and hhCheck keeps its problem.
+	hh                    householdForm
+	hhCheck               problemCache
 	snapDate, snapBalance string
 	ent                   entriesUI
 	// eq is the state of the equity sections of an equity account.
@@ -220,6 +223,7 @@ func (t *acctTab) draw() {
 	if open {
 		t.list(!showLedger)
 		t.addForm()
+		t.household()
 	}
 	imgui.EndChild()
 	imgui.SameLine()

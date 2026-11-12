@@ -19,7 +19,7 @@ import (
 // editStep is what the history keeps of one edit: the projections before and after it, its rename if it had one, and
 // the Graph switcher before and after, which the edit moves when it deletes the projection the switcher names.
 // A delete that removed lines from saved view presets also keeps those presets as stored before and after it (presetsBefore, presetsAfter), which undo and redo put back.
-// An edit of the accounts, assets, base budget or vest calendars also keeps the records before and after it (docsBefore, docsAfter; nil otherwise), which undo and redo restore, with their projections, through ops.RestoreDocuments.
+// An edit of the accounts, assets, base budget, vest calendars, household or tax tables also keeps the records before and after it (docsBefore, docsAfter; nil otherwise), which undo and redo restore, with their projections, through ops.RestoreDocuments.
 // The lists and records are never changed once kept: edits change copies, and undo and redo install copies.
 type editStep struct {
 	before, after               []*model.Projection
@@ -53,7 +53,8 @@ func (a *app) edit(label string, do func() (*ops.Result, error)) bool {
 	old, switchBefore := a.rec, a.graph.lines.Switcher()
 	a.install(res)
 	step := editStep{before: old.Projections, after: res.Record.Projections, rename: res.Rename, switchBefore: switchBefore, switchAfter: a.graph.lines.Switcher()}
-	if !reflect.DeepEqual(old.Accounts, res.Record.Accounts) || !reflect.DeepEqual(old.Assets, res.Record.Assets) || !reflect.DeepEqual(old.Budget, res.Record.Budget) || !reflect.DeepEqual(old.Calendars, res.Record.Calendars) {
+	if !reflect.DeepEqual(old.Accounts, res.Record.Accounts) || !reflect.DeepEqual(old.Assets, res.Record.Assets) || !reflect.DeepEqual(old.Budget, res.Record.Budget) || !reflect.DeepEqual(old.Calendars, res.Record.Calendars) ||
+		!reflect.DeepEqual(old.Household, res.Record.Household) || !reflect.DeepEqual(old.Tax, res.Record.Tax) {
 		step.docsBefore, step.docsAfter = old, res.Record
 	}
 	for _, c := range res.Pruned {

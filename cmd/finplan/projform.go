@@ -92,8 +92,10 @@ type itemForm struct {
 	unit                  model.RecurrenceUnit
 	account, from, to     model.AccountID
 	indexed               bool
-	amountSched           bool
-	growthSched           bool
+	// income is the income type as stored: empty for an income item that has none, which is wages.
+	income      model.IncomeType
+	amountSched bool
+	growthSched bool
 }
 
 // isPlain reports whether the schedule is a single number that always holds, or empty: what a plain number field can show and write without losing anything.
@@ -123,7 +125,7 @@ func valueNow(s model.Schedule, today model.Date) float64 {
 // formOf returns the form that shows the item as it is on today.
 func formOf(it model.BudgetItem, today model.Date) itemForm {
 	r := it.Recurrence
-	f := itemForm{kind: it.Kind, name: it.Name, amount: trimFloat(valueNow(it.Amount, today)), every: r.Kind, unit: r.Unit, account: it.Account, from: it.From, to: it.To, indexed: it.Indexed, amountSched: !isPlain(it.Amount), growthSched: !isPlain(it.Growth)}
+	f := itemForm{kind: it.Kind, name: it.Name, amount: trimFloat(valueNow(it.Amount, today)), every: r.Kind, unit: r.Unit, account: it.Account, from: it.From, to: it.To, indexed: it.Indexed, income: it.IncomeType, amountSched: !isPlain(it.Amount), growthSched: !isPlain(it.Growth)}
 	switch {
 	case r.Kind == model.OneTime || r.Kind == model.Biweekly:
 		f.date = r.Anchor.String()
@@ -151,13 +153,15 @@ func formOf(it model.BudgetItem, today model.Date) itemForm {
 	return f
 }
 
-// set changes one field: kind, name, amount, growth, every, date, day, day2, month, count, unit, end, account, from, to or indexed (text "true" or "false").
+// set changes one field: kind, name, amount, growth, every, date, day, day2, month, count, unit, end, account, from, to, income (an income type) or indexed (text "true" or "false").
 func (f *itemForm) set(field, text string) {
 	switch field {
 	case "kind":
 		f.setKind(model.ItemKind(text))
 	case "indexed":
 		f.indexed = text == "true"
+	case "income":
+		f.income = model.IncomeType(text)
 	case "name":
 		f.name = text
 	case "amount":
@@ -269,7 +273,7 @@ func (f *itemForm) seed() {
 
 // item builds the budget item the form describes; an item that is not one-time or biweekly and has no date starts today. It fails on what it cannot read and on a missing account; ops checks the rest.
 func (f itemForm) item(today model.Date) (model.BudgetItem, error) {
-	it := model.BudgetItem{Name: f.name, Kind: f.kind, Account: f.account, From: f.from, To: f.to, Indexed: f.indexed}
+	it := model.BudgetItem{Name: f.name, Kind: f.kind, Account: f.account, From: f.from, To: f.to, Indexed: f.indexed, IncomeType: f.income}
 	if strings.TrimSpace(f.amount) == "" {
 		return it, errors.New("enter an amount")
 	}

@@ -19,6 +19,9 @@ func allBlank(texts ...string) bool {
 	return true
 }
 
+// untouched reports whether nothing has been typed or picked in the Add member form.
+func (f householdForm) untouched() bool { return allBlank(f.name, f.birth) && f.role == "" }
+
 // untouched reports whether nothing has been typed into the form. The rate is not shown for an equity account, so it does not count there.
 func (f newAcctForm) untouched() bool {
 	return allBlank(f.name) && (f.typ == model.TypeEquity || allBlank(f.rate))

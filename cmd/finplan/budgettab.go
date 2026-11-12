@@ -171,7 +171,7 @@ func (t *budgetTab) draw() {
 // table draws the base budget items as tables with one header row at the top: per kind a group row and the item rows. The editor of an open item sits between two tables, which share their column weights and so their column widths.
 func (t *budgetTab) table() {
 	em := imgui.FontSize()
-	weights := []float32{2, 3, 1.2, 2.5, 1.2, 1.2, 1, 1, 1.2}
+	weights := []float32{2, 3, 1.2, 2.5, 1.2, 1.2, 1.2, 1, 1, 1.2}
 	segment := 0
 	begin := func() bool {
 		segment++
@@ -210,7 +210,7 @@ func (t *budgetTab) table() {
 				t.askDelete(r.ID)
 			}
 			tooltipOn("Delete")
-			for i, s := range []string{r.Name, r.Schedule, r.Amount, r.Accounts, r.Start, r.End, r.Indexed, r.Growth, r.Monthly} {
+			for i, s := range []string{r.Name, r.Schedule, r.Amount, r.Accounts, r.Taxed, r.Start, r.End, r.Indexed, r.Growth, r.Monthly} {
 				imgui.TableSetColumnIndex(int32(i + 1))
 				imgui.AlignTextToFramePadding()
 				imgui.TextUnformatted(s)

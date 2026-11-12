@@ -8,6 +8,7 @@ import (
 
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/store"
+	"github.com/joeriedel/finplan/internal/tax"
 )
 
 // accountTypeNames, taxNames and kindNames are the display names of the stored values; the stored values themselves never change.
@@ -17,9 +18,10 @@ var (
 		model.Type401k: "401(k)", model.TypeTSP: "TSP", model.TypeIRA: "IRA", model.TypeRothIRA: "Roth IRA", model.TypeHSA: "HSA", model.Type529: "529",
 		model.TypeMortgage: "Mortgage", model.TypeLoan: "Loan", model.TypeEquity: "Equity", model.TypeProperty: "Property",
 	}
-	taxNames    = map[model.TaxTreatment]string{model.Taxable: "Taxable", model.TaxDeferred: "Tax-deferred", model.TaxFree: "Tax-free", model.Tax529: "529"}
-	kindNames   = map[model.ItemKind]string{model.ItemIncome: "Income", model.ItemExpense: "Expense", model.ItemTransfer: "Transfer"}
-	txKindNames = map[model.TxKind]string{model.TxIncome: "Income", model.TxExpense: "Expense", model.TxTransfer: "Transfer"}
+	incomeTypeNames = map[model.IncomeType]string{model.IncomeWages: "Wages", model.IncomeOrdinary: "Other income", model.IncomeTaxFree: "Tax-free"}
+	taxNames        = map[model.TaxTreatment]string{model.Taxable: "Taxable", model.TaxDeferred: "Tax-deferred", model.TaxFree: "Tax-free", model.Tax529: "529"}
+	kindNames       = map[model.ItemKind]string{model.ItemIncome: "Income", model.ItemExpense: "Expense", model.ItemTransfer: "Transfer"}
+	txKindNames     = map[model.TxKind]string{model.TxIncome: "Income", model.TxExpense: "Expense", model.TxTransfer: "Transfer"}
 )
 
 // accountTypeName is the display name of an account type, or the stored value when it has none.
@@ -33,6 +35,14 @@ func accountTypeName(t model.AccountType) string {
 // taxName is the display name of a tax treatment, or the stored value when it has none.
 func taxName(t model.TaxTreatment) string {
 	if n, ok := taxNames[t]; ok {
+		return n
+	}
+	return string(t)
+}
+
+// incomeTypeName is the display name of an income type, or the stored value when it has none.
+func incomeTypeName(t model.IncomeType) string {
+	if n, ok := incomeTypeNames[t]; ok {
 		return n
 	}
 	return string(t)
@@ -69,6 +79,47 @@ var accountTypeLabels, taxLabels = func() (types, tax []string) {
 	}
 	for _, t := range model.TaxTreatments {
 		tax = append(tax, taxName(t))
+	}
+	return
+}()
+
+// filingNames and roleNames are the display names of the filing statuses and household roles.
+var (
+	filingNames = map[tax.FilingStatus]string{tax.MarriedJoint: "Married filing jointly", tax.Single: "Single", tax.HeadOfHousehold: "Head of household", tax.MarriedSeparate: "Married filing separately"}
+	roleNames   = map[model.Role]string{model.RoleEarner: "Earner", model.RoleSpouse: "Spouse", model.RoleDependent: "Dependent"}
+)
+
+// filingName is the display name of a filing status, or the stored value when it has none.
+func filingName(s tax.FilingStatus) string {
+	if n, ok := filingNames[s]; ok {
+		return n
+	}
+	return string(s)
+}
+
+// roleName is the display name of a household role, or the stored value when it has none.
+func roleName(r model.Role) string {
+	if n, ok := roleNames[r]; ok {
+		return n
+	}
+	return string(r)
+}
+
+// filingLabels and roleLabels are the display names of filingStatuses and householdRoles, in the same order.
+var filingLabels, roleLabels = func() (filing, roles []string) {
+	for _, s := range tax.FilingStatuses {
+		filing = append(filing, filingName(s))
+	}
+	for _, r := range model.Roles {
+		roles = append(roles, roleName(r))
+	}
+	return
+}()
+
+// incomeTypeLabels are the display names of incomeTypes, in the same order.
+var incomeTypeLabels = func() (names []string) {
+	for _, t := range model.IncomeTypes {
+		names = append(names, incomeTypeName(t))
 	}
 	return
 }()

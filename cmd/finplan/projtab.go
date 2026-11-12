@@ -1189,6 +1189,11 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 	} else {
 		account("account", "account", f.account)
 	}
+	if f.kind == model.ItemIncome {
+		imgui.SameLine()
+		incomes := strs(len(model.IncomeTypes), func(i int) string { return string(model.IncomeTypes[i]) })
+		choose("income", "taxed as", incomeTypeName((model.BudgetItem{IncomeType: f.income}).Income()), em*12, incomes, incomeTypeLabels, string((model.BudgetItem{IncomeType: f.income}).Income()))
+	}
 }
 
 // itemAccountPreview is the text the account picker shows for cur: its name in the picker, else the name of an account rec has that the picker does not offer (a closed one), else the raw id.

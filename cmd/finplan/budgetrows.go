@@ -15,11 +15,11 @@ import (
 
 // budgetRow is one base budget item as the Budget tab shows it, every column as text.
 type budgetRow struct {
-	ID, Name, Schedule, Amount, Accounts, Start, End, Indexed, Growth, Monthly string
+	ID, Name, Schedule, Amount, Accounts, Taxed, Start, End, Indexed, Growth, Monthly string
 }
 
 // budgetHeaders are the column titles of the budget rows, in the order of the cells of budgetRow after its ID.
-var budgetHeaders = []string{"Name", "Repeats", "Amount", "Accounts", "Starts", "Ends", "Indexed", "Growth", "Per month"}
+var budgetHeaders = []string{"Name", "Repeats", "Amount", "Accounts", "Taxed as", "Starts", "Ends", "Indexed", "Growth", "Per month"}
 
 // formatDollars writes an amount as "$5,000", keeping the cents when there are any: "$1,234.50".
 func formatDollars(v float64) string {
@@ -64,6 +64,9 @@ func budgetRowOf(rec *model.Record, it model.BudgetItem) budgetRow {
 		row.Accounts = budgetAccountName(rec, it.From) + " to " + budgetAccountName(rec, it.To)
 	} else {
 		row.Accounts = budgetAccountName(rec, it.Account)
+	}
+	if it.Kind == model.ItemIncome {
+		row.Taxed = incomeTypeName(it.Income())
 	}
 	if it.Start != nil {
 		row.Start = it.Start.String()
