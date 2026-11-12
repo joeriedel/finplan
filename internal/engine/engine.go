@@ -362,18 +362,20 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 	for _, id := range res.Accounts {
 		r.paths[id] = newPath(id)
 	}
-	// Every side of an item that touches a hypothetical account counts only the occurrences after the latest cutoff of the accounts it touches, wherever they sit relative to the target, so both sides of a transfer agree.
+	// Every side of an item that touches a hypothetical account, or two record accounts, counts only the occurrences after the latest cutoff of the accounts it touches, wherever they sit relative to the target, so both sides of a transfer agree and no date is projected on one side while the other reads it from actual data.
 	cutoffs := map[string]model.Date{}
 	outside := map[model.AccountID]*path{}
 	for _, it := range items {
 		cut := model.MinDate
 		hypothetical := false
+		touched := 0
 		for _, id := range []model.AccountID{it.Account, it.From, it.To} {
 			a := rec.Account(id)
 			if a == nil {
 				continue
 			}
 			hypothetical = hypothetical || a.Opens != nil
+			touched++
 			p := r.paths[id]
 			if p == nil {
 				if outside[id] == nil {
@@ -383,7 +385,7 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 			}
 			cut = max(cut, p.flowsAfter)
 		}
-		if hypothetical {
+		if hypothetical || touched > 1 {
 			cutoffs[it.ID] = cut
 		}
 	}
@@ -410,6 +412,28 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 		plans = append(plans, pl)
 		if p := r.paths[a.ID]; p != nil {
 			p.plan, p.rate = pl, model.Schedule{}
+		}
+	}
+	// An account whose data ends before a counterpart's receives the transfers the counterpart recorded with it in between, so a recorded transfer lands on both sides; the budget item takes over on both sides after the later end. Equity accounts are left out on either side, since their plans and recorded vests already book the vests and the deposits that pay for them.
+	for _, id := range res.Accounts {
+		p := r.paths[id]
+		if p.plan != nil {
+			continue
+		}
+		for _, c := range rec.Accounts {
+			if c.ID == id || equityMode(c.ID) {
+				continue
+			}
+			for _, t := range c.TransactionsIn(p.start, pathOf(c.ID).start) {
+				if t.Kind != model.TxTransfer || t.Counter != id {
+					continue
+				}
+				src, dst := c.ID, id
+				if t.Amount > 0 {
+					src, dst = dst, src
+				}
+				p.mirrored = append(p.mirrored, change{date: t.Date, cause: transferCause(rec, src, dst), amount: -t.Amount, counter: c.ID, rank: rankTransfer})
+			}
 		}
 	}
 	for _, id := range res.Accounts {
@@ -508,6 +532,8 @@ type path struct {
 	plan    *equityPlan
 	changes []change // flows after start, ordered by date then rank
 	points  []point  // balance after each date with a flow, from start
+	// mirrored are the transfers other accounts recorded with this one as counter after this account's data ends.
+	mirrored []change
 }
 
 // Order of flows on one date (docs/design.md, "The engine"): income, grants, vests, expenses, then transfers
@@ -613,6 +639,7 @@ func (p *path) build(rec *model.Record, items []model.BudgetItem, cutoffs map[st
 			p.flows(rec, it, d, amt)
 		}
 	}
+	p.changes = append(p.changes, p.mirrored...)
 	if p.plan != nil {
 		p.changes = append(p.changes, p.plan.changes()...)
 	}

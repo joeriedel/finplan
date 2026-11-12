@@ -216,7 +216,7 @@ func TestProjectionAccountSharedCutoff(t *testing.T) {
 			t.Errorf("aggregate on %v gains %v, want 1000", date, all-base)
 		}
 	}
-	// The fixture itself leaves some of the aggregate unexplained without any projection (inv's December-to-January snapshot gap, and the record-only late-deposit transfer counted on one side because late and chk start on different dates); the projection's transfer must add nothing to it.
+	// The fixture itself leaves some of the aggregate unexplained without any projection (inv's December-to-January snapshot gap; the late-deposit transfer is counted on both sides despite late and chk ending on different dates); the projection's transfer must add nothing to it.
 	unexplained := func(bd *BreakdownResult) float64 {
 		sum := 0.0
 		for _, l := range bd.Lines {
@@ -229,6 +229,9 @@ func TestProjectionAccountSharedCutoff(t *testing.T) {
 	from, to := d(2025, time.October, 15), d(2026, time.February, 1)
 	baseBd, err := Breakdown(rec, "", "everything", from, to)
 	must(t, err)
+	if got := unexplained(baseBd); !near(got, 200) {
+		t.Errorf("base unexplained %v, want only inv's 200 gap", got)
+	}
 	for _, target := range []model.AssetID{late, early, "everything"} {
 		bd, err := Breakdown(rec, "early", target, from, to)
 		must(t, err)

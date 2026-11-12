@@ -340,11 +340,11 @@ func TestExactFlows(t *testing.T) {
 func TestAggregateProjectsEachAccountFromItsOwnEnd(t *testing.T) {
 	rec := fixture(t)
 	all := model.AssetID("all")
-	// 2025-12-20: chk and inv are real, late ran out on 10-31 and is projected from there
-	// (deposits on 11-01 and 12-01), bare is on defaults.
+	// 2025-12-20: chk and inv are real, late ran out on 10-31 and is projected from there, but its deposits
+	// from chk count only after chk's data ends on 2026-01-01, so late stays at 2000; bare is on defaults.
 	got := sample(t, rec, "", all, d(2025, time.December, 20))
-	if got.Status != StatusPartlyProjected || !near(got.Amount, 1000+10300+2200+500) {
-		t.Errorf("partly projected: got %+v, want %v", got, 1000+10300+2200+500)
+	if got.Status != StatusPartlyProjected || !near(got.Amount, 1000+10300+2000+500) {
+		t.Errorf("partly projected: got %+v, want %v", got, 1000+10300+2000+500)
 	}
 	// The aggregate is the sum of the accounts asked one by one.
 	sum := 0.0
@@ -781,5 +781,102 @@ func TestItemStopsAfterAClosedAccountsCloseDate(t *testing.T) {
 		if want := before + 5*300; !near(after, want) {
 			t.Errorf("%q: chk on %v: got %v, want %v", proj, later, after, want)
 		}
+	}
+}
+
+// TestTransferCountedOnBothSides checks that a transfer between two accounts whose data ends on different dates is projected on both sides or on neither, in either direction and whichever side ends first.
+func TestTransferCountedOnBothSides(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		from, to   model.AccountID
+		aEnd, bEnd model.Date
+	}{
+		{"a to b, a ends first", "a", "b", d(2026, time.January, 10), d(2026, time.March, 10)},
+		{"a to b, b ends first", "a", "b", d(2026, time.March, 10), d(2026, time.January, 10)},
+		{"b to a, a ends first", "b", "a", d(2026, time.January, 10), d(2026, time.March, 10)},
+		{"b to a, b ends first", "b", "a", d(2026, time.March, 10), d(2026, time.January, 10)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := model.NewRecord(d(2026, time.January, 1))
+			a := &model.Account{ID: "a", Type: model.TypeChecking, Tax: model.Taxable}
+			a.AddSnapshot(d(2025, time.December, 1), 5000)
+			a.AddSnapshot(c.aEnd, 5000)
+			b := &model.Account{ID: "b", Type: model.TypeSavings, Tax: model.Taxable}
+			b.AddSnapshot(d(2025, time.December, 1), 3000)
+			b.AddSnapshot(c.bEnd, 3000)
+			must(t, rec.AddAccount(a))
+			must(t, rec.AddAccount(b))
+			must(t, rec.AddAsset(&model.Asset{ID: "both", Members: []model.Member{model.AccountMember("a"), model.AccountMember("b")}}))
+			rec.Budget.Items = []model.BudgetItem{
+				{ID: "move", Kind: model.ItemTransfer, Amount: model.Constant(70), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, From: c.from, To: c.to},
+			}
+			bd, err := Breakdown(rec, "", "both", d(2025, time.December, 15), d(2026, time.May, 1))
+			must(t, err)
+			if l := line(bd, CauseUnexplained); !near(l.Actual+l.Projected, 0) {
+				t.Errorf("unexplained %v, want 0", l)
+			}
+			if !near(bd.Total(), bd.End-bd.Start) {
+				t.Errorf("total %v, change %v", bd.Total(), bd.End-bd.Start)
+			}
+			if !near(bd.End, bd.Start) {
+				t.Errorf("a transfer inside the target moved the total from %v to %v", bd.Start, bd.End)
+			}
+		})
+	}
+}
+
+// TestRecordedTransferCountedOnBothSides checks that a transfer the later-ending account recorded in the gap after the earlier one's data ends also lands on the earlier account, in either direction.
+func TestRecordedTransferCountedOnBothSides(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		laterIsSrc bool
+	}{
+		{"later account is the source", true},
+		{"later account is the destination", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := model.NewRecord(d(2026, time.January, 1))
+			later := &model.Account{ID: "later", Type: model.TypeChecking, Tax: model.Taxable}
+			early := &model.Account{ID: "early", Type: model.TypeSavings, Tax: model.Taxable}
+			sign := 1.0
+			if c.laterIsSrc {
+				sign = -1
+			}
+			later.AddSnapshot(d(2025, time.December, 1), 5000)
+			later.AddSnapshot(d(2026, time.March, 10), 5000+2*70*sign)
+			early.AddSnapshot(d(2025, time.December, 1), 3000)
+			early.AddSnapshot(d(2026, time.January, 10), 3000)
+			for _, day := range []model.Date{d(2026, time.February, 1), d(2026, time.March, 1)} {
+				must(t, later.AddTransaction(model.Transaction{Date: day, Amount: 70 * sign, Kind: model.TxTransfer, Counter: "early"}))
+			}
+			must(t, rec.AddAccount(later))
+			must(t, rec.AddAccount(early))
+			must(t, rec.AddAsset(&model.Asset{ID: "both", Members: []model.Member{model.AccountMember("later"), model.AccountMember("early")}}))
+			from, to := model.AccountID("later"), model.AccountID("early")
+			if !c.laterIsSrc {
+				from, to = to, from
+			}
+			rec.Budget.Items = []model.BudgetItem{
+				{ID: "move", Kind: model.ItemTransfer, Amount: model.Constant(70), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, From: from, To: to},
+			}
+			for _, date := range []model.Date{d(2025, time.December, 15), d(2026, time.February, 15), d(2026, time.March, 20), d(2026, time.May, 1)} {
+				if got := sample(t, rec, "", "both", date); !near(got.Amount, 8000) {
+					t.Errorf("aggregate on %v is %v, want 8000", date, got.Amount)
+				}
+			}
+			bd, err := Breakdown(rec, "", "both", d(2025, time.December, 15), d(2026, time.May, 1))
+			must(t, err)
+			if l := line(bd, CauseUnexplained); !near(l.Actual+l.Projected, 0) {
+				t.Errorf("unexplained %v, want 0", l)
+			}
+			if !near(bd.Total(), bd.End-bd.Start) {
+				t.Errorf("total %v, change %v", bd.Total(), bd.End-bd.Start)
+			}
+			// The early account alone receives or pays the recorded transfers.
+			single := sample(t, rec, "", model.DefaultAssetID("early"), d(2026, time.March, 20))
+			if want := 3000 - 2*70*sign; !near(single.Amount, want) {
+				t.Errorf("early on 2026-03-20 is %v, want %v", single.Amount, want)
+			}
+		})
 	}
 }

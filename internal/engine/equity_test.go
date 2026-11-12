@@ -564,3 +564,64 @@ func TestGrantAfterTheStartWithoutPricesStartsOnItsDate(t *testing.T) {
 		t.Errorf("deposits %v, want %v", got, want)
 	}
 }
+
+func TestVestDepositInTheDataGapIsNotCountedTwice(t *testing.T) {
+	vestDate, depositDate, lastSnap := d(2025, time.September, 15), d(2025, time.September, 17), d(2025, time.December, 31)
+	for _, c := range []struct {
+		name string
+		// pricesToLastSnap keeps the price on the brokerage's last snapshot, which stretches the equity account's data to it.
+		pricesToLastSnap bool
+		setting          *model.AssetSetting
+	}{
+		{"equity data ends on the vest", false, nil},
+		{"equity starts on the vest by setting", true, &model.AssetSetting{Asset: rsuAsset, Start: model.Ptr(vestDate), OverrideHistory: model.Ptr(true)}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := rsuRecord(t)
+			rsu, brk := rec.Account("rsu"), rec.Account("brk")
+			rsu.Grants[0].FirstVest = vestDate
+			pct, err := model.GeneratePercents(rec.Calendar("cal"), vestDate, rsu.Grants[0].YearPercents, 0)
+			must(t, err)
+			rsu.Grants[0].VestPercents = pct
+			if !c.pricesToLastSnap {
+				*rec.Prices = model.PriceBook{}
+				rec.Prices.Add(model.PriceObservation{ID: 1, Symbol: "ACME", Date: d(2025, time.June, 1), Price: 100})
+			}
+			rec.Prices.Add(model.PriceObservation{ID: 3, Symbol: "ACME", Date: vestDate, Price: 110})
+			v := model.RecordedVest{ID: 4, Grant: 1, Planned: 1, Date: vestDate, Shares: 50, Price: 110, Rates: model.DefaultWithholding}
+			rsu.Vests = append(rsu.Vests, v)
+			// The deposit settles two days after the vest, inside the equity account's gap, and the brokerage's data runs past both.
+			brk.Snapshots = nil
+			brk.AddSnapshot(d(2025, time.August, 1), 1000)
+			brk.AddSnapshot(lastSnap, 1000+v.Net())
+			must(t, brk.AddTransaction(model.Transaction{Date: depositDate, Amount: v.Net(), Kind: model.TxTransfer, Counter: "rsu"}))
+			p := &model.Projection{Name: "base"}
+			if c.setting != nil {
+				p.AssetSettings = []model.AssetSetting{*c.setting}
+			}
+			must(t, rec.AddProjection(p))
+
+			for _, date := range []model.Date{vestDate, d(2025, time.September, 16), depositDate, d(2025, time.September, 20), d(2025, time.December, 1), d(2025, time.December, 14)} {
+				eq := value(t, rec, "base", rsuAsset, date)
+				bk := value(t, rec, "base", brkAsset, date)
+				if !near(eq, 350*110) {
+					t.Errorf("equity on %v is %v, want %v", date, eq, 350*110)
+				}
+				if date >= depositDate && !near(bk, 1000+v.Net()) {
+					t.Errorf("brokerage on %v is %v, want %v", date, bk, 1000+v.Net())
+				}
+				if date < depositDate && !near(bk, 1000) {
+					t.Errorf("brokerage on %v is %v, want 1000", date, bk)
+				}
+				if both := value(t, rec, "base", "both", date); !near(both, eq+bk) {
+					t.Errorf("aggregate on %v is %v, want %v", date, both, eq+bk)
+				}
+			}
+			b, err := Breakdown(rec, "base", "both", vestDate-1, d(2025, time.December, 14))
+			must(t, err)
+			if l := line(b, CauseUnexplained); math.Abs(l.Actual) > 1e-6 {
+				t.Errorf("unexplained %+v", l)
+			}
+		})
+	}
+}
