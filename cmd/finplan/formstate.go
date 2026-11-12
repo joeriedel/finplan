@@ -69,3 +69,14 @@ func modUntouched(obj, value, start, end string) bool {
 func (f grantForm) untouched() bool {
 	return allBlank(f.amount, f.price, f.date, f.years, f.cliff) && f.first == 0
 }
+
+// allocUntouched reports whether the allocation editor's percent fields still hold what the account's allocation says.
+func allocUntouched(rec *model.Record, acct *model.Account, texts map[string]string) bool {
+	want := allocTexts(acct)
+	for _, c := range rec.Classes {
+		if strings.TrimSpace(texts[c.ID]) != want[c.ID] {
+			return false
+		}
+	}
+	return true
+}

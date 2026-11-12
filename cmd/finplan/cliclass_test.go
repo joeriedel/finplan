@@ -4,6 +4,7 @@
 package main
 
 import (
+	"math"
 	"slices"
 	"testing"
 )
@@ -174,5 +175,77 @@ func TestCLIClassGrowthScenarios(t *testing.T) {
 		if l.Class != nil {
 			t.Errorf("savings has no allocation but a line has class %q", *l.Class)
 		}
+	}
+}
+
+type tExposure struct {
+	Date    string
+	Classes []struct {
+		ID       string
+		Total    float64
+		Accounts []struct {
+			Account                         string
+			Balance, Percent, Amount, Share float64
+		}
+	}
+}
+
+// Scenario: the exposure list adds up to the accounts' class balances, and an edit of large cap's return changes what the allocated accounts grow to.
+func TestCLIClassExposure(t *testing.T) {
+	path := seededFile(t)
+	var out tExposure
+	cliJSON(t, &out, "--db", path, "class", "exposure")
+	perAccount := map[string]float64{}
+	for _, c := range out.Classes {
+		sum := 0.0
+		for _, x := range c.Accounts {
+			sum += x.Amount
+			perAccount[x.Account] += x.Amount
+			if math.Abs(x.Amount-x.Balance*x.Share/100) > 1e-6 || x.Percent <= 0 {
+				t.Errorf("%s in %s: amount %v, balance %v at share %v%% (target %v%%)", x.Account, c.ID, x.Amount, x.Balance, x.Share, x.Percent)
+			}
+		}
+		if math.Abs(sum-c.Total) > 1e-6 {
+			t.Errorf("class %s lists %v, total %v", c.ID, sum, c.Total)
+		}
+	}
+	var accts []struct {
+		ID         string
+		Allocation []tHolding
+		Balance    float64
+	}
+	cliJSON(t, &accts, "--db", path, "account", "list")
+	allocated := 0
+	for _, a := range accts {
+		if len(a.Allocation) == 0 {
+			if _, ok := perAccount[a.ID]; ok {
+				t.Errorf("account %s has no allocation but is exposed", a.ID)
+			}
+			continue
+		}
+		allocated++
+		if math.Abs(perAccount[a.ID]-a.Balance) > 0.01 {
+			t.Errorf("account %s: exposures sum to %v, balance %v", a.ID, perAccount[a.ID], a.Balance)
+		}
+	}
+	if allocated == 0 {
+		t.Error("the demo has no allocated account")
+	}
+
+	cliJSON(t, &out, "--db", path, "class", "exposure", "--class", "US bonds")
+	if len(out.Classes) != 1 || out.Classes[0].ID != "us-bonds" {
+		t.Errorf("one class: %+v", out.Classes)
+	}
+	if code, _ := cliFail(t, 1, "--db", path, "class", "exposure", "--class", "nope"); code != "unknown_target" {
+		t.Errorf("unknown class: code %q", code)
+	}
+}
+
+func TestCLIEditingLargeCapChangesProjection(t *testing.T) {
+	path := seededFile(t)
+	base := lastValue(t, path, "brokerage", "Base", "2030-01", "2030-12")
+	write(t, path, "", "class", "set", "us-large-cap", "--return", "0.02")
+	if low := lastValue(t, path, "brokerage", "Base", "2030-01", "2030-12"); !(low < base) {
+		t.Errorf("brokerage with large cap at 2%%: %v, before %v", low, base)
 	}
 }

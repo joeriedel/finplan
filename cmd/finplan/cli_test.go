@@ -529,6 +529,7 @@ var readCommands = [][]string{
 	{"vest", "history", "3"},
 	{"price", "history", "ACME"},
 	{"price", "revisions", "12"},
+	{"class", "exposure"},
 	{"help", "--json"},
 }
 

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/joeriedel/finplan/internal/engine"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/ops"
 )
@@ -23,6 +24,12 @@ var classReadCommands = []*command{
 		Name: "class list", Summary: "list the market classes an account's allocation splits its balance among, with each class's expected return and volatility, and the correlations between classes",
 		Output: "{classes: [{id, name, return: [{from, end, value}] (the annual growth, a fraction), volatility (the annual standard deviation of the return, a fraction)}], correlations: [{a, b, value}]}; a pair with no correlation is uncorrelated (0), a class is always fully correlated with itself, and a and b are in id order",
 		run:    cmdClassList,
+	},
+	{
+		Name: "class exposure", Summary: "list, per market class, the accounts whose allocation holds it and how much each holds today (the engine's balance in the class, which drifts from the allocation); accounts whose balance today is 0 are omitted; an account without an allocation is exposed to no class",
+		Flags:  []flagDef{{Name: "class", Type: typeString, Description: classNote + "; all classes when omitted"}},
+		Output: "{date, classes: [{id, name, total, accounts: [{account (id), name, balance (the account's balance today), percent (the class's target share of its allocation, 60 for 60%), amount (what the account holds in the class today, which drifts from the target as classes grow at their own returns), share (amount as a percent of balance)}]}]}; the amounts of an account over all classes add up to its balance, and total is the sum of the class's amounts",
+		run:    cmdClassExposure,
 	},
 }
 
@@ -159,6 +166,51 @@ func cmdClassList(c *call) (any, error) {
 		corrs = append(corrs, jcorrelation{k.A, k.B, k.Value})
 	}
 	return map[string]any{"classes": classes, "correlations": corrs}, nil
+}
+
+type jexposureAccount struct {
+	Account string  `json:"account"`
+	Name    string  `json:"name"`
+	Balance float64 `json:"balance"`
+	Percent float64 `json:"percent"`
+	Amount  float64 `json:"amount"`
+	Share   float64 `json:"share"`
+}
+
+type jexposure struct {
+	ID       string             `json:"id"`
+	Name     string             `json:"name"`
+	Total    float64            `json:"total"`
+	Accounts []jexposureAccount `json:"accounts"`
+}
+
+func cmdClassExposure(c *call) (any, error) {
+	_, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	only := ""
+	if c.set["class"] {
+		if only, err = classNamed(rec, c.str("class")); err != nil {
+			return nil, err
+		}
+	}
+	exp, err := engine.Exposure(rec)
+	if err != nil {
+		return nil, failErr("engine", "%v", err)
+	}
+	classes := []jexposure{}
+	for _, e := range exp {
+		if only != "" && e.Class.ID != only {
+			continue
+		}
+		j := jexposure{ID: e.Class.ID, Name: e.Class.Name, Total: e.Total, Accounts: []jexposureAccount{}}
+		for _, x := range e.Accounts {
+			j.Accounts = append(j.Accounts, jexposureAccount{string(x.Account.ID), x.Account.Name, x.Balance, x.Percent, x.Amount, x.Share})
+		}
+		classes = append(classes, j)
+	}
+	return map[string]any{"date": rec.Today.String(), "classes": classes}, nil
 }
 
 // classResult is the output of an edit of a market class.

@@ -129,8 +129,8 @@ func newShotOptions(out, tab string, frames int, size, sel, open string) (*shotO
 	if !ok || err1 != nil || err2 != nil || o.width < 1 || o.height < 1 {
 		return nil, fmt.Errorf("--size %q is not WxH, such as 1280x800", size)
 	}
-	if sel != "" && o.tab != "Projections" && o.tab != "Assets" && o.tab != "Accounts" && o.tab != "Graph" {
-		return nil, fmt.Errorf("--select works only with the Projections, Assets, Accounts and Graph tabs")
+	if sel != "" && o.tab != "Projections" && o.tab != "Assets" && o.tab != "Accounts" && o.tab != "Graph" && o.tab != "Markets" {
+		return nil, fmt.Errorf("--select works only with the Projections, Assets, Accounts, Graph and Markets tabs")
 	}
 	if open != "" {
 		for _, n := range openNames {
@@ -393,6 +393,13 @@ func (o *shotOptions) selectItem(a *app) error {
 		for _, ac := range a.rec.Accounts {
 			if ac.Name == o.sel {
 				a.accts.sel = ac.ID
+				return nil
+			}
+		}
+	case "Markets":
+		for _, c := range a.rec.Classes {
+			if c.Name == o.sel {
+				a.markets.sel = c.ID
 				return nil
 			}
 		}

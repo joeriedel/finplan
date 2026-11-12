@@ -56,6 +56,19 @@ func TestUntouchedProjectionForms(t *testing.T) {
 	}
 }
 
+func TestUntouchedAllocationForm(t *testing.T) {
+	rec := demodata.Family()
+	acct := rec.Account(demodata.Brokerage)
+	texts := allocTexts(acct)
+	if !allocUntouched(rec, acct, texts) {
+		t.Error("the account's own allocation should be untouched")
+	}
+	texts[model.ClassBonds] = "10"
+	if allocUntouched(rec, acct, texts) {
+		t.Error("a typed percent should be touched")
+	}
+}
+
 func TestTypedInvalidShowsReason(t *testing.T) {
 	a := demoApp(t)
 	d := entryDraft{date: "soon"}

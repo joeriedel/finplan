@@ -196,11 +196,15 @@ type acctTab struct {
 	// addCheck, snapCheck and ivCheck keep the problems of the Add account, Record a balance and default balance forms.
 	addCheck, snapCheck, ivCheck problemCache
 	ivFrom, ivTo, ivValue        string
+	// alloc is the text of the allocation editor's percent fields by class id, for the account allocFor; nil until it is drawn.
+	alloc    map[string]string
+	allocFor model.AccountID
 }
 
 func (t *acctTab) reset() {
 	t.rows = listAccounts(t.rec)
 	t.bufs, t.errs = map[string]string{}, map[string]string{}
+	t.alloc = nil
 }
 
 func (t *acctTab) draw() {
@@ -446,6 +450,9 @@ func (t *acctTab) detail(acct *model.Account) {
 		t.editAttr(id, "rate", s)
 	}
 
+	if model.Investable(acct.Type) {
+		t.allocation(acct)
+	}
 	t.snapshots(acct)
 	t.entries(acct)
 	t.defaults(acct)
