@@ -46,12 +46,14 @@ type TaxYear struct {
 	K401, IRA, HSA float64
 	// Benefits are the Social Security benefits received; Result.TaxableBenefits is the part that is taxed.
 	Benefits float64
-	// Ordinary is the income that is not wages: other-ordinary income items, interest and taxable withdrawals that are not early.
+	// Ordinary is the income that is not wages: other-ordinary income items, interest, required distributions, Roth conversions and taxable withdrawals that are not early.
 	Ordinary float64
 	// Interest is the interest and growth earned on savings and checking accounts.
 	Interest float64
 	// EarlyWithdrawal is the withdrawals from tax-deferred accounts before 59 and a half.
 	EarlyWithdrawal float64
+	// RMD and Conversion are the required minimum distribution and the Roth conversion of the year, and Drawn what the household withdrew from tax-deferred accounts to live on, early withdrawals included; all are in the income above.
+	RMD, Conversion, Drawn float64
 	// ShortTermGains and LongTermGains are the capital gains the year's sales in taxable accounts realized, on lots held a year or less and longer; a loss is negative. GainsTax is the part of Result.Total they add.
 	ShortTermGains, LongTermGains, GainsTax float64
 	// WithheldPaychecks and WithheldVests are the tax withheld from the year's paychecks and vests, those before the projection's start included.
@@ -120,6 +122,7 @@ type yearInputs struct {
 	benefits     float64 // Social Security benefits
 	ordinary     float64 // other-ordinary income items and taxable withdrawals that are not early
 	early        float64
+	fromDeferred float64 // budget withdrawals from tax-deferred retirement accounts to unsheltered ones, early or not
 	vests        float64
 	vestWithheld float64
 	k401, ira    float64
@@ -155,6 +158,10 @@ type householdTax struct {
 	lots []*path
 	// benefits maps the id of a synthesized benefit item to its kind.
 	benefits map[string]benefitKind
+	// draw is the projection's retirement settings; draws the income its drawdown, distributions and conversions add to each year, and ranOut is set once money has run out.
+	draw   *drawPlan
+	draws  map[int]*yearDraw
+	ranOut bool
 }
 
 func newHouseholdTax(rec *model.Record, items []model.BudgetItem, amounts, growths map[string]model.Schedule, infl model.Schedule, plans []*equityPlan, hypothetical map[string]model.Date, diag *Diagnostics) *householdTax {
@@ -267,6 +274,9 @@ func (h *householdTax) year(y int) *yearInputs {
 					}
 				}
 				if src != nil && src.Tax == model.TaxDeferred && unsheltered(it.To) {
+					if b, ok := bucketOf(src); ok && b == model.BucketDeferred {
+						in.fromDeferred += amt
+					}
 					if h.earlyOn(d) {
 						in.early += amt
 					} else {
@@ -471,7 +481,13 @@ func (h *householdTax) compute(y int, interest []*path) *TaxYear {
 	}
 	t.Benefits = in.benefits
 	t.Interest = h.interest(y, interest)
-	t.Ordinary = in.ordinary + t.Interest
+	var dr yearDraw
+	if d := h.draws[y]; d != nil {
+		dr = *d
+	}
+	t.EarlyWithdrawal += dr.early
+	t.RMD, t.Conversion, t.Drawn = dr.rmd, dr.conversion, dr.drawn+dr.early
+	t.Ordinary = in.ordinary + dr.drawn + dr.rmd + dr.conversion + t.Interest
 	for _, p := range h.lots {
 		st, lt := p.gainsIn(y)
 		t.ShortTermGains += st
@@ -480,7 +496,7 @@ func (h *householdTax) compute(y int, interest []*path) *TaxYear {
 	t.Input = tax.Input{
 		Year: y, Status: hh.Filing, State: hh.State, DependentAges: hh.DependentAges(y), Inflation: h.inflation(y),
 		Earners:     []tax.Earner{{Wages: in.wages + in.vests, K401: in.k401, IRA: in.ira, HSA: in.hsa}},
-		OtherIncome: t.Ordinary, BenefitIncome: t.Benefits, NetInvestmentIncome: t.Interest, EarlyWithdrawal: in.early,
+		OtherIncome: t.Ordinary, BenefitIncome: t.Benefits, NetInvestmentIncome: t.Interest, EarlyWithdrawal: t.EarlyWithdrawal,
 		ShortTermGains: t.ShortTermGains, LongTermGains: t.LongTermGains,
 	}
 	for _, a := range h.rec.Accounts {
@@ -506,6 +522,10 @@ func (h *householdTax) compute(y int, interest []*path) *TaxYear {
 
 // reconcile computes the tax of each year whose reconciliation falls within the horizon and books the difference on the reconciliation path, year by year: the interest of a year depends on the balances the earlier reconciliations leave. paths are every path of the query, the reconciliation account's among them, and interest the savings and checking paths.
 func (h *householdTax) reconcile(paths, interest []*path, horizon model.Date) {
+	if h.active(horizon) {
+		h.reconcileWithDrawdown(paths, interest, horizon)
+		return
+	}
 	h.savers = interest
 	lo := horizon
 	for _, p := range paths {
@@ -518,26 +538,31 @@ func (h *householdTax) reconcile(paths, interest []*path, horizon model.Date) {
 		if date > horizon {
 			break
 		}
-		t := h.compute(y, interest)
-		h.results[y] = t
-		var recon *path
-		for _, p := range paths {
-			if p.acct.ID == t.ReconciliationAccount {
-				recon = p
-			}
+		h.reconcileYear(y, date, paths, interest)
+	}
+}
+
+// reconcileYear books the tax of the year on its reconciliation date.
+func (h *householdTax) reconcileYear(y int, date model.Date, paths, interest []*path) {
+	t := h.compute(y, interest)
+	h.results[y] = t
+	var recon *path
+	for _, p := range paths {
+		if p.acct.ID == t.ReconciliationAccount {
+			recon = p
 		}
-		if recon == nil {
-			if t.Due != 0 {
-				h.note("there is no open checking account on %s: the tax of %d is not reconciled", date, y)
-			}
-			continue
+	}
+	if recon == nil {
+		if t.Due != 0 {
+			h.note("there is no open checking account on %s: the tax of %d is not reconciled", date, y)
 		}
-		if date > recon.start {
-			recon.changes = append(recon.changes, change{date: date, cause: CauseTax, amount: -(t.Due - t.GainsTax), rank: rankTax})
-			if t.GainsTax != 0 {
-				recon.changes = append(recon.changes, change{date: date, cause: CauseGainsTax, amount: -t.GainsTax, rank: rankTax})
-			}
-			recon.settle()
+		return
+	}
+	if date > recon.start {
+		recon.changes = append(recon.changes, change{date: date, cause: CauseTax, amount: -(t.Due - t.GainsTax), rank: rankTax})
+		if t.GainsTax != 0 {
+			recon.changes = append(recon.changes, change{date: date, cause: CauseGainsTax, amount: -t.GainsTax, rank: rankTax})
 		}
+		recon.settle()
 	}
 }

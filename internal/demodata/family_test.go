@@ -382,3 +382,53 @@ func TestFamilyBenefits(t *testing.T) {
 		t.Errorf("benefits in 2060: %+v", got)
 	}
 }
+
+func TestRetireAt60Projection(t *testing.T) {
+	rec := Family()
+	p := rec.Projection(ProjRetire60)
+	// Parent A is born 1985-03-12 and turns 60 on the retirement date.
+	if p == nil || p.Parent != ProjBase || p.RetireOn == nil || *p.RetireOn != d(2045, time.March, 12) || p.RothBracket == nil || *p.RothBracket != 0.22 {
+		t.Fatalf("projection %+v", p)
+	}
+	if got := rec.Household.Members[0].AgeIn(2045); got != 60 {
+		t.Errorf("Parent A is %d in 2045", got)
+	}
+	base, err := engine.TaxYearOf(rec, ProjBase, 2046)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retired, err := engine.TaxYearOf(rec, ProjRetire60, 2046)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.Wages <= 0 || retired.Wages != 0 {
+		t.Errorf("wages in 2046: %v in Base, %v retired", base.Wages, retired.Wages)
+	}
+	if retired.Drawn <= 0 && retired.Conversion <= 0 {
+		t.Errorf("a retired household in 2046 draws on its accounts or converts: %+v", retired)
+	}
+	if res, err := engine.Balances(rec, ProjRetire60, NetWorth, []model.Date{d(2056, time.December, 31)}); err != nil || len(res.Skipped) != 0 {
+		t.Errorf("net worth to 2056: %v %+v", err, res.Skipped)
+	}
+}
+
+// TestFamilyCardStaysBounded checks that the card owes money while its opening balance is paid off, and then neither builds a large credit nor compounds a debt.
+func TestFamilyCardStaysBounded(t *testing.T) {
+	rec := Family()
+	if err := rec.AddAsset(&model.Asset{ID: "card-only", Name: "Card", Members: []model.Member{model.AccountMember(Card)}}); err != nil {
+		t.Fatal(err)
+	}
+	dates := []model.Date{d(2026, time.December, 31), d(2045, time.December, 31), d(2060, time.December, 31), d(2100, time.December, 31)}
+	res, err := engine.Balances(rec, ProjBase, "card-only", dates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Samples[0].Amount >= 0 {
+		t.Errorf("the card owes nothing on %v: %v", dates[0], res.Samples[0].Amount)
+	}
+	for _, s := range res.Samples[1:] {
+		if math.Abs(s.Amount) >= 5000 {
+			t.Errorf("the card is not small on %v: %v", s.Date, s.Amount)
+		}
+	}
+}

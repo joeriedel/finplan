@@ -158,6 +158,8 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 	override := false
 	var starts []model.Setting[model.Date]
 	var overrides []model.Setting[bool]
+	var plan drawPlan
+	plan.order = model.DefaultWithdrawalOrder()
 	var growth []model.Setting[rateLayer]
 	// A projection setting reaches the accounts under its target, whether or not the line's asset contains the target.
 	targets := map[model.AssetID]*model.Resolution{}
@@ -199,6 +201,15 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 		}
 		if p.OverrideHistory != nil {
 			override = *p.OverrideHistory
+		}
+		if p.RetireOn != nil {
+			plan.retire = p.RetireOn
+		}
+		if p.WithdrawalOrder != nil {
+			plan.order = p.WithdrawalOrder
+		}
+		if p.RothBracket != nil {
+			plan.bracket = p.RothBracket
 		}
 		for _, s := range p.AssetSettings {
 			if err := resolveTarget(s.Asset); err != nil {
@@ -324,6 +335,9 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 		}
 	}
 
+	if plan.retire != nil {
+		items = stopAtRetirement(rec, items, *plan.retire)
+	}
 	// Social Security and FERS are income items of the query only.
 	r.benefits = memberBenefits(rec, infl, horizon, &r.diag)
 	kinds := map[string]benefitKind{}
@@ -523,6 +537,7 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 	// The tax of a year depends on the interest of the savings and checking accounts and lands on the reconciliation account, so their paths are built with the target's, wherever they sit.
 	ht := newHouseholdTax(rec, items, amounts, growths, infl, plans, hyp, &r.diag)
 	ht.benefits = kinds
+	ht.draw = &plan
 	r.tax = ht
 	var all, savers []*path
 	seen := map[model.AccountID]bool{}
@@ -552,6 +567,10 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 			}
 			// The gains a taxable account realizes are taxed wherever the account sits.
 			if !a.Tax.Sheltered() && model.Investable(a.Type) && !equityMode(a.ID) {
+				add(a.ID)
+			}
+			// Retirement draws on the accounts of the buckets, wherever they sit.
+			if _, ok := bucketOf(a); ok && ht.active(horizon) {
 				add(a.ID)
 			}
 		}

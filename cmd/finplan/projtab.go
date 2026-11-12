@@ -400,6 +400,7 @@ func (t *projTab) header(p *model.Projection) {
 
 	t.label("Inflation")
 	t.inflation(p, w)
+	t.retirement(p, w)
 
 	if imgui.Button("Pin to Graph") {
 		t.showOnGraph(p.Name)

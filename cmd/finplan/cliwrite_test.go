@@ -934,3 +934,108 @@ func TestCLIModOfAnItemWithAWrongPropertySaysBudgetItem(t *testing.T) {
 		t.Errorf("exit %d: %s", code, out)
 	}
 }
+
+type retirementOut struct {
+	Name            string
+	RetireOn        *string  `json:"retire_on"`
+	WithdrawalOrder []string `json:"withdrawal_order"`
+	RothBracket     *float64 `json:"roth_bracket"`
+}
+
+func showRetirement(t *testing.T, path, name string) retirementOut {
+	t.Helper()
+	var p retirementOut
+	cliJSON(t, &p, "--db", path, "projection", "show", name)
+	return p
+}
+
+func TestCLIRetirementCommands(t *testing.T) {
+	path := seededFile(t)
+	if p := showRetirement(t, path, "Base"); p.RetireOn != nil || p.WithdrawalOrder != nil || p.RothBracket != nil {
+		t.Errorf("Base inherits nothing and sets nothing: %+v", p)
+	}
+	if p := showRetirement(t, path, "Retire at 60"); p.RetireOn == nil || *p.RetireOn != "2045-03-12" || p.RothBracket == nil || *p.RothBracket != 0.22 {
+		t.Errorf("the demo's Retire at 60: %+v", p)
+	}
+
+	write(t, path, "", "projection", "set-retirement", "Base", "2040-06")
+	write(t, path, "", "projection", "set-withdrawal-order", "Base", "roth, taxable,tax-deferred")
+	write(t, path, "", "projection", "set-roth-bracket", "Base", "24")
+	p := showRetirement(t, path, "Base")
+	if p.RetireOn == nil || *p.RetireOn != "2040-06-01" || !slices.Equal(p.WithdrawalOrder, []string{"roth", "taxable", "tax-deferred"}) || p.RothBracket == nil || *p.RothBracket != 0.24 {
+		t.Errorf("after setting: %+v", p)
+	}
+	if w := write(t, path, "", "projection", "set-roth-bracket", "Base", "0.12"); !w.Changed {
+		t.Errorf("a fraction is a rate: %+v", w)
+	}
+	if p := showRetirement(t, path, "Base"); *p.RothBracket != 0.12 {
+		t.Errorf("bracket %+v", p)
+	}
+	for _, args := range [][]string{{"set-retirement", "Base", "none"}, {"set-withdrawal-order", "Base", "none"}, {"set-roth-bracket", "Base", "none"}} {
+		write(t, path, "", append([]string{"projection"}, args...)...)
+	}
+	if p := showRetirement(t, path, "Base"); p.RetireOn != nil || p.WithdrawalOrder != nil || p.RothBracket != nil {
+		t.Errorf("after clearing: %+v", p)
+	}
+	if w := write(t, path, "", "--dry-run", "projection", "set-retirement", "Base", "2040-06-01"); !w.DryRun || showRetirement(t, path, "Base").RetireOn != nil {
+		t.Errorf("a dry run saved: %+v", w)
+	}
+
+	refusedWrite(t, path, "", 2, "usage", "projection", "set-retirement", "Base", "2040-13-45")
+	refusedWrite(t, path, "", 2, "usage", "projection", "set-withdrawal-order", "Base", "taxable,roth")
+	refusedWrite(t, path, "", 2, "usage", "projection", "set-withdrawal-order", "Base", "taxable,taxable,roth")
+	refusedWrite(t, path, "", 1, "invalid", "projection", "set-roth-bracket", "Base", "23")
+	refusedWrite(t, path, "", 1, "invalid", "projection", "set-retirement", "Base", "1800-01-01")
+	refusedWrite(t, path, "", 1, "not_found", "projection", "set-retirement", "Nope", "2040-01-01")
+}
+
+// notesOf is the notes of the diagnostics of a balance of the asset under the projection.
+func notesOf(t *testing.T, path, target, projection, to string) []string {
+	t.Helper()
+	var b struct {
+		Diagnostics struct{ Notes []string }
+	}
+	cliJSON(t, &b, "--db", path, "balance", target, "--from", "2026-12", "--to", to, "--step", "year", "--projection", projection)
+	return b.Diagnostics.Notes
+}
+
+func TestCLIRetireAt60Scenario(t *testing.T) {
+	path := seededFile(t)
+	netWorth := func(projection, from, to string) []float64 {
+		var b balanceOut
+		cliJSON(t, &b, "--db", path, "balance", "net-worth", "--from", from, "--to", to, "--step", "year", "--projection", projection)
+		var out []float64
+		for _, s := range b.Samples {
+			out = append(out, s.Value)
+		}
+		return out
+	}
+	// Wages stop on 2045-03-12, so Parent A's pay is missing from the year's tax.
+	type wagesOut struct{ Inputs struct{ Wages float64 } }
+	var base, retired wagesOut
+	cliJSON(t, &base, "--db", path, "tax", "year", "2046", "--projection", "Base")
+	cliJSON(t, &retired, "--db", path, "tax", "year", "2046", "--projection", "Retire at 60")
+	if base.Inputs.Wages <= 0 || retired.Inputs.Wages != 0 {
+		t.Errorf("wages in 2046: %v in Base, %v retired", base.Inputs.Wages, retired.Inputs.Wages)
+	}
+	if got := netWorth("Retire at 60", "2026-12", "2056-12"); len(got) != 31 {
+		t.Errorf("net worth samples: %v", got)
+	}
+	// A household that spends far more than its accounts hold runs out, and the notes say when.
+	write(t, path, "", "projection", "new", "Broke", "--parent", "Retire at 60")
+	write(t, path, "", "item", "add", "Broke", "--kind", "expense", "--name", "Big spending", "--amount", "300000", "--every", "monthly", "--on", "2045-04-01", "--account", "checking")
+	var runOut []string
+	for _, n := range notesOf(t, path, "net-worth", "Broke", "2056-12") {
+		if strings.Contains(n, "money runs out on 20") {
+			runOut = append(runOut, n)
+		}
+	}
+	if len(runOut) != 1 {
+		t.Errorf("notes: %v", notesOf(t, path, "net-worth", "Broke", "2056-12"))
+	}
+	for _, n := range notesOf(t, path, "net-worth", "Base", "2056-12") {
+		if strings.Contains(n, "money runs out") {
+			t.Errorf("Base has no retirement date: %v", n)
+		}
+	}
+}

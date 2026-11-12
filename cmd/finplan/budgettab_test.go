@@ -30,7 +30,7 @@ func TestBudgetTabGroupsRowsAndTotals(t *testing.T) {
 	if len(groups) != 3 || groups[0].Kind != model.ItemIncome || groups[1].Kind != model.ItemExpense || groups[2].Kind != model.ItemTransfer {
 		t.Fatalf("groups %+v", groups)
 	}
-	if len(groups[0].Rows) != 2 || len(groups[1].Rows) != 7 || len(groups[2].Rows) != 9 {
+	if len(groups[0].Rows) != 2 || len(groups[1].Rows) != 7 || len(groups[2].Rows) != 10 {
 		t.Errorf("rows %d, %d, %d", len(groups[0].Rows), len(groups[1].Rows), len(groups[2].Rows))
 	}
 	if groups[0].Title != "Income" || groups[1].Title != "Expense" || groups[2].Title != "Transfer" {

@@ -145,6 +145,33 @@ var writeCommands = []*command{
 		run:    cmdProjectionSetOverrideHistory,
 	},
 	{
+		Name: "projection set-retirement", Summary: "set the date a projection's household retires: wages and the saving into its accounts stop, and its expenses are then covered from its accounts in the withdrawal order",
+		Args: []argDef{
+			{Name: "name", Description: "projection to change", Required: true},
+			{Name: "date", Description: dateNote + "; none to inherit from the projection it builds on", Required: true},
+		},
+		Output: writeOut,
+		run:    cmdProjectionSetRetirement,
+	},
+	{
+		Name: "projection set-withdrawal-order", Summary: "set the order a retired household draws on its accounts",
+		Args: []argDef{
+			{Name: "name", Description: "projection to change", Required: true},
+			{Name: "order", Description: "taxable,tax-deferred,roth in the order wanted, each once, comma-separated; none to inherit (taxable, then tax-deferred, then roth)", Required: true},
+		},
+		Output: writeOut,
+		run:    cmdProjectionSetWithdrawalOrder,
+	},
+	{
+		Name: "projection set-roth-bracket", Summary: "set the federal bracket each year's Roth conversion fills to: tax-deferred money is moved into a Roth IRA up to the top of the bracket, after the year's other income, and taxed as income",
+		Args: []argDef{
+			{Name: "name", Description: "projection to change", Required: true},
+			{Name: "rate", Description: "a bracket rate of the tax tables, 22 or 0.22 for 22%; none to inherit", Required: true},
+		},
+		Output: writeOut,
+		run:    cmdProjectionSetRothBracket,
+	},
+	{
 		Name: "projection set-inflation", Summary: "set a projection's inflation rate to a constant, replacing its first global set inflation modification; scale ones are kept and still apply",
 		Args: []argDef{
 			{Name: "name", Description: "projection to change", Required: true},
@@ -539,6 +566,61 @@ func cmdProjectionSetOverrideHistory(c *call) (any, error) {
 		return nil, usageErr("<value>: %q is not true, false or none", c.args[1])
 	}
 	res, err := ops.SetOverrideHistory(st, rec, c.args[0], v, c.options())
+	return c.finish(c.args[0], res, err)
+}
+
+func cmdProjectionSetRetirement(c *call) (any, error) {
+	st, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	var on *model.Date
+	if c.args[1] != "none" {
+		d, err := parseCLIDate(c.args[1], false)
+		if err != nil {
+			return nil, usageErr("<date>: %v", err)
+		}
+		on = &d
+	}
+	res, err := ops.SetRetirement(st, rec, c.args[0], on, c.options())
+	return c.finish(c.args[0], res, err)
+}
+
+func cmdProjectionSetWithdrawalOrder(c *call) (any, error) {
+	st, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	var order []model.Bucket
+	if c.args[1] != "none" {
+		for _, name := range strings.Split(c.args[1], ",") {
+			order = append(order, model.Bucket(strings.TrimSpace(name)))
+		}
+		if !model.ValidWithdrawalOrder(order) {
+			return nil, usageErr("<order>: %q does not name each of taxable, tax-deferred and roth once", c.args[1])
+		}
+	}
+	res, err := ops.SetWithdrawalOrder(st, rec, c.args[0], order, c.options())
+	return c.finish(c.args[0], res, err)
+}
+
+func cmdProjectionSetRothBracket(c *call) (any, error) {
+	st, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	var rate *float64
+	if c.args[1] != "none" {
+		v, err := parseNumber(c.args[1])
+		if err != nil {
+			return nil, usageErr("<rate>: %v", err)
+		}
+		if v > 1 {
+			v /= 100
+		}
+		rate = &v
+	}
+	res, err := ops.SetRothBracket(st, rec, c.args[0], rate, c.options())
 	return c.finish(c.args[0], res, err)
 }
 

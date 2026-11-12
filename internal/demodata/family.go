@@ -65,6 +65,8 @@ const (
 	ProjCrash = "Crash and rebalance"
 	// ProjMax401k raises the 401k contribution from 2027 to nearly the yearly limit.
 	ProjMax401k = "Max 401k"
+	// ProjRetire60 retires on Parent A's 60th birthday and converts to Roth each year up to the top of the 22% bracket.
+	ProjRetire60 = "Retire at 60"
 )
 
 var (
@@ -139,10 +141,16 @@ func familyBudget() model.Budget {
 	salaryA.MatchPercent, salaryA.MatchUpTo, salaryA.MatchAccount = 50, 6, K401
 	salaryB := income("salary-b", "Salary (Parent B)", 3700, model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2024, time.November, 8)})
 	salaryB.MatchPercent, salaryB.MatchUpTo, salaryB.MatchAccount = 100, 4, TSP
+	// The payment equals the card's charges and is indexed like them, and comes before them in the month, so the card never owes more than the opening balance. That balance is paid off separately over the first year, accruing interest meanwhile, and the payments overshoot to leave a credit that absorbs the pennies by which indexing makes each payment a little smaller than the charges after it.
+	cardPayment := transfer("card-payment", "Credit card payment", Checking, Card, 2700, 2)
+	cardPayment.Indexed = true
+	cardPayoff := transfer("card-payoff", "Credit card opening balance", Checking, Card, 550, 2)
+	cardPayoff.Start, cardPayoff.End = model.Ptr(FamilyToday), model.Ptr(model.D(2027, time.November, 30))
 	return model.Budget{Items: []model.BudgetItem{
 		salaryA,
 		salaryB,
-		transfer("card-payment", "Credit card payment", Checking, Card, 2700, 5),
+		cardPayment,
+		cardPayoff,
 		expense("groceries", "Groceries", Card, 1800, monthly(3)),
 		expense("dining", "Dining out", Card, 900, monthly(6)),
 		expense("utilities", "Utilities", Checking, 450, monthly(12)),
@@ -282,6 +290,9 @@ func Family() *model.Record {
 		Rebalances: []model.Rebalance{{Account: Brokerage, Date: model.D(2027, time.February, 1),
 			Allocation: []model.Weight{{Class: model.ClassLargeCap, Share: 0.6}, {Class: model.ClassBonds, Share: 0.4}}}},
 	}))
+	must(rec.AddProjection(&model.Projection{Name: ProjRetire60, Parent: ProjBase,
+		RetireOn: model.Ptr(model.D(2045, time.March, 12)), RothBracket: model.Ptr(0.22),
+	}))
 	return rec
 }
 
@@ -299,7 +310,7 @@ func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
 		}
 		for _, d := range it.Dates(historyOpen, end) {
 			amount, ok := it.Amount.At(d)
-			if !ok {
+			if !ok || !it.ActiveOn(d) {
 				continue
 			}
 			t := model.Transaction{Date: d, Memo: it.Name}

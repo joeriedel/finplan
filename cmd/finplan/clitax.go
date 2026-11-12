@@ -85,7 +85,7 @@ var taxReadCommands = []*command{
 		Name: "tax year", Summary: "the household's tax for a calendar year under a projection, as the engine books it: the year's income, contributions and withdrawals, the tax by kind, what paychecks and vests withheld and the reconciliation on 15 April of the next year",
 		Args:   []argDef{{Name: "year", Description: "the calendar year", Required: true}},
 		Flags:  []flagDef{{Name: "projection", Type: typeString, Description: projDesc}},
-		Output: "{year, projection, filing_status, state, inputs: {wages (paychecks), vest_wages, pre_tax: {k401, ira, hsa} (before the limits), ordinary_income (other-ordinary items, interest and taxable withdrawals that are not early), social_security_benefits (Social Security received; not in ordinary_income), interest (included in ordinary_income), early_withdrawal, short_term_gains and long_term_gains (realized by sales in taxable accounts, a loss negative; not in ordinary_income), dependent_ages, contrib_529: [one per 529 account]}, tax: {agi, federal_taxable, federal_tax (before credits), credits, niit, early_withdrawal_penalty, state_taxable, state_tax, social_security, medicare, additional_medicare, total, gains_tax (the part of total the gains add)}, withheld: {paychecks, vests, total} (those before the projection's start included), due_minus_withheld, reconciliation: {date, account (null without a checking account), amount (positive paid, negative refunded)}, " + diagShape + "}; dollars rounded to cents",
+		Output: "{year, projection, filing_status, state, inputs: {wages (paychecks), vest_wages, pre_tax: {k401, ira, hsa} (before the limits), ordinary_income (other-ordinary items, interest, required distributions, Roth conversions and taxable withdrawals that are not early), social_security_benefits (Social Security received; not in ordinary_income), interest (included in ordinary_income), early_withdrawal, retirement_withdrawals (taken from tax-deferred accounts to cover expenses after the projection's retirement date, early ones included; in ordinary_income or early_withdrawal), required_distributions (the year's required minimum distribution, taken from tax-deferred accounts once the first earner reaches 73, or 75 if born 1960 or later; in ordinary_income), roth_conversion (moved from tax-deferred accounts to a Roth IRA under the projection's Roth bracket; in ordinary_income), short_term_gains and long_term_gains (realized by sales in taxable accounts, a loss negative; not in ordinary_income), dependent_ages, contrib_529: [one per 529 account]}, tax: {agi, federal_taxable, federal_tax (before credits), credits, niit, early_withdrawal_penalty, state_taxable, state_tax, social_security, medicare, additional_medicare, total, gains_tax (the part of total the gains add)}, withheld: {paychecks, vests, total} (those before the projection's start included), due_minus_withheld, reconciliation: {date, account (null without a checking account), amount (positive paid, negative refunded)}, " + diagShape + "}; dollars rounded to cents",
 		run:    cmdTaxYear,
 	},
 	{
@@ -708,6 +708,9 @@ type jtaxYear struct {
 		Benefits        float64   `json:"social_security_benefits"`
 		Interest        float64   `json:"interest"`
 		EarlyWithdrawal float64   `json:"early_withdrawal"`
+		Withdrawals     float64   `json:"retirement_withdrawals"`
+		RMD             float64   `json:"required_distributions"`
+		RothConversion  float64   `json:"roth_conversion"`
 		ShortTermGains  float64   `json:"short_term_gains"`
 		LongTermGains   float64   `json:"long_term_gains"`
 		DependentAges   []int     `json:"dependent_ages"`
@@ -763,6 +766,7 @@ func cmdTaxYear(c *call) (any, error) {
 	in.PreTax.K401, in.PreTax.IRA, in.PreTax.HSA = cents(ty.K401), cents(ty.IRA), cents(ty.HSA)
 	in.Benefits = cents(ty.Benefits)
 	in.Ordinary, in.Interest, in.EarlyWithdrawal = cents(ty.Ordinary), cents(ty.Interest), cents(ty.EarlyWithdrawal)
+	in.Withdrawals, in.RMD, in.RothConversion = cents(ty.Drawn), cents(ty.RMD), cents(ty.Conversion)
 	in.ShortTermGains, in.LongTermGains = cents(ty.ShortTermGains), cents(ty.LongTermGains)
 	in.DependentAges, in.Contrib529 = ages, contrib
 	out.Tax = jtax{cents(res.AGI), cents(res.FederalTaxable), cents(res.FederalTax), cents(res.Credits), cents(res.NIIT), cents(res.Penalty),

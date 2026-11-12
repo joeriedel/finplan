@@ -58,6 +58,8 @@ func TestScreenshotSmoke(t *testing.T) {
 		{"markets", "Markets", "", ""},
 		// projections-selected also covers the Add modification form, which is the default mode of the add form.
 		{"projections-selected", "Projections", "Base", ""},
+		{"projections-retirement", "Projections", "Retire at 60", ""},
+		{"graph-retire", "Graph", "Retire at 60", ""},
 		{"accounts-selected", "Accounts", "Checking", ""},
 		{"accounts-allocation", "Accounts", "Brokerage", ""},
 		{"markets-selected", "Markets", "US large cap", ""},

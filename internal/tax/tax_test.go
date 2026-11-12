@@ -317,3 +317,38 @@ func TestValidate(t *testing.T) {
 		}
 	}
 }
+
+func TestBracketTop(t *testing.T) {
+	tables := Defaults()
+	f, ok := tables.FederalYear(2026)
+	if !ok {
+		t.Skip("no 2026 table")
+	}
+	rules := f.Status[Single]
+	var twelve, twentyTwo float64
+	for i, b := range rules.Brackets {
+		if b.Rate == 0.12 {
+			twelve = rules.Brackets[i+1].Over
+		}
+		if b.Rate == 0.22 {
+			twentyTwo = rules.Brackets[i+1].Over
+		}
+	}
+	top, ded, err := tables.BracketTop(2026, Single, 0, 0.12)
+	if err != nil || top != twelve || ded != rules.StandardDeduction {
+		t.Errorf("12%%: %v %v %v", top, ded, err)
+	}
+	later, _, err := tables.BracketTop(2036, Single, 0.03, 0.22)
+	if err != nil || later <= twentyTwo {
+		t.Errorf("22%% in 2036 is indexed past %v: %v %v", twentyTwo, later, err)
+	}
+	if top, _, err := tables.BracketTop(2026, Single, 0, 0.37); err != nil || !math.IsInf(top, 1) {
+		t.Errorf("the last bracket has no top: %v %v", top, err)
+	}
+	if _, _, err := tables.BracketTop(2026, Single, 0, 0.5); err == nil {
+		t.Error("a missing rate was accepted")
+	}
+	if !tables.HasBracketRate(0.22) || tables.HasBracketRate(0.23) {
+		t.Error("HasBracketRate")
+	}
+}

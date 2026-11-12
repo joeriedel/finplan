@@ -3,6 +3,8 @@
 
 package model
 
+import "slices"
+
 // ObjectKind says what a modification targets.
 type ObjectKind string
 
@@ -62,6 +64,34 @@ type AssetSetting struct {
 	OverrideHistory *bool
 }
 
+// Bucket is a group of accounts a retired household draws on, by tax treatment.
+type Bucket string
+
+// The drawdown buckets: taxable savings and brokerage accounts, tax-deferred 401k, TSP and IRA accounts, and Roth IRA accounts.
+const (
+	BucketTaxable  Bucket = "taxable"
+	BucketDeferred Bucket = "tax-deferred"
+	BucketRoth     Bucket = "roth"
+)
+
+// DefaultWithdrawalOrder is the order a retired household draws on its buckets when no projection says otherwise.
+func DefaultWithdrawalOrder() []Bucket {
+	return []Bucket{BucketTaxable, BucketDeferred, BucketRoth}
+}
+
+// ValidWithdrawalOrder reports whether order names each bucket exactly once.
+func ValidWithdrawalOrder(order []Bucket) bool {
+	if len(order) != 3 {
+		return false
+	}
+	for _, b := range DefaultWithdrawalOrder() {
+		if !slices.Contains(order, b) {
+			return false
+		}
+	}
+	return true
+}
+
 // Projection is a named set of hypothetical changes over the base, optionally building on one parent.
 // Its AssetSettings and Mods are applied in list order, the last applied winning (see Apply). It stores only inputs. A nil Start or OverrideHistory inherits from the parent chain, and then from the record's Today and false.
 type Projection struct {
@@ -69,6 +99,10 @@ type Projection struct {
 	Parent          string
 	Start           *Date
 	OverrideHistory *bool
+	// RetireOn is the date wages stop and the household starts to live off its accounts; WithdrawalOrder is the order it draws on its buckets; RothBracket is the federal bracket rate (0.22 for 22%) each year's Roth conversion fills to. Nil inherits from the parent chain, and then none, taxable then tax-deferred then Roth, and none.
+	RetireOn        *Date
+	WithdrawalOrder []Bucket
+	RothBracket     *float64
 	AssetSettings   []AssetSetting
 	Mods            []Modification
 	// Accounts are hypothetical accounts that exist only under this projection and the projections built on it.

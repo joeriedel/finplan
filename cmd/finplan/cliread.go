@@ -22,7 +22,7 @@ const (
 	dateNote  = "YYYY-MM-DD, or YYYY-MM for the first day of the month"
 	endNote   = "YYYY-MM-DD, or YYYY-MM for the last day of the month"
 	projDesc  = "projection to evaluate under, whose own accounts and those it inherits can be targets; reality when omitted"
-	diagShape = "diagnostics {skipped: [{projection, index, target: {kind, id}, property, reason}], overlaps: [{asset, seq, member, duplicates, against}], notes: [problems with the tax calculation, and contributions the 401(k) limit refused]}"
+	diagShape = "diagnostics {skipped: [{projection, index, target: {kind, id}, property, reason}], overlaps: [{asset, seq, member, duplicates, against}], notes: [problems with the tax calculation, contributions the 401(k) limit refused, the date money runs out under a retirement date, and a Roth conversion bracket with no Roth IRA to convert into]}"
 	jsonNote  = "Dates are YYYY-MM-DD, null when absent or unbounded. Money is a plain number. Statuses are lowercase: default, actual, projected, partly_projected."
 )
 
@@ -81,7 +81,7 @@ var commands = []*command{
 	{
 		Name: "projection show", Summary: "show a projection's settings, its own hypothetical accounts and its modifications",
 		Args:   []argDef{{Name: "name", Description: "projection name", Required: true}},
-		Output: "{name, parent, start, override_history, asset_settings: [{asset, start, override_history}], accounts: [{id, name, type, tax, stated_rate, opening, from}] (the hypothetical accounts the projection defines itself, not those it inherits), modifications: [{index, target: {kind, id}, property, mode (set or scale), schedule: [{from, end, value}], item}], shocks: [{index, class, date, percent (-40 for a 40% drop)}], rebalances: [{index, account, date, allocation: [{class, percent}]}]}; modifications are in the order they apply; shocks and rebalances are in the order they were added, each numbered from 0",
+		Output: "{name, parent, start, override_history, retire_on (the date wages stop and the household draws on its accounts), withdrawal_order ([taxable, tax-deferred, roth] in the order they are drawn on), roth_bracket (the federal bracket rate each year's Roth conversion fills to, a fraction: 0.22 for 22%); each of the three is null when the projection inherits it, asset_settings: [{asset, start, override_history}], accounts: [{id, name, type, tax, stated_rate, opening, from}] (the hypothetical accounts the projection defines itself, not those it inherits), modifications: [{index, target: {kind, id}, property, mode (set or scale), schedule: [{from, end, value}], item}], shocks: [{index, class, date, percent (-40 for a 40% drop)}], rebalances: [{index, account, date, allocation: [{class, percent}]}]}; modifications are in the order they apply; shocks and rebalances are in the order they were added, each numbered from 0",
 		run:    cmdProjectionShow,
 	},
 	{
@@ -696,12 +696,18 @@ func projectionJSON(rec *model.Record, p *model.Projection) any {
 		Parent          *string    `json:"parent"`
 		Start           *jdate     `json:"start"`
 		OverrideHistory *bool      `json:"override_history"`
+		RetireOn        *jdate     `json:"retire_on"`
+		WithdrawalOrder []string   `json:"withdrawal_order"`
+		RothBracket     *float64   `json:"roth_bracket"`
 		AssetSettings   []jsetting `json:"asset_settings"`
 		Accounts        []jaccount `json:"accounts"`
 		Modifications   []jmod     `json:"modifications"`
 		Shocks          []jshock   `json:"shocks"`
 		Rebalances      []jrebal   `json:"rebalances"`
-	}{p.Name, nullable(p.Parent), jdp(p.Start), p.OverrideHistory, []jsetting{}, []jaccount{}, []jmod{}, []jshock{}, []jrebal{}}
+	}{p.Name, nullable(p.Parent), jdp(p.Start), p.OverrideHistory, jdp(p.RetireOn), nil, p.RothBracket, []jsetting{}, []jaccount{}, []jmod{}, []jshock{}, []jrebal{}}
+	for _, b := range p.WithdrawalOrder {
+		out.WithdrawalOrder = append(out.WithdrawalOrder, string(b))
+	}
 	for _, a := range p.Accounts {
 		out.Accounts = append(out.Accounts, jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.StatedRate, a.Opening, jd(a.From)})
 	}

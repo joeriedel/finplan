@@ -5,6 +5,7 @@ package ops
 
 import (
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/joeriedel/finplan/internal/model"
@@ -132,6 +133,41 @@ func SetStart(st *store.Store, rec *model.Record, name string, start *model.Date
 func SetOverrideHistory(st *store.Store, rec *model.Record, name string, override *bool, o Options) (*Result, error) {
 	return editProjection(st, rec, o, name, func(p *model.Projection) error {
 		p.OverrideHistory = copyPtr(override)
+		return nil
+	})
+}
+
+// SetRetirement sets the date wages stop and the household draws on its accounts; nil removes it, so the projection inherits. It refuses a date before 1900 or after 2200.
+func SetRetirement(st *store.Store, rec *model.Record, name string, on *model.Date, o Options) (*Result, error) {
+	if on != nil {
+		if y, _, _ := on.YMD(); y < 1900 || y > 2200 {
+			return nil, refuse(ErrInvalidValue, "the retirement date %s is out of range", *on)
+		}
+	}
+	return editProjection(st, rec, o, name, func(p *model.Projection) error {
+		p.RetireOn = copyPtr(on)
+		return nil
+	})
+}
+
+// SetWithdrawalOrder sets the order a retired household draws on its taxable, tax-deferred and Roth accounts; nil removes it, so the projection inherits. It refuses an order that does not name each bucket exactly once.
+func SetWithdrawalOrder(st *store.Store, rec *model.Record, name string, order []model.Bucket, o Options) (*Result, error) {
+	if order != nil && !model.ValidWithdrawalOrder(order) {
+		return nil, refuse(ErrInvalidValue, "a withdrawal order names each of taxable, tax-deferred and roth exactly once")
+	}
+	return editProjection(st, rec, o, name, func(p *model.Projection) error {
+		p.WithdrawalOrder = slices.Clone(order)
+		return nil
+	})
+}
+
+// SetRothBracket sets the federal bracket rate (0.22 for 22%) each year's Roth conversion fills to; nil removes it, so the projection inherits. It refuses a rate the record's tax tables have no bracket for.
+func SetRothBracket(st *store.Store, rec *model.Record, name string, rate *float64, o Options) (*Result, error) {
+	if rate != nil && !rec.Tax.HasBracketRate(*rate) {
+		return nil, refuse(ErrInvalidValue, "the tax tables have no federal bracket at %g%%", *rate*100)
+	}
+	return editProjection(st, rec, o, name, func(p *model.Projection) error {
+		p.RothBracket = copyPtr(rate)
 		return nil
 	})
 }

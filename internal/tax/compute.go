@@ -66,6 +66,8 @@ type Result struct {
 	SocialSecurity     float64
 	Medicare           float64
 	AdditionalMedicare float64
+	// PreferredGains is the net long-term gains taxed at the preferential rates, after the netting against short-term losses, before the cap of the taxable income.
+	PreferredGains float64
 	// TaxableBenefits is the part of the Social Security benefits in the adjusted gross income.
 	TaxableBenefits float64
 	// Total is the federal tax after credits, the NIIT, the penalty, the state tax and the payroll taxes.
@@ -255,6 +257,7 @@ func Compute(t Tables, in Input) (Result, error) {
 		r.AGI += r.TaxableBenefits
 	}
 	r.FederalTaxable = math.Max(0, r.AGI-rules.StandardDeduction)
+	r.PreferredGains = preferred
 	preferredTaxable := math.Min(preferred, r.FederalTaxable)
 	r.FederalTax = bracketTax(rules.Brackets, r.FederalTaxable-preferredTaxable)
 	if preferredTaxable > 0 {

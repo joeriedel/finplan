@@ -337,3 +337,35 @@ func (s State) Validate() error {
 	}
 	return nil
 }
+
+// BracketTop returns the taxable income at the top of the federal bracket with the rate in the year for the filing status, with the year's table indexed by inflation: the Over of the next bracket, or +Inf for the last. It also returns the year's standard deduction, so that top+deduction is the adjusted gross income where the bracket ends. It is an error if the table has no bracket at the rate.
+func (t Tables) BracketTop(year int, status FilingStatus, inflation, rate float64) (top, deduction float64, err error) {
+	f, err := t.federalFor(year, inflation)
+	if err != nil {
+		return 0, 0, err
+	}
+	rules := f.Status[status]
+	for i, b := range rules.Brackets {
+		if math.Abs(b.Rate-rate) < 1e-9 {
+			if i+1 < len(rules.Brackets) {
+				return rules.Brackets[i+1].Over, rules.StandardDeduction, nil
+			}
+			return math.Inf(1), rules.StandardDeduction, nil
+		}
+	}
+	return 0, 0, fmt.Errorf("tax: there is no %g%% federal bracket for %s in %d", rate*100, status, year)
+}
+
+// HasBracketRate reports whether any federal table has a bracket at the rate for any filing status.
+func (t Tables) HasBracketRate(rate float64) bool {
+	for _, f := range t.Federal {
+		for _, s := range f.Status {
+			for _, b := range s.Brackets {
+				if math.Abs(b.Rate-rate) < 1e-9 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}

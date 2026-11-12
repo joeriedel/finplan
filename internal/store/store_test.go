@@ -121,7 +121,7 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	want := demodata.Family()
 	mustSave(t, s, want)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 10 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 11 {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
 	// Format 1 documents have no mode and no growth; a schedule of no growth is not stored.
@@ -1548,5 +1548,32 @@ func TestMortgageTermsAndMatchesRoundTripAndFormat8Loads(t *testing.T) {
 	}
 	if got := mustLoad(t, old); !reflect.DeepEqual(got, want) {
 		t.Fatal("the format 8 record loaded differently")
+	}
+}
+
+func TestRetirementSettingsRoundTripAndOldProjectionsHaveNone(t *testing.T) {
+	s, _ := openTemp(t)
+	rec := demodata.Family()
+	p := rec.Projection(demodata.ProjRetire60)
+	p.WithdrawalOrder = []model.Bucket{model.BucketRoth, model.BucketDeferred, model.BucketTaxable}
+	mustSave(t, s, rec)
+	got, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := got.Projection(demodata.ProjRetire60)
+	if q.RetireOn == nil || *q.RetireOn != *p.RetireOn || q.RothBracket == nil || *q.RothBracket != 0.22 || !reflect.DeepEqual(q.WithdrawalOrder, p.WithdrawalOrder) {
+		t.Errorf("loaded %+v", q)
+	}
+	if b := got.Projection(demodata.ProjBase); b.RetireOn != nil || b.WithdrawalOrder != nil || b.RothBracket != nil {
+		t.Errorf("Base loaded with %+v", b)
+	}
+	// A format 10 projection document has none of the three.
+	var old projectionDoc
+	if err := decodeDoc(docRow{kind: kindProjection, key: "old", format: 10, body: []byte(`{"name":"Old","parent":"","start":null,"override_history":null}`)}, &old); err != nil {
+		t.Fatal(err)
+	}
+	if proj, err := docProjection(old); err != nil || proj.RetireOn != nil || proj.WithdrawalOrder != nil || proj.RothBracket != nil {
+		t.Errorf("old document: %+v %v", proj, err)
 	}
 }
