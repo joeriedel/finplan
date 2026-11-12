@@ -10,6 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/joeriedel/finplan/internal/graph"
+	"github.com/joeriedel/finplan/internal/store"
 )
 
 type wsegment struct {
@@ -863,4 +866,33 @@ func entryIDs(list []wentry) map[int64]bool {
 		ids[*e.ID] = true
 	}
 	return ids
+}
+
+func TestCLIDeleteListsAndRemovesPresetLines(t *testing.T) {
+	path := seededFile(t)
+	presetLines := func() int {
+		st, err := store.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		row, err := st.Preset("Retirement overview")
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := graph.DecodePreset(row.Name, row.Format, row.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(p.Lines)
+	}
+	n := presetLines()
+	affected := errorAffected(t, path, "confirm_required", "asset", "delete", "net-worth")
+	if countKind(affected, "view preset") != 1 {
+		t.Fatalf("affected %+v", affected)
+	}
+	w := data(t, path, "", "asset", "delete", "net-worth", "--force")
+	if countKind(w.Affected, "view preset") != 1 || presetLines() != n-1 {
+		t.Errorf("delete %+v, %d lines of %d", w, presetLines(), n)
+	}
 }

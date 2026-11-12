@@ -18,6 +18,7 @@ const (
 	AffectedModification = "modification"
 	AffectedBudgetItem   = "budget item"
 	AffectedOrphan       = "orphaned modification"
+	AffectedPreset       = "view preset"
 )
 
 // Effects of a delete on an Affected object.
@@ -32,11 +33,11 @@ const (
 type Affected struct {
 	// Kind is one of the Affected constants.
 	Kind string `json:"kind"`
-	// In is the object that holds it: an asset id, a projection name, or "budget" for the base budget.
+	// In is the object that holds it: an asset id, a projection name, "budget" for the base budget, or a view preset name.
 	In string `json:"in"`
 	// Detail says which member, setting, modification or budget item it is.
 	Detail string `json:"detail"`
-	// Effect is EffectRemoved for a member, setting or modification, and EffectDeleted for a budget item.
+	// Effect is EffectRemoved for a member, setting, modification or view preset line, and EffectDeleted for a budget item.
 	Effect string `json:"effect"`
 }
 
@@ -48,16 +49,33 @@ type DeletePlan struct {
 	Blocked string
 }
 
-// AssetDeletePlan returns what DeleteAsset would change besides the asset: its membership in other assets, and the asset settings and modifications of projections that name it. Modifications of accounts the asset contains stay. It is ErrUnknownObject for an asset the record does not have and ErrInvalidValue for an account's default asset. Nothing is changed.
-func AssetDeletePlan(rec *model.Record, id model.AssetID) (DeletePlan, error) {
+// AssetDeletePlan returns what DeleteAsset would change besides the asset: its membership in other assets, the asset settings and modifications of projections that name it, and the saved view presets that have a line of it (one entry per preset). Modifications of accounts the asset contains stay. It is ErrUnknownObject for an asset the record does not have and ErrInvalidValue for an account's default asset. Nothing is changed.
+func AssetDeletePlan(st *store.Store, rec *model.Record, id model.AssetID) (DeletePlan, error) {
 	next := rec.Clone()
 	if _, err := editableAsset(next, id); err != nil {
 		return DeletePlan{}, err
 	}
-	return DeletePlan{Affected: unlinkAsset(next, id, "")}, nil
+	affected, err := withPresets(st, unlinkAsset(next, id, ""), id)
+	return DeletePlan{Affected: affected}, err
 }
 
-// AccountDeletePlan returns what DeleteAccount would change besides the account and its default asset: membership in other assets, asset settings and modifications naming the account or its default asset, the budget items that move money in or out of it (base and projection-added), and modifications of deleted base items. An account with record entries, or that is the counter account of any entry stored, has Blocked set instead. It is ErrUnknownObject for an account the record does not have. Nothing is changed.
+// withPresets appends to affected one entry for each saved view preset that has a line of the assets.
+func withPresets(st *store.Store, affected []Affected, assets ...model.AssetID) ([]Affected, error) {
+	changes, err := presetsWithout(st, assets...)
+	if err != nil {
+		return nil, fmt.Errorf("could not read the view presets: %w", err)
+	}
+	for _, c := range changes {
+		detail := plural(c.Lines, "line")
+		if c.Bands > 0 {
+			detail += ", " + plural(c.Bands, "band")
+		}
+		affected = append(affected, Affected{AffectedPreset, c.Before.Name, detail, EffectRemoved})
+	}
+	return affected, nil
+}
+
+// AccountDeletePlan returns what DeleteAccount would change besides the account and its default asset: membership in other assets, asset settings and modifications naming the account or its default asset, the saved view presets that have a line of its default asset (one entry per preset), the budget items that move money in or out of it (base and projection-added), and modifications of deleted base items. An account with record entries, or that is the counter account of any entry stored, has Blocked set instead. It is ErrUnknownObject for an account the record does not have. Nothing is changed.
 func AccountDeletePlan(st *store.Store, rec *model.Record, id model.AccountID) (DeletePlan, error) {
 	next := rec.Clone()
 	a := next.Account(id)
@@ -68,7 +86,8 @@ func AccountDeletePlan(st *store.Store, rec *model.Record, id model.AccountID) (
 	if err != nil || blocked != "" {
 		return DeletePlan{Blocked: blocked}, err
 	}
-	return DeletePlan{Affected: unlinkAccount(next, id)}, nil
+	affected, err := withPresets(st, unlinkAccount(next, id), model.DefaultAssetID(id))
+	return DeletePlan{Affected: affected}, err
 }
 
 // BudgetItemDeletePlan returns what DeleteBudgetItem would leave behind: the modifications of projections that target the base item, which stay and point at nothing. It is ErrUnknownObject for an item the budget does not have. Nothing is changed.
@@ -213,4 +232,11 @@ func removeMods(p *model.Projection, detail func(model.Modification) string) []A
 		return true
 	})
 	return out
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }

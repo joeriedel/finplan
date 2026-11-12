@@ -37,6 +37,17 @@ func accountTaken(rec *model.Record, projection, id string) bool {
 	})
 }
 
+// freeProjAccountName refuses a name that an asset of the record already has, ignoring case and surrounding space: the account would appear beside it in the tree and pickers. The default assets of record accounts are not compared.
+func freeProjAccountName(rec *model.Record, projection, name string) error {
+	for _, a := range rec.Assets {
+		if _, isDefault := accountOfDefault(a.ID); !isDefault && strings.EqualFold(strings.TrimSpace(a.Name), name) {
+			return refuse(ErrNameTaken, "there is already an asset named %q, so projection %q cannot have an account with that name", a.Name, projection)
+		}
+	}
+	return nil
+}
+
+// checkProjAccount refuses an account with no name, an unsuitable type, tax treatment or rate, an opening balance out of range or no opening date.
 func checkProjAccount(a model.ProjAccount) error {
 	if strings.TrimSpace(a.Name) == "" {
 		return refuse(ErrInvalidValue, "an account needs a name")
@@ -53,11 +64,14 @@ func checkProjAccount(a model.ProjAccount) error {
 	return nil
 }
 
-// AddProjAccount adds a hypothetical account to the projection. It needs a name, a type, a tax treatment and an opening date; an empty ID is made from the name, and an ID that a record account or asset, or an account of the projection, its ancestors or the projections building on it has is ErrNameTaken.
+// AddProjAccount adds a hypothetical account to the projection. It needs a name, a type, a tax treatment and an opening date; an empty ID is made from the name, and an ID that a record account or asset, or an account of the projection, its ancestors or the projections building on it has is ErrNameTaken, and so is a name that an asset has (ignoring case and surrounding space).
 func AddProjAccount(st *store.Store, rec *model.Record, projection string, a model.ProjAccount, o Options) (*Result, error) {
 	return editProjection(st, rec, o, projection, func(p *model.Projection) error {
 		a.Name = strings.TrimSpace(a.Name)
 		if err := checkProjAccount(a); err != nil {
+			return err
+		}
+		if err := freeProjAccountName(rec, projection, a.Name); err != nil {
 			return err
 		}
 		id := strings.TrimSpace(string(a.ID))
@@ -87,7 +101,7 @@ type ProjAccountChange struct {
 	From       *model.Date
 }
 
-// EditProjAccount changes attributes of an account the projection itself defines.
+// EditProjAccount changes attributes of an account the projection itself defines. A new name that an asset has is ErrNameTaken.
 func EditProjAccount(st *store.Store, rec *model.Record, projection string, id model.AccountID, ch ProjAccountChange, o Options) (*Result, error) {
 	return editProjection(st, rec, o, projection, func(p *model.Projection) error {
 		i := slices.IndexFunc(p.Accounts, func(a model.ProjAccount) bool { return a.ID == id })
@@ -96,7 +110,12 @@ func EditProjAccount(st *store.Store, rec *model.Record, projection string, id m
 		}
 		a := &p.Accounts[i]
 		if ch.Name != nil {
-			a.Name = strings.TrimSpace(*ch.Name)
+			if name := strings.TrimSpace(*ch.Name); name != a.Name {
+				if err := freeProjAccountName(rec, projection, name); err != nil {
+					return err
+				}
+				a.Name = name
+			}
 		}
 		if ch.Type != nil {
 			a.Type = *ch.Type

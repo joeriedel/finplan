@@ -241,3 +241,12 @@ func TestCLIProjectionAccountHelp(t *testing.T) {
 		t.Errorf("help lists %v", found)
 	}
 }
+
+func TestCLINamesAvoidAssetsAndProjectionAccounts(t *testing.T) {
+	path := seededFile(t)
+	refusedWrite(t, path, "", exitFailure, "name_taken", "asset", "new", "Checking")
+	refusedWrite(t, path, "", exitFailure, "name_taken", "projection", "add-account", "Base", "--name", "net worth", "--type", "property", "--tax", "taxable", "--opening", "100", "--from", "2027-06-01")
+	write(t, path, "", "projection", "add-account", "Base", "--id", "house", "--name", "House", "--type", "property", "--tax", "taxable", "--opening", "100", "--from", "2027-06-01")
+	refusedWrite(t, path, "", exitFailure, "name_taken", "asset", "new", "house")
+	refusedWrite(t, path, "", exitFailure, "name_taken", "projection", "edit-account", "Base", "house", "--name", "Liquid assets")
+}

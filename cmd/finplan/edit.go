@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"reflect"
@@ -12,18 +13,21 @@ import (
 	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/ops"
+	"github.com/joeriedel/finplan/internal/store"
 )
 
 // editStep is what the history keeps of one edit: the projections before and after it, its rename if it had one, and
 // the Graph switcher before and after, which the edit moves when it deletes the projection the switcher names.
+// A delete that removed lines from saved view presets also keeps those presets as stored before and after it (presetsBefore, presetsAfter), which undo and redo put back.
 // An edit of the accounts, assets, base budget or vest calendars also keeps the records before and after it (docsBefore, docsAfter; nil otherwise), which undo and redo restore, with their projections, through ops.RestoreDocuments.
 // The lists and records are never changed once kept: edits change copies, and undo and redo install copies.
 type editStep struct {
-	before, after         []*model.Projection
-	rename                *ops.Rename
-	switchBefore          string
-	switchAfter           string
-	docsBefore, docsAfter *model.Record
+	before, after               []*model.Projection
+	rename                      *ops.Rename
+	switchBefore                string
+	switchAfter                 string
+	docsBefore, docsAfter       *model.Record
+	presetsBefore, presetsAfter []store.Preset
 	// facts is set for the step of a recorded vest: undo voids what it stored and redo restores it, instead of restoring documents or projections.
 	facts *vestFacts
 }
@@ -51,6 +55,9 @@ func (a *app) edit(label string, do func() (*ops.Result, error)) bool {
 	step := editStep{before: old.Projections, after: res.Record.Projections, rename: res.Rename, switchBefore: switchBefore, switchAfter: a.graph.lines.Switcher()}
 	if !reflect.DeepEqual(old.Accounts, res.Record.Accounts) || !reflect.DeepEqual(old.Assets, res.Record.Assets) || !reflect.DeepEqual(old.Budget, res.Record.Budget) || !reflect.DeepEqual(old.Calendars, res.Record.Calendars) {
 		step.docsBefore, step.docsAfter = old, res.Record
+	}
+	for _, c := range res.Pruned {
+		step.presetsBefore, step.presetsAfter = append(step.presetsBefore, c.Before), append(step.presetsAfter, c.After)
 	}
 	a.history.Push(label, step)
 	return true
@@ -153,10 +160,13 @@ func (a *app) install(res *ops.Result) {
 		a.notify(fmt.Sprintf("Could not save %v", w))
 	}
 	a.graph.setRecord(res.Record)
+	for _, c := range res.Pruned {
+		a.graph.setPreset(c.After)
+	}
 }
 
-// restore saves the projections ps (with the rename the step they undo or redo made) through the same ops as an edit and installs the result; a step of docs restores the accounts, assets, base budget and projections of docs instead (the record entries added since are kept). It reports whether that worked.
-func (a *app) restore(label string, ps []*model.Projection, rename *ops.Rename, docs *model.Record) bool {
+// restore saves the projections ps (with the rename the step they undo or redo made) through the same ops as an edit and installs the result; a step of docs restores the accounts, assets, base budget and projections of docs instead (the record entries added since are kept). It then stores the view presets to in place of from (the presets as the step left them), each only if the stored preset still has the body of from; a preset saved since is left alone and named in a notice. It reports whether the record was restored.
+func (a *app) restore(label string, ps []*model.Projection, rename *ops.Rename, docs *model.Record, from, to []store.Preset) bool {
 	var res *ops.Result
 	var err error
 	if docs != nil {
@@ -169,6 +179,20 @@ func (a *app) restore(label string, ps []*model.Projection, rename *ops.Rename, 
 		return false
 	}
 	a.install(res)
+	var put []store.Preset
+	for i, p := range to {
+		if cur, err := a.st.Preset(p.Name); err != nil || !bytes.Equal(cur.Body, from[i].Body) {
+			a.notify(fmt.Sprintf("View preset %q was changed since, so it was left as it is.", p.Name))
+			continue
+		}
+		put = append(put, p)
+	}
+	if err := ops.PutPresets(a.st, put); err != nil {
+		a.notify(fmt.Sprintf("Could not save %v", err))
+	}
+	for _, p := range put {
+		a.graph.setPreset(p)
+	}
 	a.generation++
 	return true
 }
@@ -182,7 +206,7 @@ func (a *app) undo() {
 		}
 		return
 	}
-	if ok && a.restore("undo "+s.Label, s.Data.before, s.Data.rename.Reverse(), s.Data.docsBefore) {
+	if ok && a.restore("undo "+s.Label, s.Data.before, s.Data.rename.Reverse(), s.Data.docsBefore, s.Data.presetsAfter, s.Data.presetsBefore) {
 		if s.Data.rename == nil && s.Data.switchBefore != s.Data.switchAfter {
 			a.graph.lines.SetSwitcher(s.Data.switchBefore)
 		}
@@ -199,7 +223,7 @@ func (a *app) redo() {
 		}
 		return
 	}
-	if ok && a.restore("redo "+s.Label, s.Data.after, s.Data.rename, s.Data.docsAfter) {
+	if ok && a.restore("redo "+s.Label, s.Data.after, s.Data.rename, s.Data.docsAfter, s.Data.presetsBefore, s.Data.presetsAfter) {
 		if s.Data.rename == nil && s.Data.switchBefore != s.Data.switchAfter {
 			a.graph.lines.SetSwitcher(s.Data.switchAfter)
 		}
@@ -238,5 +262,16 @@ func (g *graphTab) renameProjection(from, to string, rewritten []string) {
 		if np, changed := p.RenameProjection(from, to); changed && slices.Contains(rewritten, p.Name) {
 			g.presets[i] = np
 		}
+	}
+}
+
+// setPreset replaces the loaded preset of the same name with the stored one p, a delete's rewrite or its undo. A preset the tab does not hold, or that cannot be decoded, is left out, as when presets are loaded.
+func (g *graphTab) setPreset(p store.Preset) {
+	np, err := graph.DecodePreset(p.Name, p.Format, p.Body)
+	if err != nil {
+		return
+	}
+	if i := slices.IndexFunc(g.presets, func(o graph.Preset) bool { return o.Name == p.Name }); i >= 0 {
+		g.presets[i] = np
 	}
 }

@@ -153,7 +153,7 @@ func TestDeleteAssetKeepsAccountModifications(t *testing.T) {
 	st, rec := seed(t)
 	mustOp(t, func() (*Result, error) { return AddMod(st, rec, demodata.ProjBase, growth, Options{}) })
 	rec = reload(t, st)
-	plan, err := AssetDeletePlan(rec, demodata.Liquid)
+	plan, err := AssetDeletePlan(st, rec, demodata.Liquid)
 	if err != nil {
 		t.Fatal(err)
 	}

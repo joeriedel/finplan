@@ -249,7 +249,7 @@ func TestDeleteAssetCascadeIsOneUndoStep(t *testing.T) {
 	if why := deleteAssetProblem(a.st, a.rec, "spare"); why != "" {
 		t.Fatalf("delete problem %q", why)
 	}
-	plan, err := ops.AssetDeletePlan(a.rec, "spare")
+	plan, err := ops.AssetDeletePlan(a.st, a.rec, "spare")
 	if err != nil {
 		t.Fatal(err)
 	}

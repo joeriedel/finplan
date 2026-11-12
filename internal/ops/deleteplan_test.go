@@ -37,7 +37,7 @@ func TestDeleteAssetCascade(t *testing.T) {
 	mustOp(t, func() (*Result, error) { return AddAssetSetting(st, reload(t, st), demodata.ProjBase, set, Options{}) })
 	rec = reload(t, st)
 
-	plan, err := AssetDeletePlan(rec, id)
+	plan, err := AssetDeletePlan(st, rec, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,14 +72,14 @@ func TestAssetDeletePlanOfAnUnusedAssetIsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := AssetDeletePlan(reload(t, st), res.Asset.ID)
+	plan, err := AssetDeletePlan(st, reload(t, st), res.Asset.ID)
 	if err != nil || len(plan.Affected) != 0 || plan.Blocked != "" {
 		t.Errorf("plan %+v, %v", plan, err)
 	}
-	if _, err := AssetDeletePlan(rec, "acct:checking"); !errors.Is(err, ErrInvalidValue) {
+	if _, err := AssetDeletePlan(st, rec, "acct:checking"); !errors.Is(err, ErrInvalidValue) {
 		t.Errorf("default asset: %v", err)
 	}
-	if _, err := AssetDeletePlan(rec, "nope"); !errors.Is(err, ErrUnknownObject) {
+	if _, err := AssetDeletePlan(st, rec, "nope"); !errors.Is(err, ErrUnknownObject) {
 		t.Errorf("unknown asset: %v", err)
 	}
 }

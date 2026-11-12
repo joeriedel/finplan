@@ -59,7 +59,7 @@ var dataCommands = []*command{
 		run:    cmdAssetRename,
 	},
 	{
-		Name: "asset delete", Summary: "delete an aggregate asset and remove it from what refers to it: other assets' members and projections' asset settings and modifications for it; refused with confirm_required, listing them in the error's affected, unless --force is given or nothing refers to it",
+		Name: "asset delete", Summary: "delete an aggregate asset and remove it from what refers to it: other assets' members and projections' asset settings and modifications for it, and its lines (with the bands that use them) in saved view presets; refused with confirm_required, listing them in the error's affected, unless --force is given or nothing refers to it",
 		Args:   []argDef{{Name: "asset", Description: "asset id or name", Required: true}},
 		Flags:  []flagDef{{Name: "force", Type: typeBool, Default: "false", Description: forceDesc}},
 		Output: "{dry_run, changed, removed: asset id, asset: the asset as it was, as asset list prints it, affected: [{kind, in, detail, effect}]}; its members are removed with it, the accounts they name are not, and modifications of those accounts stay",
@@ -132,7 +132,7 @@ var dataCommands = []*command{
 		run:    cmdAssetRemoveDefault,
 	},
 	{
-		Name: "asset set-param", Summary: "set a parameter of everything an asset wraps, replacing the earlier setting, or clear it",
+		Name: "asset set-param", Summary: "set a parameter of everything an asset wraps, replacing the earlier setting (a growth schedule needs at least one segment), or clear it",
 		Args: []argDef{{Name: "asset", Description: assetNote, Required: true}},
 		Flags: []flagDef{
 			{Name: "param", Type: typeEnum, Default: model.PropGrowth, Choices: []string{model.PropGrowth}, Description: "the parameter; only growth, a fraction per year"},
@@ -182,7 +182,7 @@ var dataCommands = []*command{
 		run:    cmdAccountReopen,
 	},
 	{
-		Name: "account delete", Summary: "delete an account and its default asset, and remove it from what refers to it: asset members, asset settings and modifications for it, and the budget items (base and projection-added) that move money in or out of it with the modifications of them; refused with confirm_required, listing them in the error's affected, unless --force is given or nothing refers to it; refused with in_use while it has record entries or is the counter account of one (close it instead)",
+		Name: "account delete", Summary: "delete an account and its default asset, and remove it from what refers to it: asset members, asset settings and modifications for it, and the budget items (base and projection-added) that move money in or out of it with the modifications of them, and its lines (with the bands that use them) in saved view presets; refused with confirm_required, listing them in the error's affected, unless --force is given or nothing refers to it; refused with in_use while it has record entries or is the counter account of one (close it instead)",
 		Args:   []argDef{{Name: "account", Description: "account id or name", Required: true}},
 		Flags:  []flagDef{{Name: "force", Type: typeBool, Default: "false", Description: forceDesc}},
 		Output: "{dry_run, changed, removed: account id, account: the account as it was, as account list prints it, affected: [{kind, in, detail, effect}]}",
@@ -376,7 +376,7 @@ func cmdAssetDelete(c *call) (any, error) {
 		return nil, err
 	}
 	a := c.rec.Asset(id)
-	plan, err := ops.AssetDeletePlan(c.rec, id)
+	plan, err := ops.AssetDeletePlan(c.st, c.rec, id)
 	if err != nil {
 		return nil, opsError(err)
 	}

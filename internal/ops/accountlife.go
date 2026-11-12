@@ -58,7 +58,7 @@ func ReopenAccount(st *store.Store, rec *model.Record, id model.AccountID, o Opt
 	})
 }
 
-// DeleteAccount deletes an account and its default asset, and removes it from what refers to it, as AccountDeletePlan lists: other assets' members, asset settings and modifications that name it or its default asset, the budget items (base and projection-added) that move money in or out of it, and the modifications of those base items. It is ErrUnknownObject for an account the record does not have, and ErrInUse while the account has any entry stored (a voided one too) or is the counter account of any entry stored: close it instead (CloseAccount). The result's Account is the account as it was.
+// DeleteAccount deletes an account and its default asset, and removes it from what refers to it, as AccountDeletePlan lists: other assets' members, asset settings and modifications that name it or its default asset, the budget items (base and projection-added) that move money in or out of it, and the modifications of those base items. Each saved view preset loses the lines of the default asset and the bands that used them (Result.Pruned). It is ErrUnknownObject for an account the record does not have, and ErrInUse while the account has any entry stored (a voided one too) or is the counter account of any entry stored: close it instead (CloseAccount). The result's Account is the account as it was.
 func DeleteAccount(st *store.Store, rec *model.Record, id model.AccountID, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		a := next.Account(id)
@@ -76,7 +76,7 @@ func DeleteAccount(st *store.Store, rec *model.Record, id model.AccountID, o Opt
 		if err := next.RemoveAccount(id); err != nil {
 			return Result{}, refuse(ErrInvalidValue, "%v", err)
 		}
-		return Result{Account: a, Removed: string(id)}, nil
+		return Result{Account: a, Removed: string(id), deleted: []model.AssetID{model.DefaultAssetID(id)}}, nil
 	})
 }
 

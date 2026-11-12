@@ -119,8 +119,19 @@ type Result struct {
 	Rename *Rename
 	// Rewritten names the saved view presets a rename rewrote (in a dry run, would rewrite).
 	Rewritten []string
+	// Pruned lists the saved view presets a delete of an asset or account removed lines from (in a dry run, would remove).
+	Pruned []PresetChange
 	// Warnings are failures to rewrite presets. They do not undo the saved record.
 	Warnings []PresetWarning
+
+	// deleted is the assets whose lines a delete removes from the saved view presets.
+	deleted []model.AssetID
+}
+
+// PresetChange is a saved view preset as a delete of an asset or account rewrote it: the stored preset before and after, and how many lines and bands the delete removed from it.
+type PresetChange struct {
+	Before, After store.Preset
+	Lines, Bands  int
 }
 
 // edit runs change on a copy of the editable documents of rec and commits the copy. It refuses a change that leaves the projections as they were.
@@ -170,7 +181,7 @@ func errUnknown(name string) error {
 	return refuse(ErrUnknownProjection, "there is no projection named %q", name)
 }
 
-// commit saves next (a dry run only checks that the record could be saved and restored) and, after a rename, rewrites the presets that name the projection.
+// commit saves next (a dry run only checks that the record could be saved and restored) and, after a rename, rewrites the presets that name the projection; after a delete, it removes the lines of the deleted assets from the presets.
 func commit(st *store.Store, next *model.Record, res Result, o Options) (*Result, error) {
 	res.Record = next
 	save := st.Save
@@ -182,6 +193,9 @@ func commit(st *store.Store, next *model.Record, res Result, o Options) (*Result
 	}
 	if res.Rename != nil {
 		renamePresets(st, &res, o)
+	}
+	if len(res.deleted) > 0 {
+		pruneDeletedPresets(st, &res, o)
 	}
 	return &res, nil
 }
@@ -214,4 +228,57 @@ func renamePresets(st *store.Store, res *Result, o Options) {
 		}
 		res.Rewritten = append(res.Rewritten, r.Name)
 	}
+}
+
+// presetsWithout returns, for each stored preset that has lines of the assets, the preset as it would be left without them (see graph.Preset.RemoveAssets). A preset that cannot be decoded is skipped, as the editors skip it when they load presets. Nothing is written.
+func presetsWithout(st *store.Store, assets ...model.AssetID) ([]PresetChange, error) {
+	rows, err := st.Presets()
+	if err != nil {
+		return nil, err
+	}
+	var out []PresetChange
+	for _, r := range rows {
+		p, err := graph.DecodePreset(r.Name, r.Format, r.Body)
+		if err != nil {
+			continue
+		}
+		np, lines, bands := p.RemoveAssets(assets...)
+		if lines == 0 {
+			continue
+		}
+		body, err := graph.EncodePreset(np)
+		if err != nil {
+			return nil, fmt.Errorf("could not encode view preset %q: %w", r.Name, err)
+		}
+		out = append(out, PresetChange{r, store.Preset{Name: r.Name, Format: graph.PresetFormat, Body: body}, lines, bands})
+	}
+	return out, nil
+}
+
+// pruneDeletedPresets removes the lines of the deleted assets from each stored preset that has them. The presets stay, even with no lines left. A failure is a warning: the delete itself was saved.
+func pruneDeletedPresets(st *store.Store, res *Result, o Options) {
+	changes, err := presetsWithout(st, res.deleted...)
+	if err != nil {
+		res.Warnings = append(res.Warnings, PresetWarning{Err: err})
+		return
+	}
+	for _, c := range changes {
+		if !o.DryRun {
+			if err := st.PutPreset(c.After.Name, c.After.Format, c.After.Body); err != nil {
+				res.Warnings = append(res.Warnings, PresetWarning{c.After.Name, err})
+				continue
+			}
+		}
+		res.Pruned = append(res.Pruned, c)
+	}
+}
+
+// PutPresets stores each preset as given, replacing any with its name: how an editor undoes and redoes the preset changes of a delete. It stops at the first failure.
+func PutPresets(st *store.Store, presets []store.Preset) error {
+	for _, p := range presets {
+		if err := st.PutPreset(p.Name, p.Format, p.Body); err != nil {
+			return fmt.Errorf("view preset %q: %w", p.Name, err)
+		}
+	}
+	return nil
 }

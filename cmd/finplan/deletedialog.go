@@ -48,6 +48,8 @@ func deleteLines(plan ops.DeletePlan) []string {
 			out = append(out, fmt.Sprintf("Projection %q: remove the setting for %s", a.In, a.Detail))
 		case a.Kind == ops.AffectedOrphan:
 			out = append(out, fmt.Sprintf("Projection %q: its %s change will target nothing", a.In, a.Detail))
+		case a.Kind == ops.AffectedPreset:
+			out = append(out, fmt.Sprintf("View preset %q: remove what shows it (%s)", a.In, a.Detail))
 		case a.Kind == ops.AffectedModification:
 			out = append(out, fmt.Sprintf("Projection %q: remove the modification %s", a.In, a.Detail))
 		case a.In == "budget":

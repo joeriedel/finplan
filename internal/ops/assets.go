@@ -62,7 +62,7 @@ func editableAsset(next *model.Record, id model.AssetID) (*model.Asset, error) {
 	return a, nil
 }
 
-// freeAssetName refuses a name that another asset or any account already has, ignoring case and surrounding space: accounts count (an account's default asset is checked as its account) because they appear beside their default assets in the tree and pickers. The asset except is not compared, so an asset can change the case of its own name.
+// freeAssetName refuses a name that another asset, any account or any account a projection defines already has, ignoring case and surrounding space: accounts count (an account's default asset is checked as its account) because they appear beside their default assets in the tree and pickers. The asset except is not compared, so an asset can change the case of its own name.
 func freeAssetName(rec *model.Record, name string, except model.AssetID) error {
 	for _, a := range rec.Assets {
 		if _, isDefault := accountOfDefault(a.ID); !isDefault && a.ID != except && strings.EqualFold(strings.TrimSpace(a.Name), name) {
@@ -72,6 +72,13 @@ func freeAssetName(rec *model.Record, name string, except model.AssetID) error {
 	for _, a := range rec.Accounts {
 		if strings.EqualFold(strings.TrimSpace(a.Name), name) {
 			return refuse(ErrNameTaken, "there is already an account named %q", a.Name)
+		}
+	}
+	for _, p := range rec.Projections {
+		for _, a := range p.Accounts {
+			if strings.EqualFold(strings.TrimSpace(a.Name), name) {
+				return refuse(ErrNameTaken, "projection %q already has an account named %q", p.Name, a.Name)
+			}
 		}
 	}
 	return nil
@@ -135,7 +142,7 @@ func RenameAsset(st *store.Store, rec *model.Record, id model.AssetID, name stri
 	})
 }
 
-// DeleteAsset deletes an asset with its members, and removes it from what refers to it, as AssetDeletePlan lists: it leaves the assets that have it as a member and the asset settings and modifications of projections that name it. The accounts it contains stay, and so do their modifications. It is ErrInvalidValue for an account's default asset. The result's Asset is the asset as it was.
+// DeleteAsset deletes an asset with its members, and removes it from what refers to it, as AssetDeletePlan lists: it leaves the assets that have it as a member and the asset settings and modifications of projections that name it. The accounts it contains stay, and so do their modifications. Each saved view preset loses the lines of the asset and the bands that used them (Result.Pruned). It is ErrInvalidValue for an account's default asset. The result's Asset is the asset as it was.
 func DeleteAsset(st *store.Store, rec *model.Record, id model.AssetID, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		a, err := editableAsset(next, id)
@@ -146,7 +153,7 @@ func DeleteAsset(st *store.Store, rec *model.Record, id model.AssetID, o Options
 		if err := next.RemoveAsset(id); err != nil {
 			return Result{}, refuse(ErrInvalidValue, "%v", err)
 		}
-		return Result{Asset: a, Removed: string(id)}, nil
+		return Result{Asset: a, Removed: string(id), deleted: []model.AssetID{id}}, nil
 	})
 }
 
@@ -299,7 +306,7 @@ func RemoveDefault(st *store.Store, rec *model.Record, asset model.AssetID, inde
 	})
 }
 
-// SetParam sets the asset's parameter property (only model.PropGrowth) to the schedule, replacing its earlier setting; a nil schedule clears the setting. The setting applies to everything the asset wraps. An account's default asset takes settings for its account alone.
+// SetParam sets the asset's parameter property (only model.PropGrowth) to the schedule, replacing its earlier setting; a nil schedule clears the setting and a schedule with no segments is ErrInvalidValue. The setting applies to everything the asset wraps. An account's default asset takes settings for its account alone.
 func SetParam(st *store.Store, rec *model.Record, asset model.AssetID, property string, values *model.Schedule, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		a := next.Asset(asset)
@@ -312,6 +319,9 @@ func SetParam(st *store.Store, rec *model.Record, asset model.AssetID, property 
 		if values == nil {
 			delete(a.Params, property)
 			return Result{Asset: a}, nil
+		}
+		if len(values.Segments()) == 0 {
+			return Result{}, refuse(ErrInvalidValue, "a growth schedule needs at least one segment")
 		}
 		if err := checkSchedule(*values); err != nil {
 			return Result{}, err

@@ -151,3 +151,28 @@ func TestRenameProjection(t *testing.T) {
 		t.Error("a preset that does not use the name changed")
 	}
 }
+
+func TestPresetRemoveAssets(t *testing.T) {
+	line := func(a model.AssetID) PresetLine { return PresetLine{Asset: a, Visible: true} }
+	p := Preset{
+		Name:  "view",
+		Lines: []PresetLine{line("a"), line("b"), line("c")},
+		Bands: []PresetBand{{Upper: 0, Lower: 2}, {Upper: 1, Lower: 2}, {Upper: 0, Lower: 1}, {Upper: 2, Lower: 9}},
+	}
+	got, lines, bands := p.RemoveAssets("b")
+	if lines != 1 || bands != 3 || len(got.Lines) != 2 || got.Lines[0].Asset != "a" || got.Lines[1].Asset != "c" {
+		t.Fatalf("got %+v, %d lines, %d bands", got, lines, bands)
+	}
+	if len(got.Bands) != 1 || got.Bands[0].Upper != 0 || got.Bands[0].Lower != 1 {
+		t.Errorf("bands %+v", got.Bands)
+	}
+	if len(p.Lines) != 3 || len(p.Bands) != 4 {
+		t.Error("the preset was changed")
+	}
+	if same, lines, bands := p.RemoveAssets("z"); lines != 0 || bands != 0 || !reflect.DeepEqual(same, p) {
+		t.Errorf("an absent asset changed the preset: %+v", same)
+	}
+	if none, _, _ := p.RemoveAssets("a", "b", "c"); len(none.Lines) != 0 || len(none.Bands) != 0 {
+		t.Errorf("all lines removed: %+v", none)
+	}
+}

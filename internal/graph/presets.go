@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/joeriedel/finplan/internal/model"
 )
@@ -77,6 +78,38 @@ func (p Preset) RenameProjection(from, to string) (Preset, bool) {
 		}
 	}
 	return out, changed
+}
+
+// RemoveAssets returns the preset without the lines of the given assets and without the bands that used one of them
+// (or whose line indexes are out of range), the remaining bands re-indexed, and how many lines and bands it removed.
+// The result shares nothing with p. A preset with none of the assets comes back as it is, with 0 and 0.
+func (p Preset) RemoveAssets(assets ...model.AssetID) (out Preset, lines, bands int) {
+	out = p
+	out.Lines = nil
+	out.Bands = nil
+	// at maps an old line index to its new one, -1 for a removed line.
+	at := make([]int, len(p.Lines))
+	for i, l := range p.Lines {
+		if slices.Contains(assets, l.Asset) {
+			at[i] = -1
+			lines++
+			continue
+		}
+		at[i] = len(out.Lines)
+		out.Lines = append(out.Lines, l)
+	}
+	if lines == 0 {
+		return p, 0, 0
+	}
+	for _, b := range p.Bands {
+		if b.Upper < 0 || b.Upper >= len(at) || b.Lower < 0 || b.Lower >= len(at) || at[b.Upper] < 0 || at[b.Lower] < 0 {
+			bands++
+			continue
+		}
+		b.Upper, b.Lower = at[b.Upper], at[b.Lower]
+		out.Bands = append(out.Bands, b)
+	}
+	return out, lines, bands
 }
 
 // Restore builds a line list from the preset, with new ids, the exact colours and no selection. has tells

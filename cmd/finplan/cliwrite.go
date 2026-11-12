@@ -142,14 +142,14 @@ var writeCommands = []*command{
 		run:    cmdProjectionSetInflation,
 	},
 	{
-		Name: "projection add-account", Summary: "add a hypothetical account to a projection; it exists only under that projection and the ones building on it, is never written to the record, and is picked up by rule-based aggregates such as Net worth. A mortgage is a debt account with a negative opening balance and the interest as its rate, paid down by a monthly transfer item",
+		Name: "projection add-account", Summary: "add a hypothetical account to a projection; it exists only under that projection and the ones building on it, is never written to the record, and is picked up by rule-based aggregates such as Net worth. A mortgage is a debt account with a negative opening balance and the interest as its rate, paid down by a monthly transfer item. Its name must not be an asset's name",
 		Args:   []argDef{{Name: "projection", Description: "projection to add the account to", Required: true}},
 		Flags:  projAccountFlags(true),
 		Output: writeOut,
 		run:    cmdProjectionAddAccount,
 	},
 	{
-		Name: "projection edit-account", Summary: "change an account a projection defines; flags given override its current values",
+		Name: "projection edit-account", Summary: "change an account a projection defines; flags given override its current values; a new name must not be an asset's name",
 		Args: []argDef{
 			{Name: "projection", Description: "projection that defines the account", Required: true},
 			{Name: "account", Description: "account id or name", Required: true},

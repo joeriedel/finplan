@@ -625,9 +625,12 @@ func (t *assetsTab) lifecycle(asset *model.Asset) {
 		t.delFor, t.delReason, t.delKnown = asset.ID, deleteAssetProblem(t.a.st, t.a.rec, asset.ID), true
 	}
 	actionButton("Delete", t.delReason, func() {
-		if plan, err := ops.AssetDeletePlan(t.a.rec, asset.ID); err == nil {
-			t.del.ask(fmt.Sprintf("asset %q", asset.Name), plan)
+		plan, err := ops.AssetDeletePlan(t.a.st, t.a.rec, asset.ID)
+		if err != nil {
+			t.a.notifyFailed("delete asset", err)
+			return
 		}
+		t.del.ask(fmt.Sprintf("asset %q", asset.Name), plan)
 	})
 	if t.del.draw(false, "") == deleteGo {
 		if t.a.edit("delete asset", func() (*ops.Result, error) {

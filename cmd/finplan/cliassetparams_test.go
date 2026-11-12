@@ -4,7 +4,10 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -217,3 +220,16 @@ func TestCLIParameterSettingsApplyInListOrderScenario(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+func TestCLIAssetSetParamRefusesAnEmptySchedule(t *testing.T) {
+	path := seededFile(t)
+	file := filepath.Join(t.TempDir(), "empty.json")
+	if err := os.WriteFile(file, []byte("[]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"asset", "set-param", "retirement", "--json-file", file}
+	refusedWrite(t, path, "", exitUsage, "usage", args...)
+	if _, out := wcli(t, "", append([]string{"--db", path}, args...)...); !strings.Contains(string(out), "at least one segment") {
+		t.Errorf("reason %s", out)
+	}
+}

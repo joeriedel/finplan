@@ -78,6 +78,9 @@ func TestScreenshotSmoke(t *testing.T) {
 		{"budget-delete", "Budget", "", "budget-delete"},
 		{"projections-timeline", "Projections", "New job", "timeline"},
 		{"assets-timeline", "Assets", "529 accounts", "asset-timeline"},
+		{"assets-delete", "Assets", "Net worth", "asset-delete"},
+		// The demo state adds its own deletable account, so the selection is only a placeholder.
+		{"accounts-delete", "Accounts", "Checking", "account-delete"},
 		{"equity-grants", "Accounts", "Acme RSUs", "equity-grants"},
 		{"equity-add-grant", "Accounts", "Acme RSUs", "equity-add-grant"},
 		{"equity-schedule", "Accounts", "Acme RSUs", "equity-schedule"},
