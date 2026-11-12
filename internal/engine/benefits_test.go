@@ -234,6 +234,19 @@ func TestSpousalReductionUsesTheAgeWhenItStarts(t *testing.T) {
 	}
 }
 
+func TestSpousalReductionForALeapDayBirthday(t *testing.T) {
+	a := model.HouseholdMember{Name: "A", Role: model.RoleEarner, Birth: d(1983, time.March, 12), SSBenefit: 3100, SSClaimAge: 67}
+	b := model.HouseholdMember{Name: "B", Role: model.RoleSpouse, Birth: d(1988, time.February, 29), SSBenefit: 1200, SSClaimAge: 62}
+	// Both benefits start in April 2050, so the spousal one is reduced for the 60 months of claiming at 62.
+	if got := benefitsOf(t, benefitRecord(t, 0, a, b), 2060, "B"); !near(got.SSSpousal, 12*1550*(1-(36*25.0/36+24*5.0/12)/100)) || got.SSOwn != 0 {
+		t.Errorf("spouse gets %+v, want the spousal benefit reduced for 60 months", got)
+	}
+	a.Birth = d(1983, time.April, 12)
+	if got := benefitsOf(t, benefitRecord(t, 0, a, b), 2060, "B"); !near(got.SSSpousal, 12*1550*(1-(36*25.0/36+23*5.0/12)/100)) || got.SSOwn != 0 {
+		t.Errorf("spouse gets %+v, want the spousal benefit reduced for 59 months", got)
+	}
+}
+
 func TestSupplementIsPaidOnlyOnImmediateRetirement(t *testing.T) {
 	m := fersMember()
 	m.FERSYears, m.FERSSeparationAge, m.FERSStartAge = 20, 50, 60

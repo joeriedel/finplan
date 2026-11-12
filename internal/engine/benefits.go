@@ -79,8 +79,8 @@ func memberBenefits(rec *model.Record, infl model.Schedule, horizon model.Date, 
 			var ownEnd *model.Date
 			if m.Role == model.RoleSpouse && earner != nil && earner.Name != m.Name {
 				spousalStart := max(ownStart, benefits.PayStart(earner.Birth, earner.SSClaimAge))
-				// Payment starts the month after the age claimed at, and the reduction is that of the age claimed at.
-				ageMonths := benefits.AgeMonths(m.Birth, spousalStart) - 1
+				// The reduction is that of the claim age plus the months the spousal benefit starts after her own, which stays continuous for a birthday that is not on every year's calendar.
+				ageMonths := m.SSClaimAge*12 + benefits.AgeMonths(ownStart, spousalStart)
 				spousal := earner.SSBenefit / 2 * benefits.SSSpousalFactor(by, ageMonths)
 				if spousal > own {
 					add(m, benefitSSSpousal, spousalStart, nil, model.Constant(spousal), true)
