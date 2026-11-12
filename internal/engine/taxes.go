@@ -152,7 +152,7 @@ type householdTax struct {
 	// hypothetical maps an item touching a hypothetical account to the date its flows count after.
 	hypothetical map[string]model.Date
 	// cuts maps an item to the date after which the projection models it, as collect does.
-	cuts map[string]model.Date
+	cuts     map[string]model.Date
 	diag     *Diagnostics
 	years    map[int]*yearInputs
 	results  map[int]*TaxYear
