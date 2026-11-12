@@ -194,9 +194,27 @@ Extrapolating an asset computes only the accounts under it. A transfer to an acc
 
 Returns come from **market classes** (treasuries, large cap, small cap, international, cash, and so on), not from accounts. An account's growth is its allocation across classes times the classes' returns. A plain fixed rate, such as a savings account's interest, is a single fixed-rate class, so simple accounts stay simple.
 
-- Each investment account tracks a **sub-balance per class**, filled from holdings: each held symbol maps to one or more classes (a target-date fund is a blend whose mix changes over time; TSP funds map one-to-one).
-- Allocations drift between rebalances; a **rebalance** is an explicit dated action.
-- A **shock** hits a class, and each account takes it in proportion to its exposure.
+- Each investment account tracks a **sub-balance per class**. Built so far: the account's **allocation**, a percent per class (`Account.Allocation`), sets the split. Later, holdings will fill it: each held symbol maps to one or more classes (a target-date fund is a blend whose mix changes over time; TSP funds map one-to-one).
+- Allocations drift between rebalances; a **rebalance** is an explicit dated action. Drift is built (the engine never rebalances); rebalances and **shocks** (a shock hits a class, and each account takes it in proportion to its exposure) are stored but the engine does not execute them yet.
+
+**Built.** `internal/model/market.go` holds the classes. A `MarketClass` has an id, a name, a return (a growth schedule, so it can change over time) and a volatility. The shipped defaults (`DefaultClasses`) are:
+
+| Class (id) | Return | Volatility |
+| --- | --- | --- |
+| US large cap (`us-large-cap`) | 10% | 16% |
+| US small cap (`us-small-cap`) | 11% | 20% |
+| International (`international`) | 8% | 18% |
+| US bonds (`us-bonds`) | 4.5% | 6% |
+| Treasuries (`treasuries`) | 4% | 5% |
+| Cash (`cash`) | 3% | 1% |
+
+`DefaultCorrelations` gives a default correlation matrix (cash is uncorrelated with every class and has no entries). It is stored and editable but the engine does not use it yet; it is for Monte Carlo.
+
+A projection sets or scales a class's growth with a modification whose target kind is `class` (`model.KindClass`; only the `growth` property suits it, checked in `ops` `checkTarget`; CLI `mod add --target class:<id or name>`).
+
+**Allocation.** Only investment accounts (`model.Investable`: brokerage, 401k, TSP, IRA, Roth IRA, HSA, 529) hold an allocation. Its percents are each above 0, name a class once and sum to 100 within `AllocationTolerance` (`Record.CheckAllocation`); an empty allocation is valid. `DefaultAllocation(type)` is only a suggestion (60% US large cap and 40% US bonds for 401k, TSP, IRA and 529; all US large cap for brokerage, Roth IRA and HSA): it is applied only by `account allocation --default` (`ops.SetAllocation`) and by the demo, never automatically. An account without an allocation keeps growing at its stated rate.
+
+**Engine.** An allocated account keeps one sub-balance per class (the engine's `legs`), each compounding at its class's growth after the projection's class modifications. The mix drifts: there is no rebalancing yet. Inflows are split by the target allocation, outflows are taken pro rata from the current sub-balances, and the starting (actual) balance is split by the target allocation. The account's stated rate, its growth parameters and growth modifications on the account do not apply to an allocated account; they are ignored. In a breakdown the account's projected growth is one `growth` line per class (`Line.Class`), in the order of the classes; every other line has no class.
 
 ### Real market data
 
@@ -367,7 +385,7 @@ All app data lives in SQLite outside the repository (the app uses `$XDG_DATA_HOM
 - triggers that reject UPDATE and DELETE on both tables.
 - `documents`: kind, key, ordinal, format version and JSON body.
 
-Migration 2 adds `presets`, kept apart because `Save` replaces the documents wholesale. Migration 3 adds `corrections.void`. Migration 4 (schema version 4) adds `facts` and `fact_corrections` for the equity facts: grants, recorded vests and price observations. They are append-only like entries (triggers reject UPDATE and DELETE). A fact's body is JSON; a correction carries the whole new body, a note and a void flag, the latest correction wins and the history stays (`Store.CorrectFact`, `VoidFact`, `FactHistory`). Vest calendars are not facts but documents.
+Migration 2 adds `presets`, kept apart because `Save` replaces the documents wholesale. Migration 3 adds `corrections.void`. Migration 4 (schema version 4) adds `facts` and `fact_corrections` for the equity facts: grants, recorded vests and price observations. They are append-only like entries (triggers reject UPDATE and DELETE). A fact's body is JSON; a correction carries the whole new body, a note and a void flag, the latest correction wins and the history stays (`Store.CorrectFact`, `VoidFact`, `FactHistory`). Vest calendars are not facts but documents. Migration 5 (schema version 5) inserts the shipped market classes and their correlations into a database that has no classes.
 
 **Saving the record.** `Save` replaces every document and appends the model's entries that are not yet stored. It matches the stored entries of each account (with corrections applied) against the model's as a multiset of values. If a stored entry was changed or removed in the model, or an account that has stored entries is gone, `Save` fails with `ErrRecordChanged` and writes nothing. Changes to stored entries go through corrections.
 
@@ -377,7 +395,7 @@ Migration 2 adds `presets`, kept apart because `Save` replaces the documents who
 
 **Change polling and backup.** `DataVersion()` returns SQLite's `data_version`, which changes when another connection commits, for polling. `Backup(path)` runs `VACUUM INTO` a temporary file in the target folder and renames it into place, so a failure leaves an existing file untouched; it refuses the store's own database file.
 
-**Versioning and loading.** Each document row carries its own format version, and decoding dispatches on it. The current format is 6, which adds a budget item's income type, the household document and the tax table documents (`taxfed`, `taxstate`); an older income item loads as wages, and a record with no tax tables is given the shipped ones on load. Format 5  stores a budget item's amount and growth as segment arrays and adds a custom recurrence's count and unit (older documents have numbers there, which load as a one-segment schedule, a growth of 0 as none; an older build refuses format 5); format 4 added an account's close date (older documents have none and load as open accounts); format 3 added the accounts a projection defines to its document (formats 1 and 2 have none and load as an empty list); format 2 added a modification's `mode` and a budget item's `growth`. Formats 1 to 6 all load (base budget items and the items a projection adds are migrated alike), a missing mode loads as `set` and a missing growth as none, and an unknown mode is an error. A later format adds a case that reads the old shape and converts it. A row with an unknown format fails with `ErrUnknownFormat` rather than being dropped. The stored shape is a set of DTOs separate from the model types, so renaming a model field does not change what is on disk. `Load` rebuilds the record through the model constructors, replaying members in their original `Seq` order, so the loaded record equals the saved one; an empty database loads as an empty record.
+**Versioning and loading.** Each document row carries its own format version, and decoding dispatches on it. The current format is 7, which stores a market class's return as a growth schedule (an older class with a numeric return still reads), adds the `correlations` document kind (the class correlations) and an account's allocation (in the account document). Format 6 added a budget item's income type, the household document and the tax table documents (`taxfed`, `taxstate`); an older income item loads as wages, and a record with no tax tables is given the shipped ones on load. Format 5  stores a budget item's amount and growth as segment arrays and adds a custom recurrence's count and unit (older documents have numbers there, which load as a one-segment schedule, a growth of 0 as none; an older build refuses format 5); format 4 added an account's close date (older documents have none and load as open accounts); format 3 added the accounts a projection defines to its document (formats 1 and 2 have none and load as an empty list); format 2 added a modification's `mode` and a budget item's `growth`. Formats 1 to 7 all load (base budget items and the items a projection adds are migrated alike), a missing mode loads as `set` and a missing growth as none, and an unknown mode is an error. A later format adds a case that reads the old shape and converts it. A row with an unknown format fails with `ErrUnknownFormat` rather than being dropped. The stored shape is a set of DTOs separate from the model types, so renaming a model field does not change what is on disk. `Load` rebuilds the record through the model constructors, replaying members in their original `Seq` order, so the loaded record equals the saved one; an empty database loads as an empty record.
 
 **View presets.** `PutPreset`, `Preset`, `Presets` and `DeletePreset` store opaque bytes under a name with a format version owned by the writer. The store does not interpret them and does not import `internal/graph`. The app stores them as JSON in `PresetFormat` 1 (`graph.EncodePreset`, `graph.DecodePreset`; an unknown format is an error). `Restore` skips lines the record no longer has and the bands that use them, and falls back to another switcher if the saved projection is gone.
 
@@ -397,7 +415,7 @@ Commands are data: `cmd/finplan/cliread.go` holds the read command table and `cm
 
 **Commands.** Commands about data that belongs to one kind of object are noun-verb; the engine queries are top-level verbs because they accept either an asset or an account.
 
-    finplan account list                  # [{id, name, type, tax, stated_rate, default}]
+    finplan account list                  # [{id, name, type, tax, stated_rate, default, closed, allocation: [{class, percent}], balance, last_data, stale}]
     finplan account entries <account> [--voided]  # [{id, kind, date, amount, tx_kind, counter, memo}], voided entries left out; --voided includes them with a void field
     finplan entry history <entry-id>      # {id, revisions: [{date, amount, tx_kind, counter, memo, made_at, note, void}]}
     finplan asset list                    # [{id, name, kind, members, invalid, error, default, params}]
@@ -409,9 +427,10 @@ Commands are data: `cmd/finplan/cliread.go` holds the read command table and `cm
     finplan balance <target> --from 2026-01 --to 2060-12 [--step day|week|month|year] [--projection P]
                                           # {target, projection, from, to, step, samples: [{date, value, status}], diagnostics}
     finplan breakdown <target> --from 2026-01 --to 2026-12 [--projection P]   # causes: income, expense, transfer, contribution, withdrawal, grant, vest, tax, growth, opening, unexplained, default
-                                          # {target, projection, from, to, start, end, total, lines: [{cause, actual, projected}], diagnostics}
+                                          # {target, projection, from, to, start, end, total, lines: [{cause, class, actual, projected}], diagnostics}  (class: the market class of a growth line of an allocated account, else null)
     finplan starts [--projection P] [<target>]
                                           # [{account, start, last_actual, has_actual, override_history, projection_start}]
+    finplan class list                    # {classes: [{id, name, return: [{from, end, value}], volatility}], correlations: [{a, b, value}]}
     finplan help [--json]
 
 `--step` defaults to `month`. `diagnostics` is `{skipped: [...], overlaps: [...]}`: modifications the engine skipped and invalid asset members.
@@ -430,8 +449,14 @@ Commands are data: `cmd/finplan/cliread.go` holds the read command table and `cm
     finplan projection set-start <name> <date|none>
     finplan projection set-override-history <name> <true|false|none>
     finplan projection set-inflation <name> <rate|none>
-    finplan mod add <projection> --target item:<x>|account:<x>|asset:<x>|stock:<symbol>|global --property amount|growth|default|inflation|add_grant [--mode set|scale] [--value N [--from D [--end D]]] [--at I] [add_grant flags]
+    finplan mod add <projection> --target item:<x>|account:<x>|asset:<x>|stock:<symbol>|class:<x>|global --property amount|growth|default|inflation|add_grant [--mode set|scale] [--value N [--from D [--end D]]] [--at I] [add_grant flags]
     finplan stock growth <symbol> [--value N [--from D [--end D]] | --clear]
+    finplan class add <name> [--id I] [--return R] [--volatility V]
+    finplan class set <class> [--name N] [--return R] [--volatility V]
+    finplan class remove <class>          # refused (in_use) while an allocation, modification, shock or rebalance names it
+    finplan class correlation <class-a> <class-b> --value V    # 0 removes the pair
+    finplan class growth <class> [--value N [--from D [--end D]] | --clear]
+    finplan account allocation <account> --set us-large-cap=60,us-bonds=40 | --default | --clear
     finplan mod edit <projection> <index> [--mode set|scale] [--value N [--from D [--end D]]]
     finplan mod move <projection> <from> <to>
     finplan mod remove <projection> <index>
