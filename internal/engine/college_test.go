@@ -73,8 +73,8 @@ func TestCollegeCostCountsGrowthOfThe529(t *testing.T) {
 	if got := sample(t, rec, "", "acct:c529", d(2026, time.July, 2)).Amount; got < -0.001 || got > 1 {
 		t.Errorf("529 after the bill: %v, want it empty", got)
 	}
-	// The balance on the day of the bill is a day's growth above the day before.
-	if got := sample(t, rec, "", "acct:chk", d(2026, time.July, 2)).Amount; got < 10000-3300+grown-1 || got > 10000-3300+grown {
+	// The balance on the day of the bill is a day's growth (under 0.1% here) above the day before.
+	if got := sample(t, rec, "", "acct:chk", d(2026, time.July, 2)).Amount; got < 10000-3300+grown || got > 10000-3300+grown*1.001 {
 		t.Errorf("checking pays what the grown balance leaves: %v, balance %v", got, grown)
 	}
 }

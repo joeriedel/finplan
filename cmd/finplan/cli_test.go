@@ -391,7 +391,7 @@ func TestCLIBreakdownAndStarts(t *testing.T) {
 		ProjectionStart string  `json:"projection_start"`
 	}
 	cliJSON(t, &starts, "--demo", "starts")
-	if len(starts) != 13 {
+	if len(starts) != 14 {
 		t.Fatalf("starts for %d accounts", len(starts))
 	}
 	cliJSON(t, &starts, "--demo", "starts", "retirement", "--projection", "Base")
@@ -595,7 +595,7 @@ func TestCLIDefaultDatabase(t *testing.T) {
 	st.Close()
 	var accts []any
 	cliJSON(t, &accts, "account", "list")
-	if len(accts) != 13 {
+	if len(accts) != 14 {
 		t.Errorf("%d accounts", len(accts))
 	}
 }

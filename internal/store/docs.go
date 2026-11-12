@@ -336,7 +336,7 @@ type docRow struct {
 // decodeDoc decodes a document body of the given format version into v, the current shape.
 func decodeDoc(row docRow, v any) error {
 	switch row.format {
-	case 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11:
+	case 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12:
 		if err := json.Unmarshal(row.body, v); err != nil {
 			return fmt.Errorf("store: %s %q: %w", row.kind, row.key, err)
 		}

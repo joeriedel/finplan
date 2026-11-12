@@ -68,7 +68,7 @@ func TestCLIBeneficiaryAndBasis(t *testing.T) {
 	if a := collegeAccounts(t, path)["529-oldest"]; *a.Beneficiary != "Alex" {
 		t.Errorf("after the rename: %+v", a)
 	}
-	w := data(t, path, "", "household", "member", "remove", "Alex")
+	w := data(t, path, "", "household", "member", "remove", "Alex", "--force")
 	if len(w.Affected) != 1 || w.Affected[0].Kind != "beneficiary" || w.Affected[0].In != "529-oldest" {
 		t.Errorf("affected %+v", w.Affected)
 	}
@@ -100,7 +100,7 @@ func TestCLICollegeCostsDrawThe529ThenChecking(t *testing.T) {
 	cliJSON(t, &chk, "--demo", "balance", "checking", "--from", "2026-12-31", "--to", "2030-01-31", "--step", "year")
 	found := false
 	for _, n := range chk.Diagnostics.Notes {
-		found = found || (strings.Contains(n, "529 oldest ran out on") && strings.Contains(n, "Child 1 college"))
+		found = found || (strings.Contains(n, "529 oldest ran out;") && strings.Contains(n, "Child 1 college"))
 	}
 	if !found {
 		t.Errorf("notes %q lack the 529 running out", chk.Diagnostics.Notes)

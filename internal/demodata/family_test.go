@@ -459,8 +459,8 @@ func TestFamilyCollegeSavings(t *testing.T) {
 		if a.Basis == nil || *a.Basis >= last || *a.Basis <= 0 {
 			t.Errorf("%s: basis %v, balance %v", a.ID, a.Basis, last)
 		}
-		if bills[a.Beneficiary] != 8 {
-			t.Errorf("%s: %d college bills, want 8", a.ID, bills[a.Beneficiary])
+		if bills[a.Beneficiary] != 2 {
+			t.Errorf("%s: %d college bills, want 2 (fall and spring)", a.ID, bills[a.Beneficiary])
 		}
 	}
 	if n != 4 {

@@ -87,7 +87,7 @@ func (h *householdTax) payCollege(p *path, byID map[model.AccountID]*path) {
 			if c.date > chk.start {
 				chk.changes = append(chk.changes, change{date: c.date, cause: CauseExpense, amount: -short, rank: rankExpense})
 			}
-			h.note("529 %s ran out; %s is paid from checking from then on", p.acct.Name, c.item)
+			h.note("%s ran out; %s is paid from checking from then on", p.acct.Name, c.item)
 		}
 	}
 }
