@@ -26,11 +26,19 @@ const (
 	dryRunDesc   = "validate the edit and print what it would change, but save nothing; a database that needs upgrading is refused, not upgraded"
 	jsonFileDesc = "read the JSON input from this file instead of stdin"
 	scheduleNote = "a schedule is [{\"from\": \"YYYY-MM-DD\" or null for from the beginning, \"end\": \"YYYY-MM-DD\" or null, \"value\": number}, ...], sorted and not overlapping; a value holds from its from date until its end or the next segment"
-	itemJSONNote = "the item is {id (optional), name, kind (income, expense or transfer), amount (a number above zero, or a schedule of them), recurrence: {kind (one-time, weekly, biweekly, semimonthly, monthly, quarterly, annual or custom), anchor (optional date an interval item counts from, else its start; the date of a one-time item, which start, if given, must equal), month (annual), day (monthly, semimonthly and annual), day2 (semimonthly), count and unit (custom: every count days, weeks, months or years)}, start (the first date, required), end (optional), indexed, growth (optional annual raise as a fraction: 0.03 for 3%, stepping the amount up on each anniversary of the start; a number or a schedule), account (income and expense), from and to (transfer)}; amount and growth as a schedule are [{from, end, value}, ...] like a modification's, e.g. a daycare of 1400 until 2029-07-31 and 600 after; budget list prints the same shape with amount_schedule and growth_schedule, which are accepted as the schedule form too; when both forms are given they must agree on the value in effect today (an empty growth_schedule is no growth), else give one, e.g. drop amount_schedule to set a single amount"
+	itemJSONNote = "the item is {id (optional), name, kind (income, expense or transfer), amount (a number above zero, or a schedule of them), recurrence: {kind (one-time, weekly, biweekly, semimonthly, monthly, quarterly, annual or custom), anchor (optional date an interval item counts from, else its start; the date of a one-time item, which start, if given, must equal), month (annual), day (monthly, semimonthly and annual), day2 (semimonthly), count and unit (custom: every count days, weeks, months or years)}, start (the first date, required), end (optional), indexed, income_type (income only: wages, the default, ordinary or tax-free), growth (optional annual raise as a fraction: 0.03 for 3%, stepping the amount up on each anniversary of the start; a number or a schedule), account (income and expense), from and to (transfer)}; amount and growth as a schedule are [{from, end, value}, ...] like a modification's, e.g. a daycare of 1400 until 2029-07-31 and 600 after; budget list prints the same shape with amount_schedule and growth_schedule, which are accepted as the schedule form too; when both forms are given they must agree on the value in effect today (an empty growth_schedule is no growth), else give one, e.g. drop amount_schedule to set a single amount"
 	modIndexNote = "the modification's index, as projection show numbers them from 0"
 )
 
 var itemKinds = []string{string(model.ItemIncome), string(model.ItemExpense), string(model.ItemTransfer)}
+
+var incomeTypes = func() []string {
+	var out []string
+	for _, t := range model.IncomeTypes {
+		out = append(out, string(t))
+	}
+	return out
+}()
 
 var modModes = []string{string(model.ModeSet), string(model.ModeScale)}
 
@@ -57,6 +65,7 @@ func itemFlags(forAdd bool) []flagDef {
 		{Name: "from", Type: typeString, Description: "account id a transfer draws from"},
 		{Name: "to", Type: typeString, Description: "account id a transfer pays into"},
 		{Name: "indexed", Type: typeBool, Default: "false", Description: "the amount grows with inflation"},
+		{Name: "income-type", Type: typeEnum, Choices: incomeTypes, Description: "how an income item is taxed: wages (the default; income tax and FICA), ordinary (other taxable income, no FICA) or tax-free"},
 		{Name: "growth", Type: typeNumber, Description: "annual raise as a fraction, 0.03 for 3%: the amount steps up by it on each anniversary of the item's start (0 for none); a schedule of raises comes as JSON input"},
 	}
 	if forAdd {
@@ -272,6 +281,7 @@ var writeCommands = []*command{
 func init() {
 	writeCommands = append(writeCommands, assetSettingCommands...)
 	writeCommands = append(writeCommands, dataCommands...)
+	writeCommands = append(writeCommands, taxCommands...)
 	for _, cmd := range writeCommands {
 		cmd.Write = true
 		cmd.Flags = append(cmd.Flags, flagDef{Name: "dry-run", Type: typeBool, Default: "false", Description: dryRunDesc})
@@ -980,9 +990,11 @@ type itemInput struct {
 	End     *string       `json:"end"`
 	Indexed bool          `json:"indexed"`
 	Growth  numOrSegments `json:"growth"`
-	Account string        `json:"account"`
-	From    string        `json:"from"`
-	To      string        `json:"to"`
+	// IncomeType is for an income item; budget list prints it as wages when none is set.
+	IncomeType string `json:"income_type"`
+	Account    string `json:"account"`
+	From       string `json:"from"`
+	To         string `json:"to"`
 
 	// A schedule, when present, is used; an Amount or Growth given with it must agree with it. An empty GrowthSchedule is no growth.
 	AmountSchedule []segInput `json:"amount_schedule"`
@@ -1024,7 +1036,7 @@ func (c *call) itemJSON() (model.BudgetItem, error) {
 	}
 	r := in.Recurrence
 	it := model.BudgetItem{
-		ID: in.ID, Name: in.Name, Kind: model.ItemKind(in.Kind), Indexed: in.Indexed,
+		ID: in.ID, Name: in.Name, Kind: model.ItemKind(in.Kind), Indexed: in.Indexed, IncomeType: model.IncomeType(in.IncomeType),
 		Account: model.AccountID(in.Account), From: model.AccountID(in.From), To: model.AccountID(in.To),
 		Recurrence: model.Recurrence{Kind: model.RecurrenceKind(r.Kind), Month: time.Month(r.Month), Day: r.Day, Day2: r.Day2, Count: r.Count, Unit: model.RecurrenceUnit(r.Unit)},
 	}
@@ -1172,6 +1184,9 @@ func (c *call) itemFromFlags(base *model.BudgetItem) (model.BudgetItem, error) {
 	}
 	if c.set["indexed"] {
 		it.Indexed = c.str("indexed") == "true"
+	}
+	if c.set["income-type"] {
+		it.IncomeType = model.IncomeType(c.str("income-type"))
 	}
 	if v, ok, err := c.number("growth"); err != nil {
 		return it, err

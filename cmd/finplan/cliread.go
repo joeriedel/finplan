@@ -131,6 +131,8 @@ type jbudgetItem struct {
 	Account    *string     `json:"account"`
 	From       *string     `json:"from"`
 	To         *string     `json:"to"`
+	// IncomeType is how an income item is taxed, wages when none is set; null for the other kinds.
+	IncomeType *string `json:"income_type"`
 }
 
 type jrecurrence struct {
@@ -168,7 +170,16 @@ func budgetItemJSON(it model.BudgetItem, today model.Date) jbudgetItem {
 		ID: it.ID, Name: it.Name, Kind: string(it.Kind), Amount: amount, AmountSch: scheduleJSONOut(it.Amount), Recurrence: jr,
 		Start: jdp(it.Start), End: jdp(it.End), Indexed: it.Indexed, Growth: growth, GrowthSch: scheduleJSONOut(it.Growth),
 		Account: nullable(string(it.Account)), From: nullable(string(it.From)), To: nullable(string(it.To)),
+		IncomeType: incomeTypeJSON(it),
 	}
+}
+
+// incomeTypeJSON is the income type of an income item, null for the other kinds.
+func incomeTypeJSON(it model.BudgetItem) *string {
+	if it.Kind != model.ItemIncome {
+		return nil
+	}
+	return model.Ptr(string(it.Income()))
 }
 
 // valueListed is the number budget list prints for a schedule: its value today, 0 when no segment covers today.

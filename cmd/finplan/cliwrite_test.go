@@ -20,6 +20,7 @@ import (
 	"github.com/joeriedel/finplan/internal/demodata"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/store"
+	"github.com/joeriedel/finplan/internal/tax"
 )
 
 type written struct {
@@ -109,6 +110,8 @@ type snapshot struct {
 	Budget      model.Budget
 	Entries     map[model.AccountID][]store.Entry
 	Presets     []store.Preset
+	Household   model.Household
+	Tax         tax.Tables
 }
 
 func dbSnapshot(t *testing.T, path string) snapshot {
@@ -132,7 +135,7 @@ func dbSnapshot(t *testing.T, path string) snapshot {
 			t.Fatal(err)
 		}
 	}
-	return snapshot{rec.Projections, rec.Accounts, rec.Assets, rec.Budget, entries, rows}
+	return snapshot{rec.Projections, rec.Accounts, rec.Assets, rec.Budget, entries, rows, rec.Household, rec.Tax}
 }
 
 func lastValue(t *testing.T, path, target, projection, from, to string) float64 {
