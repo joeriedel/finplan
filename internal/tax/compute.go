@@ -1,0 +1,201 @@
+// Copyright (c) 2026 Joseph Riedel
+// SPDX-License-Identifier: MIT
+
+package tax
+
+import (
+	"fmt"
+	"math"
+)
+
+// Pretax are the contributions made before tax, by kind. Each is limited to the year's limit and the excess is post-tax, so it deducts nothing. Roth contributions are not deductible and are not passed.
+type Pretax struct {
+	K401, IRA, HSA float64
+}
+
+// Input is a household's year.
+type Input struct {
+	Year   int
+	Status FilingStatus
+	// State is the name of the state table to use; empty for no state tax.
+	State string
+
+	// Wages are the household's wages. FICA is computed on the household's wages as if one person earned them, so the Social Security wage base is applied once: the spouse is taken not to work.
+	Wages float64
+	// OtherIncome is ordinary income that is not wages and bears no payroll tax.
+	OtherIncome float64
+	Pretax      Pretax
+	// NetInvestmentIncome is the income the net investment income tax applies to; it is not added to the taxable income here.
+	NetInvestmentIncome float64
+	// DependentAges are the ages at the end of the year of the dependents; those under 17 earn the child tax credit and the others the credit for other dependents.
+	DependentAges []int
+	// Contrib529 are the year's contributions to each 529 account, deducted from state income up to the state's cap for each account.
+	Contrib529 []float64
+	// EarlyWithdrawal is a taxable withdrawal before age 59 and a half: ordinary income and subject to the penalty.
+	EarlyWithdrawal float64
+	// Inflation is the annual rate that indexes a year past the last federal table.
+	Inflation float64
+}
+
+// Result is the tax of a year.
+type Result struct {
+	// AGI is the adjusted gross income: wages, other income and the early withdrawal, less the pre-tax deductions.
+	AGI                float64
+	FederalTaxable     float64
+	FederalTax         float64 // on the taxable income, before credits
+	Credits            float64 // child and other dependent credits used, which cannot take the tax below zero
+	NIIT               float64
+	Penalty            float64
+	StateTaxable       float64
+	StateTax           float64
+	SocialSecurity     float64
+	Medicare           float64
+	AdditionalMedicare float64
+	// Total is the federal tax after credits, the NIIT, the penalty, the state tax and the payroll taxes.
+	Total float64
+}
+
+// index scales the table's indexed amounts from its own year to year by (1+inflation) a year. Brackets and the standard deduction round to 50, the Social Security wage base to 300, the 401(k) and IRA limits to 500, the HSA limit to 50 and the child credit to 100. The credit for other dependents and the statutory thresholds are not indexed. A year at or before the table's is left as it is.
+func (f Federal) index(year int, inflation float64) Federal {
+	if year <= f.Year {
+		return f
+	}
+	factor := math.Pow(1+inflation, float64(year-f.Year))
+	scale := func(v, unit float64) float64 { return math.Round(v*factor/unit) * unit }
+	f = f.Clone()
+	f.Year = year
+	for k, s := range f.Status {
+		for i := range s.Brackets {
+			s.Brackets[i].Over = scale(s.Brackets[i].Over, 50)
+		}
+		s.StandardDeduction = scale(s.StandardDeduction, 50)
+		f.Status[k] = s
+	}
+	f.ChildCredit = scale(f.ChildCredit, 100)
+	f.SocialSecurityWageBase = scale(f.SocialSecurityWageBase, 300)
+	f.Limit401k = scale(f.Limit401k, 500)
+	f.LimitIRA = scale(f.LimitIRA, 500)
+	f.LimitHSA = scale(f.LimitHSA, 50)
+	return f
+}
+
+// federalFor returns the table in effect in the year: that of the latest table year not after it, or the first table for an earlier year, indexed by inflation for the years between.
+func (t Tables) federalFor(year int, inflation float64) (Federal, error) {
+	var best *Federal
+	for i := range t.Federal {
+		f := &t.Federal[i]
+		if f.Year <= year && (best == nil || f.Year > best.Year) {
+			best = f
+		}
+	}
+	if best == nil {
+		for i := range t.Federal {
+			if best == nil || t.Federal[i].Year < best.Year {
+				best = &t.Federal[i]
+			}
+		}
+	}
+	if best == nil {
+		return Federal{}, fmt.Errorf("tax: there are no federal tables")
+	}
+	return best.index(year, inflation), nil
+}
+
+// stateFor returns the state's table of the latest year not after the year, or its first table for an earlier year. State amounts are not indexed.
+func (t Tables) stateFor(name string, year int) (State, error) {
+	var best *State
+	for i := range t.State {
+		s := &t.State[i]
+		switch {
+		case s.Name != name:
+		case best == nil:
+			best = s
+		case s.Year <= year && (best.Year > year || s.Year > best.Year):
+			best = s
+		case s.Year > year && best.Year > year && s.Year < best.Year:
+			best = s
+		}
+	}
+	if best == nil {
+		return State{}, fmt.Errorf("tax: there is no state table %q", name)
+	}
+	return *best, nil
+}
+
+func bracketTax(bs []Bracket, income float64) float64 {
+	var tax float64
+	for i, b := range bs {
+		if income <= b.Over {
+			break
+		}
+		top := income
+		if i+1 < len(bs) && bs[i+1].Over < top {
+			top = bs[i+1].Over
+		}
+		tax += (top - b.Over) * b.Rate
+	}
+	return tax
+}
+
+// capped returns v limited to 0..limit.
+func capped(v, limit float64) float64 { return math.Max(0, math.Min(v, limit)) }
+
+// Compute returns the tax of the household's year under the tables. Pre-tax 401(k) and TSP deferrals and IRA contributions reduce income but not the wages FICA is computed on; HSA contributions through payroll reduce both. An IRA contribution is deducted in full: the income phase-out of the deduction for a person covered at work is not modelled. Credits are nonrefundable. A state table's brackets, standard deduction and exemptions apply to the federal adjusted gross income; the early withdrawal penalty is federal only.
+func Compute(t Tables, in Input) (Result, error) {
+	var r Result
+	if !in.Status.Valid() {
+		return r, fmt.Errorf("tax: unknown filing status %q", in.Status)
+	}
+	if in.Inflation <= -1 || !finite(in.Inflation) {
+		return r, fmt.Errorf("tax: inflation %v must be above -1", in.Inflation)
+	}
+	f, err := t.federalFor(in.Year, in.Inflation)
+	if err != nil {
+		return r, err
+	}
+	rules := f.Status[in.Status]
+	hsa := capped(in.Pretax.HSA, f.LimitHSA)
+	deductions := capped(in.Pretax.K401, f.Limit401k) + capped(in.Pretax.IRA, f.LimitIRA) + hsa
+
+	ficaWages := math.Max(0, in.Wages-hsa)
+	r.SocialSecurity = f.SocialSecurityRate * math.Min(ficaWages, f.SocialSecurityWageBase)
+	r.Medicare = f.MedicareRate * ficaWages
+	r.AdditionalMedicare = f.AdditionalMedicareRate * math.Max(0, ficaWages-rules.AdditionalMedicareThreshold)
+
+	r.AGI = in.Wages + in.OtherIncome + in.EarlyWithdrawal - deductions
+	r.FederalTaxable = math.Max(0, r.AGI-rules.StandardDeduction)
+	r.FederalTax = bracketTax(rules.Brackets, r.FederalTaxable)
+
+	var credit float64
+	for _, age := range in.DependentAges {
+		if age < 17 {
+			credit += f.ChildCredit
+		} else {
+			credit += f.OtherDependentCredit
+		}
+	}
+	if over := r.AGI - rules.ChildCreditPhaseOut; over > 0 {
+		credit -= 50 * math.Ceil(over/1000)
+	}
+	r.Credits = capped(credit, r.FederalTax)
+
+	r.NIIT = f.NIITRate * math.Max(0, math.Min(in.NetInvestmentIncome, r.AGI-rules.NIITThreshold))
+	r.Penalty = f.PenaltyRate * math.Max(0, in.EarlyWithdrawal)
+
+	if in.State != "" {
+		s, err := t.stateFor(in.State, in.Year)
+		if err != nil {
+			return r, err
+		}
+		income := r.AGI - s.StandardDeduction[in.Status] -
+			s.Exemption*float64(in.Status.Filers()) - s.DependentExemption*float64(len(in.DependentAges))
+		for _, c := range in.Contrib529 {
+			income -= capped(c, s.Cap529)
+		}
+		r.StateTaxable = math.Max(0, income)
+		r.StateTax = bracketTax(s.Brackets, r.StateTaxable)
+	}
+
+	r.Total = r.FederalTax - r.Credits + r.NIIT + r.Penalty + r.StateTax + r.SocialSecurity + r.Medicare + r.AdditionalMedicare
+	return r, nil
+}
