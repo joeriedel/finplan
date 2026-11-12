@@ -1216,10 +1216,10 @@ func TestFormat4BudgetDocumentsLoadUnchanged(t *testing.T) {
 	if d := got.Budget.Items[4].Dates(after, upTo); len(d) != 1 || d[0] != model.D(2027, time.June, 1) {
 		t.Errorf("one-time: %v", d)
 	}
-	// Saved again, it is a format 5 document that loads the same.
+	// Saved again, it is a current-format document that loads the same.
 	mustSave(t, s, got)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != 5 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
 	if again := mustLoad(t, s); !reflect.DeepEqual(again.Budget.Items, want) {

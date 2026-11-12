@@ -19,6 +19,7 @@ const (
 	AffectedBudgetItem   = "budget item"
 	AffectedOrphan       = "orphaned modification"
 	AffectedPreset       = "view preset"
+	AffectedHousehold    = "household"
 )
 
 // Effects of a delete on an Affected object.
@@ -75,7 +76,7 @@ func withPresets(st *store.Store, affected []Affected, assets ...model.AssetID) 
 	return affected, nil
 }
 
-// AccountDeletePlan returns what DeleteAccount would change besides the account and its default asset: membership in other assets, asset settings and modifications naming the account or its default asset, the saved view presets that have a line of its default asset (one entry per preset), the budget items that move money in or out of it (base and projection-added), and modifications of deleted base items. An account with record entries, or that is the counter account of any entry stored, has Blocked set instead. It is ErrUnknownObject for an account the record does not have. Nothing is changed.
+// AccountDeletePlan returns what DeleteAccount would change besides the account and its default asset: membership in other assets, asset settings and modifications naming the account or its default asset, the saved view presets that have a line of its default asset (one entry per preset), the household's reconciliation account setting, the budget items that move money in or out of it (base and projection-added), and modifications of deleted base items. An account with record entries, or that is the counter account of any entry stored, has Blocked set instead. It is ErrUnknownObject for an account the record does not have. Nothing is changed.
 func AccountDeletePlan(st *store.Store, rec *model.Record, id model.AccountID) (DeletePlan, error) {
 	next := rec.Clone()
 	a := next.Account(id)
@@ -173,7 +174,7 @@ func unlinkAsset(next *model.Record, asset model.AssetID, acct model.AccountID) 
 	return out
 }
 
-// unlinkAccount is unlinkAsset for the account's default asset and the account itself, plus the budget items that move money in or out of the account and the modifications that target the account or those items.
+// unlinkAccount is unlinkAsset for the account's default asset and the account itself, plus the household's reconciliation account if it is the account, the budget items that move money in or out of the account and the modifications that target the account or those items.
 func unlinkAccount(next *model.Record, id model.AccountID) []Affected {
 	out := unlinkAsset(next, model.DefaultAssetID(id), id)
 	uses := func(it model.BudgetItem) bool { return it.Account == id || it.From == id || it.To == id }
@@ -201,6 +202,10 @@ func unlinkAccount(next *model.Record, id model.AccountID) []Affected {
 			}
 			return ""
 		})...)
+	}
+	if next.Household.Checking == id {
+		next.Household.Checking = ""
+		out = append(out, Affected{AffectedHousehold, "household", "reconciliation account", EffectRemoved})
 	}
 	for _, p := range next.Projections {
 		out = append(out, removeMods(p, func(m model.Modification) string {

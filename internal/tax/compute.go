@@ -8,9 +8,13 @@ import (
 	"math"
 )
 
-// Pretax are the contributions made before tax, by kind. Each is limited to the year's limit and the excess is post-tax, so it deducts nothing. Roth contributions are not deductible and are not passed.
-type Pretax struct {
-	K401, IRA, HSA float64
+// Earner is one person's year. The Social Security wage base and the 401(k) and IRA limits apply to each person.
+type Earner struct {
+	Wages float64
+	// K401 and IRA are the pre-tax 401(k) or TSP deferrals and the traditional IRA contributions, each limited to the year's limit with the excess post-tax, so it deducts nothing. Roth contributions are not deductible and are not passed.
+	K401, IRA float64
+	// HSA is the contribution through payroll. The year's family limit applies to the household's total.
+	HSA float64
 }
 
 // Input is a household's year.
@@ -20,11 +24,10 @@ type Input struct {
 	// State is the name of the state table to use; empty for no state tax.
 	State string
 
-	// Wages are the household's wages. FICA is computed on the household's wages as if one person earned them, so the Social Security wage base is applied once: the spouse is taken not to work.
-	Wages float64
+	// Earners are the household's people with wages or pre-tax contributions.
+	Earners []Earner
 	// OtherIncome is ordinary income that is not wages and bears no payroll tax.
 	OtherIncome float64
-	Pretax      Pretax
 	// NetInvestmentIncome is the income the net investment income tax applies to; it is not added to the taxable income here.
 	NetInvestmentIncome float64
 	// DependentAges are the ages at the end of the year of the dependents; those under 17 earn the child tax credit and the others the credit for other dependents.
@@ -140,7 +143,7 @@ func bracketTax(bs []Bracket, income float64) float64 {
 // capped returns v limited to 0..limit.
 func capped(v, limit float64) float64 { return math.Max(0, math.Min(v, limit)) }
 
-// Compute returns the tax of the household's year under the tables. Pre-tax 401(k) and TSP deferrals and IRA contributions reduce income but not the wages FICA is computed on; HSA contributions through payroll reduce both. An IRA contribution is deducted in full: the income phase-out of the deduction for a person covered at work is not modelled. Credits are nonrefundable. A state table's brackets, standard deduction and exemptions apply to the federal adjusted gross income; the early withdrawal penalty is federal only.
+// Compute returns the tax of the household's year under the tables. Pre-tax 401(k) and TSP deferrals and IRA contributions reduce income but not the wages FICA is computed on; HSA contributions through payroll reduce both. Social Security tax and the 401(k) and IRA limits are applied to each earner; the additional Medicare threshold applies to the household's Medicare wages and the HSA limit to its total contribution. An IRA contribution is deducted in full: the income phase-out of the deduction for a person covered at work is not modelled. Credits are nonrefundable. A state table's brackets, standard deduction and exemptions apply to the federal adjusted gross income; the early withdrawal penalty is federal only.
 func Compute(t Tables, in Input) (Result, error) {
 	var r Result
 	if !in.Status.Valid() {
@@ -154,15 +157,29 @@ func Compute(t Tables, in Input) (Result, error) {
 		return r, err
 	}
 	rules := f.Status[in.Status]
-	hsa := capped(in.Pretax.HSA, f.LimitHSA)
-	deductions := capped(in.Pretax.K401, f.Limit401k) + capped(in.Pretax.IRA, f.LimitIRA) + hsa
+	var wages, deductions, hsaTotal float64
+	for _, e := range in.Earners {
+		wages += e.Wages
+		hsaTotal += math.Max(0, e.HSA)
+		deductions += capped(e.K401, f.Limit401k) + capped(e.IRA, f.LimitIRA)
+	}
+	hsa := capped(hsaTotal, f.LimitHSA)
+	deductions += hsa
 
-	ficaWages := math.Max(0, in.Wages-hsa)
-	r.SocialSecurity = f.SocialSecurityRate * math.Min(ficaWages, f.SocialSecurityWageBase)
-	r.Medicare = f.MedicareRate * ficaWages
-	r.AdditionalMedicare = f.AdditionalMedicareRate * math.Max(0, ficaWages-rules.AdditionalMedicareThreshold)
+	var medicareWages float64
+	for _, e := range in.Earners {
+		fica := e.Wages
+		if hsaTotal > 0 {
+			fica -= math.Max(0, e.HSA) * hsa / hsaTotal
+		}
+		fica = math.Max(0, fica)
+		medicareWages += fica
+		r.SocialSecurity += f.SocialSecurityRate * math.Min(fica, f.SocialSecurityWageBase)
+	}
+	r.Medicare = f.MedicareRate * medicareWages
+	r.AdditionalMedicare = f.AdditionalMedicareRate * math.Max(0, medicareWages-rules.AdditionalMedicareThreshold)
 
-	r.AGI = in.Wages + in.OtherIncome + in.EarlyWithdrawal - deductions
+	r.AGI = wages + in.OtherIncome + in.EarlyWithdrawal - deductions
 	r.FederalTaxable = math.Max(0, r.AGI-rules.StandardDeduction)
 	r.FederalTax = bracketTax(rules.Brackets, r.FederalTaxable)
 

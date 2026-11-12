@@ -131,3 +131,32 @@ func TestIncomeTypeOfItems(t *testing.T) {
 		t.Errorf("an expense keeps income type %q, %v", res.Item.IncomeType, err)
 	}
 }
+
+func TestReconciliationAccountNeverDangles(t *testing.T) {
+	st, rec := seed(t)
+	mustOp(t, func() (*Result, error) {
+		return NewAccount(st, rec, model.Account{ID: "scratch", Name: "Scratch", Type: model.TypeChecking, Tax: model.Taxable}, Options{})
+	})
+	mustOp(t, func() (*Result, error) {
+		return SetHousehold(st, reload(t, st), HouseholdChange{Checking: model.Ptr(model.AccountID("scratch"))}, Options{})
+	})
+	rec = reload(t, st)
+	typ := model.TypeSavings
+	if _, err := EditAccount(st, rec, "scratch", AccountChange{Type: &typ}, Options{}); !errors.Is(err, ErrInUse) {
+		t.Errorf("changing the type of the reconciliation account: %v", err)
+	}
+	if got := reload(t, st); got.Household.Checking != "scratch" || got.Account("scratch").Type != model.TypeChecking {
+		t.Error("a refused edit changed the store")
+	}
+	plan, err := AccountDeletePlan(st, rec, "scratch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := affectedKinds(plan); plan.Blocked != "" || got[AffectedHousehold] != 1 {
+		t.Errorf("plan %+v", plan)
+	}
+	mustOp(t, func() (*Result, error) { return DeleteAccount(st, rec, "scratch", Options{}) })
+	if got := reload(t, st).Household.Checking; got != "" {
+		t.Errorf("household checking after the delete: %q", got)
+	}
+}

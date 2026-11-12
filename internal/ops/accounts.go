@@ -93,6 +93,9 @@ func EditAccount(st *store.Store, rec *model.Record, id model.AccountID, ch Acco
 					}
 				}
 			}
+			if next.Household.Checking == id {
+				return Result{}, refuse(ErrInUse, "account %q is the household's reconciliation account: its type cannot change", id)
+			}
 			a.Type = *ch.Type
 		}
 		if ch.Tax != nil {

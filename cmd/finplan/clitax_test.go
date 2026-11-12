@@ -289,3 +289,13 @@ func TestCLIFlatStateTable(t *testing.T) {
 	// Four years at 10% scale the 2026 deduction of 32,200 to 47,144, which rounds to 47,150.
 	nearTo(t, "indexed taxable income", computeTax(t, path, "--year", "2030", "--wages", "100000", "--inflation", "0.1").FederalTaxable, 100000-47150)
 }
+
+// Wages, 401(k) and IRA are given for each earner, and the wage base and the limits apply to each.
+func TestCLITaxComputeEarners(t *testing.T) {
+	path := seededFile(t)
+	c := computeTax(t, path, "--year", "2025", "--wages", "200000,100000", "--k401", "30000,30000", "--ira", "9000")
+	nearTo(t, "social security", c.SocialSecurity, 0.062*(176100+100000))
+	nearTo(t, "medicare", c.Medicare, 0.0145*300000)
+	nearTo(t, "agi", c.AGI, 300000-2*23500-7000)
+	cliFail(t, exitUsage, "--db", path, "tax", "compute", "--wages", "1,x")
+}

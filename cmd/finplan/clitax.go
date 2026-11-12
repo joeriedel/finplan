@@ -57,11 +57,11 @@ var taxReadCommands = []*command{
 		Name: "tax compute", Summary: "compute the household's tax for a year from the tax tables, the household's filing status, dependents and state, and the amounts given",
 		Flags: []flagDef{
 			{Name: "year", Type: typeInt, Description: "the tax year; the year of the record's today when omitted"},
-			{Name: "wages", Type: typeNumber, Description: "the household's wages for the year, on which FICA is computed as one earner's; 0 when omitted"},
+			{Name: "wages", Type: typeString, Description: "the wages of each earner for the year, comma separated, e.g. 120000,96000; the Social Security wage base applies to each; none when omitted"},
 			{Name: "other-income", Type: typeNumber, Description: "other ordinary income, without payroll tax; 0 when omitted"},
-			{Name: "k401", Type: typeNumber, Description: "pre-tax 401(k) and TSP deferrals, limited to the year's limit, the excess being post-tax; they reduce income but not FICA wages"},
-			{Name: "ira", Type: typeNumber, Description: "traditional IRA contributions, limited to the year's limit and deducted in full"},
-			{Name: "hsa", Type: typeNumber, Description: "HSA contributions through payroll, limited to the year's family limit; they reduce income and FICA wages"},
+			{Name: "k401", Type: typeString, Description: "pre-tax 401(k) and TSP deferrals of each earner in the order of --wages, comma separated; each is limited to the year's limit, the excess being post-tax; they reduce income but not FICA wages"},
+			{Name: "ira", Type: typeString, Description: "traditional IRA contributions of each earner in the order of --wages, comma separated; each is limited to the year's limit and deducted in full"},
+			{Name: "hsa", Type: typeString, Description: "HSA contributions through payroll of each earner in the order of --wages, comma separated; the household's total is limited to the year's family limit; they reduce income and FICA wages"},
 			{Name: "net-investment-income", Type: typeNumber, Description: "net investment income, which the net investment income tax applies to"},
 			{Name: "early-withdrawal", Type: typeNumber, Description: "a taxable withdrawal before age 59 and a half: ordinary income with the early withdrawal penalty"},
 			{Name: "contrib-529", Type: typeString, Description: "the year's contributions to each 529 account, comma separated, e.g. 4000,2500; each deducted from state income up to the state's cap"},
@@ -416,7 +416,7 @@ func cmdTaxCompute(c *call) (any, error) {
 		name string
 		out  *float64
 	}{
-		{"wages", &in.Wages}, {"other-income", &in.OtherIncome}, {"k401", &in.Pretax.K401}, {"ira", &in.Pretax.IRA}, {"hsa", &in.Pretax.HSA},
+		{"other-income", &in.OtherIncome},
 		{"net-investment-income", &in.NetInvestmentIncome}, {"early-withdrawal", &in.EarlyWithdrawal}, {"inflation", &in.Inflation},
 	} {
 		if v, ok, err := c.number(f.name); err != nil {
@@ -425,14 +425,40 @@ func cmdTaxCompute(c *call) (any, error) {
 			*f.out = v
 		}
 	}
-	if c.set["contrib-529"] {
-		for _, s := range strings.Split(c.str("contrib-529"), ",") {
+	list := func(name string) ([]float64, error) {
+		var vs []float64
+		if !c.set[name] {
+			return vs, nil
+		}
+		for _, s := range strings.Split(c.str(name), ",") {
 			v, err := parseNumber(strings.TrimSpace(s))
 			if err != nil {
-				return nil, usageErr("--contrib-529: %v", err)
+				return nil, usageErr("--%s: %v", name, err)
 			}
-			in.Contrib529 = append(in.Contrib529, v)
+			vs = append(vs, v)
 		}
+		return vs, nil
+	}
+	if in.Contrib529, err = list("contrib-529"); err != nil {
+		return nil, err
+	}
+	var perEarner [4][]float64
+	for i, name := range []string{"wages", "k401", "ira", "hsa"} {
+		if perEarner[i], err = list(name); err != nil {
+			return nil, err
+		}
+		if len(perEarner[i]) > len(in.Earners) {
+			in.Earners = append(in.Earners, make([]tax.Earner, len(perEarner[i])-len(in.Earners))...)
+		}
+	}
+	for i := range in.Earners {
+		at := func(vs []float64) float64 {
+			if i < len(vs) {
+				return vs[i]
+			}
+			return 0
+		}
+		in.Earners[i] = tax.Earner{Wages: at(perEarner[0]), K401: at(perEarner[1]), IRA: at(perEarner[2]), HSA: at(perEarner[3])}
 	}
 	res, err := tax.Compute(rec.Tax, in)
 	if err != nil {

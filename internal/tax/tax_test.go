@@ -42,6 +42,37 @@ func TestDefaultsAreFresh(t *testing.T) {
 	}
 }
 
+func one(wages, k401 float64) []Earner { return []Earner{{Wages: wages, K401: k401}} }
+
+func TestComputeAppliesLimitsToEachEarner(t *testing.T) {
+	// Each person is over the wage base and defers more than the 401(k) limit; the second spouse earns under the base.
+	over := Earner{Wages: 200000, K401: 30000, IRA: 9000}
+	under := Earner{Wages: 100000, K401: 30000, IRA: 3000}
+	got, err := Compute(Defaults(), Input{Year: 2025, Status: MarriedJoint, Earners: []Earner{over, under}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSS := 0.062 * (176100 + 100000)
+	if math.Abs(got.SocialSecurity-wantSS) > 0.005 {
+		t.Errorf("social security %v, want %v", got.SocialSecurity, wantSS)
+	}
+	// Deductions: 2 x 23,500 of 401(k) and 7,000 + 3,000 of IRA.
+	if want := 300000.0 - 47000 - 10000; got.AGI != want {
+		t.Errorf("AGI %v, want %v", got.AGI, want)
+	}
+	if want := 0.0145 * 300000; math.Abs(got.Medicare-want) > 0.005 {
+		t.Errorf("medicare %v, want %v", got.Medicare, want)
+	}
+	// Both over the wage base.
+	got, err = Compute(Defaults(), Input{Year: 2025, Status: MarriedJoint, Earners: []Earner{{Wages: 200000}, {Wages: 180000}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 2 * 176100 * 0.062; math.Abs(got.SocialSecurity-want) > 0.005 {
+		t.Errorf("social security %v, want %v", got.SocialSecurity, want)
+	}
+}
+
 func TestCompute(t *testing.T) {
 	kids4 := []int{3, 6, 9, 12}
 	tests := []struct {
@@ -52,32 +83,32 @@ func TestCompute(t *testing.T) {
 		{
 			// 168,500 taxable: 2,385 + 8,772 + 15,741 = 26,898 before the 4 x 2,200 child credit. Virginia: 200,000 - 17,000 - 6 x 930 = 177,420 taxable.
 			name: "2025 mfj 200k four children",
-			in:   Input{Year: 2025, Status: MarriedJoint, State: "VA", Wages: 200000, DependentAges: kids4},
+			in:   Input{Year: 2025, Status: MarriedJoint, State: "VA", Earners: one(200000, 0), DependentAges: kids4},
 			want: Result{AGI: 200000, FederalTaxable: 168500, FederalTax: 26898, Credits: 8800, StateTaxable: 177420, StateTax: 9944.15,
 				SocialSecurity: 10918.20, Medicare: 2900, Total: 18098 + 9944.15 + 10918.20 + 2900},
 		},
 		{
 			name: "2025 single 100k, no state",
-			in:   Input{Year: 2025, Status: Single, Wages: 100000},
+			in:   Input{Year: 2025, Status: Single, Earners: one(100000, 0)},
 			want: Result{AGI: 100000, FederalTaxable: 84250, FederalTax: 13449, SocialSecurity: 6200, Medicare: 1450, Total: 13449 + 6200 + 1450},
 		},
 		{
 			name: "social security stops at the wage base",
-			in:   Input{Year: 2025, Status: MarriedJoint, Wages: 300000},
+			in:   Input{Year: 2025, Status: MarriedJoint, Earners: one(300000, 0)},
 			want: Result{AGI: 300000, FederalTaxable: 268500, FederalTax: 2385 + 8772 + 0.22*(206700-96950) + 0.24*(268500-206700),
 				SocialSecurity: 176100 * 0.062, Medicare: 4350, AdditionalMedicare: 450,
 				Total: 2385 + 8772 + 0.22*(206700-96950) + 0.24*(268500-206700) + 176100*0.062 + 4350 + 450},
 		},
 		{
 			name: "401k above the limit deducts the limit and leaves FICA wages",
-			in:   Input{Year: 2025, Status: MarriedJoint, Wages: 200000, Pretax: Pretax{K401: 30000}},
+			in:   Input{Year: 2025, Status: MarriedJoint, Earners: one(200000, 30000)},
 			want: Result{AGI: 176500, FederalTaxable: 145000, FederalTax: 2385 + 8772 + 0.22*(145000-96950),
 				SocialSecurity: 176100 * 0.062, Medicare: 2900,
 				Total: 2385 + 8772 + 0.22*(145000-96950) + 176100*0.062 + 2900},
 		},
 		{
 			name: "HSA through payroll reduces FICA wages",
-			in:   Input{Year: 2025, Status: Single, Wages: 100000, Pretax: Pretax{HSA: 9000}},
+			in:   Input{Year: 2025, Status: Single, Earners: []Earner{{Wages: 100000, HSA: 9000}}},
 			want: Result{AGI: 91450, FederalTaxable: 75700, FederalTax: 1192.5 + 4386 + 0.22*(75700-48475),
 				SocialSecurity: 0.062 * 91450, Medicare: 0.0145 * 91450,
 				Total: 1192.5 + 4386 + 0.22*(75700-48475) + 0.062*91450 + 0.0145*91450},
