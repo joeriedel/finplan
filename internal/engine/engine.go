@@ -1359,7 +1359,7 @@ func (p *path) flowsFrom(rec *model.Record, it model.BudgetItem, d model.Date, a
 		}
 		add(rankExpense, CauseExpense, -amt, "")
 	case model.ItemTransfer:
-		amt = p.ht.moved(it, sched, amt, share)
+		amt = p.ht.moved(it, sched, amt)
 		if amt == 0 {
 			return
 		}

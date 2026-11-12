@@ -131,6 +131,7 @@ type yearInputs struct {
 	hsa          float64
 	// moved is the amount of each contribution to a limited account that the year's limit lets through, refused the part above it per account; matches is the employer match deposited on each paycheck that earns one.
 	moved      map[paycheckKey]float64
+	gross      map[paycheckKey]float64
 	refused    map[model.AccountID]float64
 	limit      float64
 	matches    map[paycheckKey]float64
@@ -253,7 +254,7 @@ func (h *householdTax) year(y int) *yearInputs {
 	if in, ok := h.years[y]; ok {
 		return in
 	}
-	in := &yearInputs{contrib529: map[model.AccountID]float64{}, withheld: map[paycheckKey]float64{}, moved: map[paycheckKey]float64{}, refused: map[model.AccountID]float64{}, matches: map[paycheckKey]float64{}}
+	in := &yearInputs{contrib529: map[model.AccountID]float64{}, withheld: map[paycheckKey]float64{}, moved: map[paycheckKey]float64{}, gross: map[paycheckKey]float64{}, refused: map[model.AccountID]float64{}, matches: map[paycheckKey]float64{}}
 	var contribs []contribution
 	h.years[y] = in
 	unsheltered := func(id model.AccountID) bool {
@@ -350,6 +351,7 @@ func (h *householdTax) limit(y int, in *yearInputs, contribs []contribution) {
 		moved := min(c.gross, max(limit-total[c.dst], 0))
 		total[c.dst] += moved
 		in.moved[c.key] = moved
+		in.gross[c.key] = c.gross
 		in.refused[c.dst] += c.gross - moved
 		in.k401 += moved
 	}
@@ -376,20 +378,21 @@ func (h *householdTax) limit(y int, in *yearInputs, contribs []contribution) {
 	}
 }
 
-// moved is the amount of amt, the part booked of the occurrence of the transfer item scheduled on sched (share of it), that is moved: the amount, less what the year's 401(k) limit refuses of a contribution to a limited account. A refusal is noted once for the account and year.
-func (h *householdTax) moved(it model.BudgetItem, sched model.Date, amt, share float64) float64 {
+// moved is the amount of amt, the part booked of the occurrence of the transfer item scheduled on sched that is moved: the amount, less what the year's 401(k) limit refuses of a contribution to a limited account. A refusal is noted once for the account and year.
+func (h *householdTax) moved(it model.BudgetItem, sched model.Date, amt float64) float64 {
 	y, _, _ := sched.YMD()
 	in := h.year(y)
 	moved, ok := in.moved[paycheckKey{it.ID, sched}]
 	if !ok {
 		return amt
 	}
-	capped := min(amt, moved*share)
-	if capped < amt {
-		a := h.rec.Account(it.To)
-		h.note("the %d 401(k) limit of %.2f refuses %.2f of the contributions to %s (%s): they are capped at the limit and the rest stays in the paying account", y, in.limit, in.refused[a.ID], a.Name, a.ID)
+	gross := in.gross[paycheckKey{it.ID, sched}]
+	if moved >= gross {
+		return amt
 	}
-	return capped
+	a := h.rec.Account(it.To)
+	h.note("the %d 401(k) limit of %.2f refuses %.2f of the contributions to %s (%s): they are capped at the limit and the rest stays in the paying account", y, in.limit, in.refused[a.ID], a.Name, a.ID)
+	return amt * moved / gross
 }
 
 // match is the employer match the paycheck of the income item on d earns.
