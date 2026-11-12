@@ -56,8 +56,8 @@ func (f settingForm) untouched() bool { return f.asset == "" && allBlank(f.start
 
 // untouched reports whether nothing has been typed in the form and no account picked; the kind and the recurrence always hold a value.
 func (f itemForm) untouched() bool {
-	return allBlank(f.name, f.amount, f.growth, f.date, f.day, f.month, f.end, f.day2, f.count) &&
-		f.account == "" && f.from == "" && f.to == ""
+	return allBlank(f.name, f.amount, f.growth, f.date, f.day, f.month, f.end, f.day2, f.count, f.matchPercent, f.matchUpTo) &&
+		f.account == "" && f.from == "" && f.to == "" && f.matchAccount == ""
 }
 
 // modUntouched reports whether nothing has been picked or typed in the Add modification form: no object and no value or dates. The kind, property and how always hold a value.

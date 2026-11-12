@@ -64,6 +64,7 @@ func (r *Record) Clone() *Record {
 		ca := *a
 		ca.Default = a.Default.clone()
 		ca.Closed = clonePtr(a.Closed)
+		ca.FirstPayment = clonePtr(a.FirstPayment)
 		ca.Allocation = slices.Clone(a.Allocation)
 		ca.Snapshots = slices.Clone(a.Snapshots)
 		ca.Transactions = slices.Clone(a.Transactions)

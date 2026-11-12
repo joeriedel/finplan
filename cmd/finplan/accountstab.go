@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/AllenDang/cimgui-go/imgui"
@@ -67,7 +68,7 @@ func newAcctProblem(st *store.Store, rec *model.Record, f newAcctForm) string {
 	return reasonOf(err)
 }
 
-// accountChange reads the new text of one attribute of an account being edited: name or rate (a percentage), or the choice of type or tax.
+// accountChange reads the new text of one attribute of an account being edited: name or rate (a percentage), the choice of type or tax, or a mortgage's original amount, term in months, first payment date or paying account (the id; blank for none, which for the amount and the term is 0).
 func accountChange(field, text string) (ops.AccountChange, error) {
 	var ch ops.AccountChange
 	switch field {
@@ -83,6 +84,32 @@ func accountChange(field, text string) (ops.AccountChange, error) {
 			return ch, err
 		}
 		ch.StatedRate = &v
+	case "original":
+		v := 0.0
+		if text != "" {
+			var err error
+			if v, err = parseValue(model.PropAmount, model.ModeSet, text); err != nil {
+				return ch, err
+			}
+		}
+		ch.OriginalAmount = &v
+	case "term":
+		n := 0
+		if text != "" {
+			var err error
+			if n, err = strconv.Atoi(text); err != nil {
+				return ch, fmt.Errorf("%q is not a whole number of months", text)
+			}
+		}
+		ch.TermMonths = &n
+	case "firstpayment":
+		d, err := parseDate(text)
+		if err != nil {
+			return ch, fmt.Errorf("%v: enter the date of the first payment, or clear the terms", err)
+		}
+		ch.FirstPayment = &d
+	case "paidfrom":
+		ch.PaidFrom = model.Ptr(model.AccountID(text))
 	}
 	return ch, nil
 }
@@ -450,6 +477,9 @@ func (t *acctTab) detail(acct *model.Account) {
 		t.editAttr(id, "rate", s)
 	}
 
+	if acct.Type == model.TypeMortgage {
+		t.mortgage(acct)
+	}
 	if model.Investable(acct.Type) {
 		t.allocation(acct)
 	}

@@ -26,7 +26,7 @@ const (
 	dryRunDesc   = "validate the edit and print what it would change, but save nothing; a database that needs upgrading is refused, not upgraded"
 	jsonFileDesc = "read the JSON input from this file instead of stdin"
 	scheduleNote = "a schedule is [{\"from\": \"YYYY-MM-DD\" or null for from the beginning, \"end\": \"YYYY-MM-DD\" or null, \"value\": number}, ...], sorted and not overlapping; a value holds from its from date until its end or the next segment"
-	itemJSONNote = "the item is {id (optional), name, kind (income, expense or transfer), amount (a number above zero, or a schedule of them), recurrence: {kind (one-time, weekly, biweekly, semimonthly, monthly, quarterly, annual or custom), anchor (optional date an interval item counts from, else its start; the date of a one-time item, which start, if given, must equal), month (annual), day (monthly, semimonthly and annual), day2 (semimonthly), count and unit (custom: every count days, weeks, months or years)}, start (the first date, required), end (optional), indexed, income_type (income only: wages, the default, ordinary or tax-free), growth (optional annual raise as a fraction: 0.03 for 3%, stepping the amount up on each anniversary of the start; a number or a schedule), account (income and expense), from and to (transfer)}; amount and growth as a schedule are [{from, end, value}, ...] like a modification's, e.g. a daycare of 1400 until 2029-07-31 and 600 after; budget list prints the same shape with amount_schedule and growth_schedule, which are accepted as the schedule form too; when both forms are given they must agree on the value in effect today (an empty growth_schedule is no growth), else give one, e.g. drop amount_schedule to set a single amount"
+	itemJSONNote = "the item is {id (optional), name, kind (income, expense or transfer), amount (a number above zero, or a schedule of them), recurrence: {kind (one-time, weekly, biweekly, semimonthly, monthly, quarterly, annual or custom), anchor (optional date an interval item counts from, else its start; the date of a one-time item, which start, if given, must equal), month (annual), day (monthly, semimonthly and annual), day2 (semimonthly), count and unit (custom: every count days, weeks, months or years)}, start (the first date, required), end (optional), indexed, income_type (income only: wages, the default, ordinary or tax-free), match (optional, wages income only: {percent: the percent of the employee's contributions to the account that the employer deposits, up_to: the percent of each paycheck's gross the match counts contributions up to, account: a 401k or TSP account}), growth (optional annual raise as a fraction: 0.03 for 3%, stepping the amount up on each anniversary of the start; a number or a schedule), account (income and expense), from and to (transfer)}; amount and growth as a schedule are [{from, end, value}, ...] like a modification's, e.g. a daycare of 1400 until 2029-07-31 and 600 after; budget list prints the same shape with amount_schedule and growth_schedule, which are accepted as the schedule form too; when both forms are given they must agree on the value in effect today (an empty growth_schedule is no growth), else give one, e.g. drop amount_schedule to set a single amount"
 	modIndexNote = "the modification's index, as projection show numbers them from 0"
 )
 
@@ -66,6 +66,9 @@ func itemFlags(forAdd bool) []flagDef {
 		{Name: "to", Type: typeString, Description: "account id a transfer pays into"},
 		{Name: "indexed", Type: typeBool, Default: "false", Description: "the amount grows with inflation"},
 		{Name: "income-type", Type: typeEnum, Choices: incomeTypes, Description: "how an income item is taxed: wages (the default; income tax and FICA), ordinary (other taxable income, no FICA) or tax-free"},
+		{Name: "match-percent", Type: typeNumber, Description: "employer match of a wages income item: the percent of the employee's contributions to --match-account the employer deposits, 100 for dollar for dollar (0 for none)"},
+		{Name: "match-up-to", Type: typeNumber, Description: "employer match of a wages income item: the match counts contributions up to this percent of each paycheck's gross, 0 to 100"},
+		{Name: "match-account", Type: typeString, Description: "employer match of a wages income item: the 401k or TSP account the match is deposited into and whose contributions it matches; none removes it"},
 		{Name: "growth", Type: typeNumber, Description: "annual raise as a fraction, 0.03 for 3%: the amount steps up by it on each anniversary of the item's start (0 for none); a schedule of raises comes as JSON input"},
 	}
 	if forAdd {
@@ -1001,13 +1004,22 @@ type itemInput struct {
 	Growth  numOrSegments `json:"growth"`
 	// IncomeType is for an income item; budget list prints it as wages when none is set.
 	IncomeType string `json:"income_type"`
-	Account    string `json:"account"`
-	From       string `json:"from"`
-	To         string `json:"to"`
+	// Match is the employer match of a wages income item; absent or null for none.
+	Match   *matchInput `json:"match"`
+	Account string      `json:"account"`
+	From    string      `json:"from"`
+	To      string      `json:"to"`
 
 	// A schedule, when present, is used; an Amount or Growth given with it must agree with it. An empty GrowthSchedule is no growth.
 	AmountSchedule []segInput `json:"amount_schedule"`
 	GrowthSchedule []segInput `json:"growth_schedule"`
+}
+
+// matchInput is an employer match as JSON input, the shape budget list prints.
+type matchInput struct {
+	Percent float64 `json:"percent"`
+	UpTo    float64 `json:"up_to"`
+	Account string  `json:"account"`
 }
 
 // numOrSegments is a number or a schedule's segments in JSON input; a number is a one-segment schedule.
@@ -1048,6 +1060,9 @@ func (c *call) itemJSON() (model.BudgetItem, error) {
 		ID: in.ID, Name: in.Name, Kind: model.ItemKind(in.Kind), Indexed: in.Indexed, IncomeType: model.IncomeType(in.IncomeType),
 		Account: model.AccountID(in.Account), From: model.AccountID(in.From), To: model.AccountID(in.To),
 		Recurrence: model.Recurrence{Kind: model.RecurrenceKind(r.Kind), Month: time.Month(r.Month), Day: r.Day, Day2: r.Day2, Count: r.Count, Unit: model.RecurrenceUnit(r.Unit)},
+	}
+	if in.Match != nil {
+		it.MatchPercent, it.MatchUpTo, it.MatchAccount = in.Match.Percent, in.Match.UpTo, model.AccountID(in.Match.Account)
 	}
 	_, rec, err := c.open()
 	if err != nil {
@@ -1196,6 +1211,26 @@ func (c *call) itemFromFlags(base *model.BudgetItem) (model.BudgetItem, error) {
 	}
 	if c.set["income-type"] {
 		it.IncomeType = model.IncomeType(c.str("income-type"))
+	}
+	if v, ok, err := c.number("match-percent"); err != nil {
+		return it, err
+	} else if ok {
+		it.MatchPercent = v
+	}
+	if v, ok, err := c.number("match-up-to"); err != nil {
+		return it, err
+	} else if ok {
+		it.MatchUpTo = v
+	}
+	if c.set["match-account"] {
+		it.MatchAccount = ""
+		if c.str("match-account") != "none" {
+			id, err := c.accountNamed(c.str("match-account"))
+			if err != nil {
+				return it, err
+			}
+			it.MatchAccount = id
+		}
 	}
 	if v, ok, err := c.number("growth"); err != nil {
 		return it, err

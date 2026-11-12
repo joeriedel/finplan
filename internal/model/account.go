@@ -5,6 +5,7 @@ package model
 
 import (
 	"fmt"
+	"math"
 	"sort"
 )
 
@@ -93,6 +94,11 @@ type Account struct {
 	Allocation []Holding
 	// RebalanceYearly rebalances the account to its Allocation every 1 January after the projection starts. It does nothing for an account without an allocation.
 	RebalanceYearly bool
+	// OriginalAmount, TermMonths, FirstPayment and PaidFrom are a mortgage's terms: the amount borrowed, the number of monthly payments, the date of the first payment (later ones fall on its day of the month) and the account that pays. With all four set the mortgage is amortized (see Amortized); the interest rate is StatedRate. Only a mortgage has them.
+	OriginalAmount float64
+	TermMonths     int
+	FirstPayment   *Date
+	PaidFrom       AccountID
 	// Default is the fallback balance for dates with no actual data.
 	Default DefaultBalance
 	// Opens is set only on a projection's own accounts (see ProjAccount): the account has no value before that date and projects from it.
@@ -107,6 +113,24 @@ type Account struct {
 	Vests  []RecordedVest
 
 	prices *PriceBook // the record's stock prices; set by the record the account is in
+}
+
+// Amortized reports whether the account is a mortgage with its terms set, so that the engine pays it off on a schedule.
+func (a *Account) Amortized() bool {
+	return a.Type == TypeMortgage && a.OriginalAmount > 0 && a.TermMonths > 0 && a.FirstPayment != nil && a.PaidFrom != ""
+}
+
+// MonthlyPayment is the level monthly payment, in whole cents, that pays the original amount off over the term at StatedRate; 0 unless the account is Amortized.
+func (a *Account) MonthlyPayment() float64 {
+	if !a.Amortized() {
+		return 0
+	}
+	n, i := float64(a.TermMonths), a.StatedRate/12
+	p := a.OriginalAmount / n
+	if i != 0 {
+		p = a.OriginalAmount * i / (1 - math.Pow(1+i, -n))
+	}
+	return math.Round(p*100) / 100
 }
 
 // IsClosed reports whether the account has been closed.

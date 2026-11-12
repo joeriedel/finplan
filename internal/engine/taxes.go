@@ -5,6 +5,8 @@ package engine
 
 import (
 	"fmt"
+	"math"
+	"slices"
 	"sort"
 	"time"
 
@@ -114,7 +116,12 @@ type yearInputs struct {
 	vestWithheld float64
 	k401, ira    float64
 	hsa          float64
-	contrib529   map[model.AccountID]float64
+	// moved is the amount of each contribution to a limited account that the year's limit lets through, refused the part above it per account; matches is the employer match deposited on each paycheck that earns one.
+	moved      map[paycheckKey]float64
+	refused    map[model.AccountID]float64
+	limit      float64
+	matches    map[paycheckKey]float64
+	contrib529 map[model.AccountID]float64
 	// withheld is the tax withheld from each paycheck; paycheckWithheld their sum.
 	withheld         map[paycheckKey]float64
 	paycheckWithheld float64
@@ -203,7 +210,8 @@ func (h *householdTax) year(y int) *yearInputs {
 	if in, ok := h.years[y]; ok {
 		return in
 	}
-	in := &yearInputs{contrib529: map[model.AccountID]float64{}, withheld: map[paycheckKey]float64{}}
+	in := &yearInputs{contrib529: map[model.AccountID]float64{}, withheld: map[paycheckKey]float64{}, moved: map[paycheckKey]float64{}, refused: map[model.AccountID]float64{}, matches: map[paycheckKey]float64{}}
+	var contribs []contribution
 	h.years[y] = in
 	unsheltered := func(id model.AccountID) bool {
 		a := h.rec.Account(id)
@@ -236,8 +244,8 @@ func (h *householdTax) year(y int) *yearInputs {
 				}
 				if dst != nil && unsheltered(it.From) {
 					switch {
-					case (dst.Type == model.Type401k || dst.Type == model.TypeTSP) && dst.Tax == model.TaxDeferred:
-						in.k401 += amt
+					case limited(dst):
+						contribs = append(contribs, contribution{paycheckKey{it.ID, d}, dst.ID, amt})
 					case dst.Type == model.TypeIRA && dst.Tax == model.TaxDeferred:
 						in.ira += amt
 					case dst.Type == model.TypeHSA:
@@ -256,6 +264,7 @@ func (h *householdTax) year(y int) *yearInputs {
 			}
 		}
 	}
+	h.limit(y, in, contribs)
 	sort.SliceStable(in.paychecks, func(i, j int) bool { return in.paychecks[i].date < in.paychecks[j].date })
 	for _, v := range h.vests(y) {
 		in.vests += v.gross
@@ -263,6 +272,81 @@ func (h *householdTax) year(y int) *yearInputs {
 	}
 	h.withhold(y, in)
 	return in
+}
+
+// limited reports whether contributions into the account count against the 401(k) limit.
+func limited(a *model.Account) bool {
+	return (a.Type == model.Type401k || a.Type == model.TypeTSP) && a.Tax == model.TaxDeferred
+}
+
+// contribution is one occurrence of a transfer item into a limited account.
+type contribution struct {
+	key   paycheckKey
+	dst   model.AccountID
+	gross float64
+}
+
+// limit caps the year's contributions into each limited account at the year's limit, earliest first, and works out the employer match of each paycheck: the share of its item's match percent of the smaller of the paycheck's match ceiling and the contributions into the match account that no earlier paycheck has matched.
+func (h *householdTax) limit(y int, in *yearInputs, contribs []contribution) {
+	limit, err := h.rec.Tax.Limit401k(y, h.inflation(y))
+	if err != nil {
+		h.note("tax %d: %v", y, err)
+	}
+	if err != nil || limit <= 0 {
+		limit = math.Inf(1)
+	}
+	in.limit = limit
+	sort.SliceStable(contribs, func(i, j int) bool { return contribs[i].key.date < contribs[j].key.date })
+	total := map[model.AccountID]float64{}
+	for _, c := range contribs {
+		moved := min(c.gross, max(limit-total[c.dst], 0))
+		total[c.dst] += moved
+		in.moved[c.key] = moved
+		in.refused[c.dst] += c.gross - moved
+		in.k401 += moved
+	}
+	sorted := slices.Clone(in.paychecks)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].date < sorted[j].date })
+	matched := map[model.AccountID]float64{}
+	for _, pc := range sorted {
+		i := slices.IndexFunc(h.items, func(it model.BudgetItem) bool { return it.ID == pc.item })
+		it := h.items[i]
+		if it.MatchAccount == "" || it.MatchPercent <= 0 || it.MatchUpTo <= 0 {
+			continue
+		}
+		have := 0.0
+		for _, c := range contribs {
+			if c.dst == it.MatchAccount && c.key.date <= pc.date {
+				have += in.moved[c.key]
+			}
+		}
+		eligible := min(it.MatchUpTo/100*pc.gross, max(have-matched[it.MatchAccount], 0))
+		matched[it.MatchAccount] += eligible
+		if m := it.MatchPercent / 100 * eligible; m != 0 {
+			in.matches[paycheckKey{pc.item, pc.date}] = m
+		}
+	}
+}
+
+// moved is the amount of the occurrence of the transfer item on d that is moved: the amount, less what the year's 401(k) limit refuses of a contribution to a limited account. A refusal is noted once for the account and year.
+func (h *householdTax) moved(it model.BudgetItem, d model.Date, amt float64) float64 {
+	y, _, _ := d.YMD()
+	in := h.year(y)
+	moved, ok := in.moved[paycheckKey{it.ID, d}]
+	if !ok {
+		return amt
+	}
+	if moved < amt {
+		a := h.rec.Account(it.To)
+		h.note("the %d 401(k) limit of %.2f refuses %.2f of the contributions to %s (%s): they are capped at the limit and the rest stays in the paying account", y, in.limit, in.refused[a.ID], a.Name, a.ID)
+	}
+	return moved
+}
+
+// match is the employer match the paycheck of the income item on d earns.
+func (h *householdTax) match(item string, d model.Date) float64 {
+	y, _, _ := d.YMD()
+	return h.year(y).matches[paycheckKey{item, d}]
 }
 
 // vests returns the year's vests: those recorded and those planned after their account's start.

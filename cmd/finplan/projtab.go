@@ -1210,6 +1210,19 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 		incomes := strs(len(model.IncomeTypes), func(i int) string { return string(model.IncomeTypes[i]) })
 		choose("income", "taxed as", incomeTypeName((model.BudgetItem{IncomeType: f.income}).Income()), em*12, incomes, incomeTypeLabels, string((model.BudgetItem{IncomeType: f.income}).Income()))
 	}
+	if f.kind == model.ItemIncome && (f.income == "" || f.income == model.IncomeWages) {
+		input("matchpercent", "employer matches", "percent, e.g. 50", f.matchPercent, em*6)
+		imgui.SameLine()
+		input("matchupto", "of contributions up to", "% of pay", f.matchUpTo, em*6)
+		mids, mnames := []string{""}, []string{"no match"}
+		for _, a := range rec.Accounts {
+			if (a.Type == model.Type401k || a.Type == model.TypeTSP) && !a.IsClosed() {
+				mids, mnames = append(mids, string(a.ID)), append(mnames, a.Name)
+			}
+		}
+		imgui.SameLine()
+		choose("matchaccount", "into", itemAccountPreview(rec, mids, mnames, f.matchAccount), em*12, mids, mnames, string(f.matchAccount))
+	}
 }
 
 // itemAccountPreview is the text the account picker shows for cur: its name in the picker, else the name of an account rec has that the picker does not offer (a closed one), else the raw id.

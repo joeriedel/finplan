@@ -12,6 +12,9 @@ import (
 	"github.com/joeriedel/finplan/internal/store"
 )
 
+// maxTermMonths is the longest term a mortgage may have, 100 years.
+const maxTermMonths = 1200
+
 // finite reports whether v is a number within the range an amount may have.
 func finite(v float64) bool { return !math.IsNaN(v) && v <= maxValue && v >= -maxValue }
 
@@ -62,6 +65,12 @@ type AccountChange struct {
 	Type       *model.AccountType
 	Tax        *model.TaxTreatment
 	StatedRate *float64
+	// OriginalAmount, TermMonths, FirstPayment and PaidFrom are a mortgage's terms; an original amount or a term of 0 and an empty PaidFrom leave that term unset. Only a mortgage account has them (ErrInvalidValue). ClearTerms unsets all four first.
+	OriginalAmount *float64
+	TermMonths     *int
+	FirstPayment   *model.Date
+	PaidFrom       *model.AccountID
+	ClearTerms     bool
 }
 
 // EditAccount changes attributes of an account. Renaming the account renames its default asset too; a name that another account or an asset has is ErrNameTaken.
@@ -107,9 +116,44 @@ func EditAccount(st *store.Store, rec *model.Record, id model.AccountID, ch Acco
 		if err := checkAttrs(a.Type, a.Tax, a.StatedRate); err != nil {
 			return Result{}, err
 		}
+		if err := editTerms(next, a, ch); err != nil {
+			return Result{}, err
+		}
 		if err := next.CheckAllocation(a.Type, a.Allocation); err != nil {
 			return Result{}, refuse(ErrInvalidValue, "%v: clear the allocation first", err)
 		}
 		return Result{Account: a, Asset: next.Asset(model.DefaultAssetID(id))}, nil
 	})
+}
+
+// editTerms applies the mortgage terms of ch to the account and refuses terms out of range, a paying account that is missing or is the mortgage itself, and any term on an account that is not a mortgage.
+func editTerms(rec *model.Record, a *model.Account, ch AccountChange) error {
+	if ch.ClearTerms {
+		a.OriginalAmount, a.TermMonths, a.FirstPayment, a.PaidFrom = 0, 0, nil, ""
+	}
+	if ch.OriginalAmount != nil {
+		a.OriginalAmount = *ch.OriginalAmount
+	}
+	if ch.TermMonths != nil {
+		a.TermMonths = *ch.TermMonths
+	}
+	if ch.FirstPayment != nil {
+		a.FirstPayment = copyPtr(ch.FirstPayment)
+	}
+	if ch.PaidFrom != nil {
+		a.PaidFrom = *ch.PaidFrom
+	}
+	switch {
+	case a.OriginalAmount != a.OriginalAmount || a.OriginalAmount < 0 || a.OriginalAmount > maxValue:
+		return refuse(ErrInvalidValue, "the original amount %v must be zero or above and within range", a.OriginalAmount)
+	case a.TermMonths < 0 || a.TermMonths > maxTermMonths:
+		return refuse(ErrInvalidValue, "the term %d must be from 0 to %d months", a.TermMonths, maxTermMonths)
+	case a.PaidFrom == a.ID && a.PaidFrom != "":
+		return refuse(ErrInvalidValue, "a mortgage cannot be paid from itself")
+	case a.PaidFrom != "" && rec.Account(a.PaidFrom) == nil:
+		return unknownAccount(a.PaidFrom)
+	case a.Type != model.TypeMortgage && (a.OriginalAmount != 0 || a.TermMonths != 0 || a.FirstPayment != nil || a.PaidFrom != ""):
+		return refuse(ErrInvalidValue, "only a mortgage account has an original amount, term, first payment and paying account: clear them first")
+	}
+	return nil
 }

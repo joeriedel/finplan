@@ -271,3 +271,9 @@ func Compute(t Tables, in Input) (Result, error) {
 	r.Total = r.FederalTax - r.Credits + r.NIIT + r.Penalty + r.StateTax + r.SocialSecurity + r.Medicare + r.AdditionalMedicare
 	return r, nil
 }
+
+// Limit401k returns the 401(k) and TSP elective deferral limit of the year: that of the latest table year not after it, indexed by inflation for the years between.
+func (t Tables) Limit401k(year int, inflation float64) (float64, error) {
+	f, err := t.federalFor(year, inflation)
+	return f.Limit401k, err
+}

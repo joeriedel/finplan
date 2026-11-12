@@ -14,7 +14,7 @@ import (
 // Cause names why a balance changed.
 type Cause string
 
-// Causes. GainsTax is the part of a year's tax that the capital gains realized in taxable accounts add, and Shock the change a market shock made to the holdings of a class (a line with a Class). Grant is the value of new RSU grants added to an equity account and Vest the net proceeds of its vests, which leave it for the deposit account; the withholding of a vest is Tax. Unexplained is the part of an actual change that snapshots show and transactions do not.
+// Causes. GainsTax is the part of a year's tax that the capital gains realized in taxable accounts add, and Shock the change a market shock made to the holdings of a class (a line with a Class). Grant is the value of new RSU grants added to an equity account and Vest the net proceeds of its vests, which leave it for the deposit account; the withholding of a vest is Tax. Match is the employer's deposit on a paycheck. Interest is what a credit card owing money compounds, or the interest part of a mortgage payment, and Principal the part of a payment that pays the mortgage down; a mortgage payment shows on the paying account as interest and principal and on the mortgage as principal. Unexplained is the part of an actual change that snapshots show and transactions do not.
 // Default is a change that comes from default balances, including a hand-off between defaults and
 // actual data.
 const (
@@ -23,6 +23,9 @@ const (
 	CauseTransfer     Cause = "transfer"
 	CauseContribution Cause = "contribution"
 	CauseWithdrawal   Cause = "withdrawal"
+	CauseMatch        Cause = "match"
+	CauseInterest     Cause = "interest"
+	CausePrincipal    Cause = "principal"
 	CauseTax          Cause = "tax"
 	CauseGainsTax     Cause = "gains tax"
 	CauseShock        Cause = "shock"
@@ -38,7 +41,7 @@ const (
 const residualTolerance = 1e-6
 
 var causeOrder = []Cause{
-	CauseIncome, CauseExpense, CauseTransfer, CauseContribution, CauseWithdrawal,
+	CauseIncome, CauseExpense, CauseTransfer, CauseContribution, CauseMatch, CauseWithdrawal, CausePrincipal, CauseInterest,
 	CauseGrant, CauseVest, CauseTax, CauseGainsTax, CauseGrowth, CauseShock, CauseOpening, CauseUnexplained, CauseDefault,
 }
 
@@ -206,7 +209,11 @@ func (p *path) breakdown(rec *model.Record, from, to model.Date, acc *accum) {
 			}
 		}
 		if p.legs == nil {
-			acc.add(CauseGrowth, p.growthAt(to)-p.growthAt(lo), true)
+			cause := CauseGrowth
+			if p.acct.Type == model.TypeCreditCard {
+				cause = CauseInterest
+			}
+			acc.add(cause, p.growthAt(to)-p.growthAt(lo), true)
 		}
 		for i, l := range p.legs {
 			if l.class == "" {

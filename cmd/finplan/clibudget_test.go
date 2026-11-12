@@ -44,7 +44,7 @@ func TestCLIBudgetListAndTotals(t *testing.T) {
 			t.Errorf("save-401k = %+v", it)
 		}
 	}
-	if kinds["income"] != 2 || kinds["expense"] != 7 || kinds["transfer"] != 10 {
+	if kinds["income"] != 2 || kinds["expense"] != 7 || kinds["transfer"] != 9 {
 		t.Errorf("kinds %v", kinds)
 	}
 

@@ -56,7 +56,7 @@ type Diagnostics struct {
 	Skipped []Skipped
 	// Overlaps: members of assets under the target that were left out of the sums.
 	Overlaps []model.Overlap
-	// Notes are problems with the tax calculation: a year the rules cannot compute, or tax that cannot be reconciled for want of a checking account.
+	// Notes are problems with the tax calculation: a year the rules cannot compute, or tax that cannot be reconciled for want of a checking account; and contributions to a 401k or TSP account that the year's limit refuses.
 	Notes []string
 }
 
@@ -396,6 +396,7 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 			p.start = *acct.Opens
 			p.flowsAfter = flowsAfter
 		}
+		p.amortized = acct.Amortized()
 		p.info.Start = p.start
 		p.startVal = p.readBack(p.start)
 		if acct.Opens != nil && flowsAfter < *acct.Opens {
@@ -528,6 +529,13 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 	}
 	if horizon > model.MinDate {
 		for _, a := range rec.Accounts {
+			// An amortized mortgage and the account that pays it are modelled together, wherever they sit.
+			if a.Amortized() {
+				add(a.ID)
+				if rec.Account(a.PaidFrom) != nil {
+					add(a.PaidFrom)
+				}
+			}
 			if a.Type == model.TypeSavings || a.Type == model.TypeChecking {
 				savers = append(savers, add(a.ID))
 			}
@@ -569,6 +577,17 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 	}
 	for _, p := range all {
 		p.collect(rec, items, cutoffs, amounts, growths, infl, horizon, plans)
+	}
+	byID := map[model.AccountID]*path{}
+	for _, p := range all {
+		byID[p.acct.ID] = p
+	}
+	for _, p := range all {
+		if p.amortized {
+			p.amortize(byID[p.acct.PaidFrom], horizon)
+		}
+	}
+	for _, p := range all {
 		p.settle()
 	}
 	if horizon > model.MinDate {
@@ -693,6 +712,8 @@ type path struct {
 	ht *householdTax
 	// idle is set when the query ends on or before start, so nothing is extrapolated.
 	idle bool
+	// amortized is set on a mortgage with its terms: its balance moves only by the principal of its payments, not by growth.
+	amortized bool
 }
 
 // Order of flows on one date (docs/design.md, "The engine"): income, grants, vests, expenses, then transfers
@@ -706,6 +727,20 @@ const (
 	rankTransfer
 	rankTax
 )
+
+// factor is the growth factor of the balance bal from..to. A credit card owing money compounds its stated rate daily and earns nothing when it does not, and an amortized mortgage does not grow: its interest is charged and paid with each payment.
+func (p *path) factor(bal float64, from, to model.Date) float64 {
+	switch {
+	case p.amortized:
+		return 1
+	case p.acct.Type == model.TypeCreditCard:
+		if bal < 0 {
+			return p.rate.CompoundDaily(from, to)
+		}
+		return 1
+	}
+	return p.rate.Compound(from, to)
+}
 
 func (p *path) readBack(d model.Date) float64 {
 	if v, ok := p.acct.ActualAt(d); ok {
@@ -745,7 +780,7 @@ func (p *path) valueAt(d model.Date) float64 {
 		}
 		return sum
 	}
-	return pt.bal * p.rate.Compound(pt.date, d)
+	return pt.bal * p.factor(pt.bal, pt.date, d)
 }
 
 // growthAt is the growth accumulated from start to d.
@@ -764,7 +799,7 @@ func (p *path) growthAt(d model.Date) float64 {
 		}
 		return sum
 	}
-	return pt.cumGrowth + pt.bal*(p.rate.Compound(pt.date, d)-1)
+	return pt.cumGrowth + pt.bal*(p.factor(pt.bal, pt.date, d)-1)
 }
 
 // legGrowthAt is the growth accumulated from start to d in leg i.
@@ -805,7 +840,7 @@ func (p *path) collect(rec *model.Record, items []model.BudgetItem, cutoffs map[
 		return
 	}
 	for _, it := range items {
-		if !it.Touches(p.acct.ID) {
+		if !it.Touches(p.acct.ID) && it.MatchAccount != p.acct.ID {
 			continue
 		}
 		after, upTo := p.flowsAfter, horizon
@@ -875,7 +910,7 @@ func (p *path) settle() {
 	bal, cum, cur := p.startVal, 0.0, p.start
 	for i := 0; i < len(p.changes); {
 		d := p.changes[i].date
-		g := bal*p.rate.Compound(cur, d) - bal
+		g := bal*p.factor(bal, cur, d) - bal
 		if p.plan != nil {
 			g = p.plan.drift(cur, d)
 		}
@@ -1016,13 +1051,24 @@ func (p *path) flows(rec *model.Record, it model.BudgetItem, d model.Date, amt f
 	}
 	switch it.Kind {
 	case model.ItemIncome:
-		add(rankIncome, CauseIncome, amt, "")
-		if it.Income() == model.IncomeWages {
-			add(rankIncome, CauseTax, -p.ht.paycheckTax(it.ID, d), "")
+		if it.Account == p.acct.ID {
+			add(rankIncome, CauseIncome, amt, "")
+			if it.Income() == model.IncomeWages {
+				add(rankIncome, CauseTax, -p.ht.paycheckTax(it.ID, d), "")
+			}
+		}
+		if it.MatchAccount == p.acct.ID && !p.acct.ClosedOn(d) {
+			if m := p.ht.match(it.ID, d); m != 0 {
+				add(rankIncome, CauseMatch, m, "")
+			}
 		}
 	case model.ItemExpense:
 		add(rankExpense, CauseExpense, -amt, "")
 	case model.ItemTransfer:
+		amt = p.ht.moved(it, d, amt)
+		if amt == 0 {
+			return
+		}
 		cause := transferCause(rec, it.From, it.To)
 		if it.From == p.acct.ID {
 			add(rankTransfer, cause, -amt, it.To)

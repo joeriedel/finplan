@@ -22,7 +22,7 @@ const (
 	dateNote  = "YYYY-MM-DD, or YYYY-MM for the first day of the month"
 	endNote   = "YYYY-MM-DD, or YYYY-MM for the last day of the month"
 	projDesc  = "projection to evaluate under, whose own accounts and those it inherits can be targets; reality when omitted"
-	diagShape = "diagnostics {skipped: [{projection, index, target: {kind, id}, property, reason}], overlaps: [{asset, seq, member, duplicates, against}], notes: [problems with the tax calculation]}"
+	diagShape = "diagnostics {skipped: [{projection, index, target: {kind, id}, property, reason}], overlaps: [{asset, seq, member, duplicates, against}], notes: [problems with the tax calculation, and contributions the 401(k) limit refused]}"
 	jsonNote  = "Dates are YYYY-MM-DD, null when absent or unbounded. Money is a plain number. Statuses are lowercase: default, actual, projected, partly_projected."
 )
 
@@ -133,6 +133,15 @@ type jbudgetItem struct {
 	To         *string     `json:"to"`
 	// IncomeType is how an income item is taxed, wages when none is set; null for the other kinds.
 	IncomeType *string `json:"income_type"`
+	// Match is the employer match of a wages income item; null for an item without one.
+	Match *jmatch `json:"match"`
+}
+
+// jmatch is an employer match: the percent of the employee's contributions to the account that the employer deposits, up to up_to percent of each paycheck's gross.
+type jmatch struct {
+	Percent float64 `json:"percent"`
+	UpTo    float64 `json:"up_to"`
+	Account string  `json:"account"`
 }
 
 type jrecurrence struct {
@@ -170,8 +179,16 @@ func budgetItemJSON(it model.BudgetItem, today model.Date) jbudgetItem {
 		ID: it.ID, Name: it.Name, Kind: string(it.Kind), Amount: amount, AmountSch: scheduleJSONOut(it.Amount), Recurrence: jr,
 		Start: jdp(it.Start), End: jdp(it.End), Indexed: it.Indexed, Growth: growth, GrowthSch: scheduleJSONOut(it.Growth),
 		Account: nullable(string(it.Account)), From: nullable(string(it.From)), To: nullable(string(it.To)),
-		IncomeType: incomeTypeJSON(it),
+		IncomeType: incomeTypeJSON(it), Match: matchJSON(it),
 	}
+}
+
+// matchJSON is the employer match of an item, null when it has none.
+func matchJSON(it model.BudgetItem) *jmatch {
+	if it.MatchPercent == 0 && it.MatchUpTo == 0 && it.MatchAccount == "" {
+		return nil
+	}
+	return &jmatch{it.MatchPercent, it.MatchUpTo, string(it.MatchAccount)}
 }
 
 // incomeTypeJSON is the income type of an income item, null for the other kinds.
@@ -287,6 +304,12 @@ type jaccount struct {
 	Allocation []jholding `json:"allocation"`
 	// RebalanceYearly is whether the account rebalances to its allocation every 1 January in a projection.
 	RebalanceYearly bool `json:"rebalance_yearly"`
+	// The terms of a mortgage, null for any other account; first_payment and paid_from are null while unset, and monthly_payment is null until the terms are complete.
+	OriginalAmount *float64 `json:"original_amount"`
+	TermMonths     *int     `json:"term_months"`
+	FirstPayment   *jdate   `json:"first_payment"`
+	PaidFrom       *string  `json:"paid_from"`
+	MonthlyPayment *float64 `json:"monthly_payment"`
 }
 
 // jaccountRow is an account with what account list adds to it.
@@ -299,7 +322,15 @@ type jaccountRow struct {
 
 // accountJSON is the JSON shape of an account, as account list prints it and the write commands print the account they changed.
 func accountJSON(a *model.Account) jaccount {
-	return jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.StatedRate, defaultJSON(a.Default), jdp(a.Closed), allocationJSON(a.Allocation), a.RebalanceYearly}
+	j := jaccount{ID: string(a.ID), Name: a.Name, Type: string(a.Type), Tax: string(a.Tax), StatedRate: a.StatedRate, Default: defaultJSON(a.Default), Closed: jdp(a.Closed),
+		Allocation: allocationJSON(a.Allocation), RebalanceYearly: a.RebalanceYearly}
+	if a.Type == model.TypeMortgage {
+		j.OriginalAmount, j.TermMonths, j.FirstPayment, j.PaidFrom = &a.OriginalAmount, &a.TermMonths, jdp(a.FirstPayment), nullable(string(a.PaidFrom))
+		if a.Amortized() {
+			j.MonthlyPayment = model.Ptr(a.MonthlyPayment())
+		}
+	}
+	return j
 }
 
 func cmdAccountList(c *call) (any, error) {

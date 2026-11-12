@@ -21,6 +21,7 @@ const (
 	AffectedOrphan       = "orphaned modification"
 	AffectedPreset       = "view preset"
 	AffectedHousehold    = "household"
+	AffectedTerms        = "mortgage terms"
 )
 
 // Effects of a delete on an Affected object.
@@ -37,9 +38,9 @@ type Affected struct {
 	Kind string `json:"kind"`
 	// In is the object that holds it: an asset id, a projection name, "budget" for the base budget, or a view preset name.
 	In string `json:"in"`
-	// Detail says which member, setting, modification or budget item it is.
+	// Detail says which member, setting, modification, budget item, employer match or mortgage terms it is.
 	Detail string `json:"detail"`
-	// Effect is EffectRemoved for a member, setting, modification or view preset line, and EffectDeleted for a budget item.
+	// Effect is EffectRemoved for a member, setting, modification, view preset, household, mortgage terms or employer match line, and EffectDeleted for a budget item.
 	Effect string `json:"effect"`
 }
 
@@ -212,6 +213,29 @@ func unlinkAccount(next *model.Record, id model.AccountID) []Affected {
 			out = append(out, Affected{AffectedRebalance, p.Name, fmt.Sprintf("rebalance of account %q on %s", id, r.Date), EffectRemoved})
 			return true
 		})
+	}
+	// A match into the account or a mortgage paid from it loses that setting; the item and the mortgage stay.
+	unmatch := func(it *model.BudgetItem, where string) {
+		if it.MatchAccount == id {
+			it.MatchPercent, it.MatchUpTo, it.MatchAccount = 0, 0, ""
+			out = append(out, Affected{AffectedBudgetItem, where, itemDetail(*it) + " employer match", EffectRemoved})
+		}
+	}
+	for i := range next.Budget.Items {
+		unmatch(&next.Budget.Items[i], "budget")
+	}
+	for _, p := range next.Projections {
+		for i := range p.Mods {
+			if p.Mods[i].Item != nil {
+				unmatch(p.Mods[i].Item, p.Name)
+			}
+		}
+	}
+	for _, a := range next.Accounts {
+		if a.PaidFrom == id {
+			a.OriginalAmount, a.TermMonths, a.FirstPayment, a.PaidFrom = 0, 0, nil, ""
+			out = append(out, Affected{AffectedTerms, string(a.ID), "paying account " + string(id), EffectRemoved})
+		}
 	}
 	if next.Household.Checking == id {
 		next.Household.Checking = ""

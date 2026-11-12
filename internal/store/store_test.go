@@ -121,7 +121,7 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	want := demodata.Family()
 	mustSave(t, s, want)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 8 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 9 {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
 	// Format 1 documents have no mode and no growth; a schedule of no growth is not stored.
@@ -1494,5 +1494,38 @@ func TestIncomeTypeOfLegacyItemsIsWages(t *testing.T) {
 	items := mustLoad(t, s).Budget.Items
 	if items[0].IncomeType != model.IncomeWages || items[1].IncomeType != model.IncomeOrdinary || items[2].IncomeType != "" {
 		t.Errorf("income types %q, %q, %q", items[0].IncomeType, items[1].IncomeType, items[2].IncomeType)
+	}
+}
+
+func TestMortgageTermsAndMatchesRoundTripAndFormat8Loads(t *testing.T) {
+	s, _ := openTemp(t)
+	rec := demodata.Family()
+	mustSave(t, s, rec)
+	got := mustLoad(t, s)
+	if m := got.Account(demodata.Mortgage); m.OriginalAmount != 433600 || m.TermMonths != 360 || m.FirstPayment == nil || *m.FirstPayment != model.D(2021, time.February, 1) || m.PaidFrom != demodata.Checking {
+		t.Errorf("mortgage terms %+v", m)
+	}
+	if it, _ := got.Budget.Item("salary-a"); it.MatchPercent != 50 || it.MatchUpTo != 6 || it.MatchAccount != demodata.K401 {
+		t.Errorf("match %+v", it)
+	}
+
+	// A document of format 8 has none of the new fields and loads as an account without terms and an item without a match.
+	old, _ := openTemp(t)
+	want := demodata.Family()
+	m := want.Account(demodata.Mortgage)
+	m.OriginalAmount, m.TermMonths, m.FirstPayment, m.PaidFrom = 0, 0, nil, ""
+	for i := range want.Budget.Items {
+		want.Budget.Items[i].MatchPercent, want.Budget.Items[i].MatchUpTo, want.Budget.Items[i].MatchAccount = 0, 0, ""
+	}
+	mustSave(t, old, want)
+	var withNew int
+	if err := old.db.QueryRow(`SELECT COUNT(*) FROM documents WHERE body LIKE '%original_amount%' OR body LIKE '%term_months%' OR body LIKE '%first_payment%' OR body LIKE '%paid_from%' OR body LIKE '%match_%'`).Scan(&withNew); err != nil || withNew != 0 {
+		t.Fatalf("documents with new fields: %d, %v", withNew, err)
+	}
+	if _, err := old.db.Exec(`UPDATE documents SET format = 8`); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoad(t, old); !reflect.DeepEqual(got, want) {
+		t.Fatal("the format 8 record loaded differently")
 	}
 }

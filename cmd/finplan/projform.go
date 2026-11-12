@@ -6,6 +6,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -93,9 +94,12 @@ type itemForm struct {
 	account, from, to     model.AccountID
 	indexed               bool
 	// income is the income type as stored: empty for an income item that has none, which is wages.
-	income      model.IncomeType
-	amountSched bool
-	growthSched bool
+	income model.IncomeType
+	// matchPercent and matchUpTo are the texts of the employer match of a wages income item, and matchAccount the account it goes into.
+	matchPercent, matchUpTo string
+	matchAccount            model.AccountID
+	amountSched             bool
+	growthSched             bool
 }
 
 // isPlain reports whether the schedule is a single number that always holds, or empty: what a plain number field can show and write without losing anything.
@@ -125,12 +129,18 @@ func valueNow(s model.Schedule, today model.Date) float64 {
 // formOf returns the form that shows the item as it is on today.
 func formOf(it model.BudgetItem, today model.Date) itemForm {
 	r := it.Recurrence
-	f := itemForm{kind: it.Kind, name: it.Name, amount: trimFloat(valueNow(it.Amount, today)), every: r.Kind, unit: r.Unit, account: it.Account, from: it.From, to: it.To, indexed: it.Indexed, income: it.IncomeType, amountSched: !isPlain(it.Amount), growthSched: !isPlain(it.Growth)}
+	f := itemForm{kind: it.Kind, name: it.Name, amount: trimFloat(valueNow(it.Amount, today)), every: r.Kind, unit: r.Unit, account: it.Account, from: it.From, to: it.To, indexed: it.Indexed, income: it.IncomeType, matchAccount: it.MatchAccount, amountSched: !isPlain(it.Amount), growthSched: !isPlain(it.Growth)}
 	switch {
 	case r.Kind == model.OneTime || r.Kind == model.Biweekly:
 		f.date = r.Anchor.String()
 	case it.Start != nil:
 		f.date = it.Start.String()
+	}
+	if it.MatchPercent != 0 {
+		f.matchPercent = trimFloat(it.MatchPercent)
+	}
+	if it.MatchUpTo != 0 {
+		f.matchUpTo = trimFloat(it.MatchUpTo)
 	}
 	if g := valueNow(it.Growth, today); g != 0 {
 		f.growth = formatValue(model.PropGrowth, model.ModeSet, g)
@@ -162,6 +172,12 @@ func (f *itemForm) set(field, text string) {
 		f.indexed = text == "true"
 	case "income":
 		f.income = model.IncomeType(text)
+	case "matchpercent":
+		f.matchPercent = text
+	case "matchupto":
+		f.matchUpTo = text
+	case "matchaccount":
+		f.matchAccount = model.AccountID(text)
 	case "name":
 		f.name = text
 	case "amount":
@@ -301,6 +317,15 @@ func (f itemForm) item(today model.Date) (model.BudgetItem, error) {
 			return it, errors.New("pick the accounts the money moves from and to")
 		}
 	}
+	if f.kind == model.ItemIncome && (f.income == "" || f.income == model.IncomeWages) {
+		if it.MatchPercent, err = optPercent(f.matchPercent, "the match percent"); err != nil {
+			return it, err
+		}
+		if it.MatchUpTo, err = optPercent(f.matchUpTo, "the percent of pay the match counts up to"); err != nil {
+			return it, err
+		}
+		it.MatchAccount = f.matchAccount
+	}
 	r := model.Recurrence{Kind: f.every}
 	switch f.every {
 	case model.OneTime, model.Biweekly:
@@ -354,6 +379,19 @@ func (f itemForm) item(today model.Date) (model.BudgetItem, error) {
 		it.End = &d
 	}
 	return it, nil
+}
+
+// optPercent reads a percent as typed, with or without a percent sign; a blank is 0.
+func optPercent(s, what string) (float64, error) {
+	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "%"))
+	if s == "" {
+		return 0, nil
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, fmt.Errorf("enter %s as a number such as 50", what)
+	}
+	return v, nil
 }
 
 func needDate(s, what string) (model.Date, error) {

@@ -61,6 +61,9 @@ func checkItemAs(rec *model.Record, it model.BudgetItem, existing *model.BudgetI
 	} else if it.IncomeType != "" && !it.IncomeType.Valid() {
 		return it, refuse(ErrInvalidValue, "the income type %q must be wages, ordinary or tax-free", it.IncomeType)
 	}
+	if err := checkMatch(rec, it); err != nil {
+		return it, err
+	}
 	r := it.Recurrence
 	// A legacy item may stay without a start if its recurrence is unchanged or needs no phase; otherwise an anchor phases it.
 	legacy := existing != nil && existing.Start == nil
@@ -116,6 +119,31 @@ func checkItemAs(rec *model.Record, it model.BudgetItem, existing *model.BudgetI
 	it.Start = start
 	it.Start, it.End = copyPtr(it.Start), copyPtr(it.End)
 	return it, nil
+}
+
+// checkMatch refuses an employer match that an item cannot have: one on an item that is not a wages income item, percents out of range, or an account that is not a 401k or TSP account. An item with no percent, no up-to percent and no account has no match.
+func checkMatch(rec *model.Record, it model.BudgetItem) error {
+	if it.MatchPercent == 0 && it.MatchUpTo == 0 && it.MatchAccount == "" {
+		return nil
+	}
+	switch {
+	case it.Kind != model.ItemIncome || it.Income() != model.IncomeWages:
+		return refuse(ErrInvalidValue, "only a wages income item has an employer match")
+	case it.MatchPercent != it.MatchPercent || it.MatchPercent < 0 || it.MatchPercent > maxValue:
+		return refuse(ErrInvalidValue, "the match percent %v must be from 0 up within range", it.MatchPercent)
+	case it.MatchUpTo != it.MatchUpTo || it.MatchUpTo < 0 || it.MatchUpTo > 100:
+		return refuse(ErrInvalidValue, "the match up-to percent %v must be from 0 to 100 percent of pay", it.MatchUpTo)
+	case it.MatchAccount == "":
+		return nil
+	}
+	a := rec.Account(it.MatchAccount)
+	switch {
+	case a == nil:
+		return refuse(ErrUnknownTarget, "there is no account %q", it.MatchAccount)
+	case a.Type != model.Type401k && a.Type != model.TypeTSP:
+		return refuse(ErrInvalidValue, "the match account %q must be a 401k or TSP account", it.MatchAccount)
+	}
+	return nil
 }
 
 // CheckItem returns the reason AddItem would refuse the item, nil if it would not. It is the check AddItem and EditItem make, for editors that show why an input cannot be added. Pass rec.For(projection) to check an item of a projection that defines accounts.

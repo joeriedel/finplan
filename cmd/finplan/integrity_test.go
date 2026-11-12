@@ -5,6 +5,7 @@ package main
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -184,5 +185,21 @@ func TestUndoKeepsAPresetSavedSinceTheDelete(t *testing.T) {
 		if len(a.notices) != 1 || !strings.Contains(a.notices[0], `"Brokerage 2 view"`) {
 			t.Errorf("redo=%v: notices %q", redo, a.notices)
 		}
+	}
+}
+
+func TestDeleteLinesSayTheMatchAndTheTermsAreRemoved(t *testing.T) {
+	plan := ops.DeletePlan{Affected: []ops.Affected{
+		{Kind: ops.AffectedBudgetItem, In: "budget", Detail: "salary employer match", Effect: ops.EffectRemoved},
+		{Kind: ops.AffectedBudgetItem, In: "Raise", Detail: "bonus employer match", Effect: ops.EffectRemoved},
+		{Kind: ops.AffectedTerms, In: "mortgage", Detail: "paying account checking", Effect: ops.EffectRemoved},
+	}}
+	want := []string{
+		"Base budget: remove salary employer match",
+		`Projection "Raise": remove bonus employer match`,
+		`Account "mortgage": remove its mortgage terms, paying account checking`,
+	}
+	if got := deleteLines(plan); !slices.Equal(got, want) {
+		t.Errorf("got %q", got)
 	}
 }

@@ -215,6 +215,15 @@ func (s Schedule) Scale(o Schedule) Schedule {
 // Compound returns the growth factor over the days from..to when the schedule is an annual rate,
 // compounded over exact elapsed time and split at each segment boundary. Dates with no value contribute a factor of 1.
 func (s Schedule) Compound(from, to Date) float64 {
+	return s.compound(from, to, func(rate, days float64) float64 { return math.Pow(1+rate, days/DaysPerYear) })
+}
+
+// CompoundDaily is Compound for a schedule that is a nominal annual rate compounded daily: a factor of (1+rate/365) for each day.
+func (s Schedule) CompoundDaily(from, to Date) float64 {
+	return s.compound(from, to, func(rate, days float64) float64 { return math.Pow(1+rate/365, days) })
+}
+
+func (s Schedule) compound(from, to Date, factor func(rate, days float64) float64) float64 {
 	f := 1.0
 	for cur := from; cur < to; {
 		i, covered := s.find(cur)
@@ -226,7 +235,7 @@ func (s Schedule) Compound(from, to Date) float64 {
 			end = min(end, s.segs[next].From)
 		}
 		if covered {
-			f *= math.Pow(1+s.segs[i].Value, (float64(end)-float64(cur))/DaysPerYear)
+			f *= factor(s.segs[i].Value, float64(end)-float64(cur))
 		}
 		cur = end
 	}

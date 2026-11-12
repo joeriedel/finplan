@@ -157,13 +157,18 @@ var dataCommands = []*command{
 		run:    cmdAccountNew,
 	},
 	{
-		Name: "account edit", Summary: "change attributes of an account; flags given override its current values; the default asset is renamed with it",
+		Name: "account edit", Summary: "change attributes of an account; flags given override its current values; the default asset is renamed with it. A mortgage with its original amount, term, first payment and paying account all set is amortized: the engine takes a level monthly payment from the paying account, splits it into interest and principal on the schedule, and pays the mortgage off to zero by the end of the term",
 		Args: []argDef{{Name: "account", Description: "account id or name", Required: true}},
 		Flags: []flagDef{
 			{Name: "name", Type: typeString, Description: "the account's name"},
 			{Name: "type", Type: typeEnum, Choices: accountTypes, Description: "account type"},
 			{Name: "tax", Type: typeEnum, Choices: taxTreatments, Description: "tax treatment"},
-			{Name: "rate", Type: typeNumber, Description: "stated rate: a fraction per year between -1 and 1"},
+			{Name: "rate", Type: typeNumber, Description: "stated rate: a fraction per year between -1 and 1; a mortgage's interest rate and a credit card's rate, compounded daily on a balance owed"},
+			{Name: "original", Type: typeNumber, Description: "a mortgage's original amount, the amount borrowed, above zero (0 unsets it)"},
+			{Name: "term-months", Type: typeInt, Description: "a mortgage's term in months, from 1 to 1200 (0 unsets it)"},
+			{Name: "first-payment", Type: typeDate, Description: "the date of a mortgage's first payment; later payments fall on its day of the month: " + dateNote},
+			{Name: "paid-from", Type: typeString, Description: "id of the account a mortgage's payments are taken from; none unsets it"},
+			{Name: "clear-terms", Type: typeBool, Default: "false", Description: "unset all of a mortgage's terms first; the others given are then set"},
 		},
 		Output: accountOut,
 		run:    cmdAccountEdit,
@@ -633,8 +638,33 @@ func cmdAccountEdit(c *call) (any, error) {
 	} else if ok {
 		ch.StatedRate = &v
 	}
+	if v, ok, err := c.number("original"); err != nil {
+		return nil, err
+	} else if ok {
+		ch.OriginalAmount = &v
+	}
+	if v, ok, err := c.integer("term-months"); err != nil {
+		return nil, err
+	} else if ok {
+		ch.TermMonths = &v
+	}
+	if d, ok, err := c.date("first-payment"); err != nil {
+		return nil, err
+	} else if ok {
+		ch.FirstPayment = &d
+	}
+	if c.set["paid-from"] {
+		from := model.AccountID("")
+		if c.str("paid-from") != "none" {
+			if from, err = c.accountNamed(c.str("paid-from")); err != nil {
+				return nil, err
+			}
+		}
+		ch.PaidFrom = &from
+	}
+	ch.ClearTerms = c.str("clear-terms") == "true"
 	if ch == (ops.AccountChange{}) {
-		return nil, usageErr("account edit needs at least one of --name, --type, --tax and --rate")
+		return nil, usageErr("account edit needs at least one of --name, --type, --tax, --rate, --original, --term-months, --first-payment, --paid-from and --clear-terms")
 	}
 	res, err := ops.EditAccount(c.st, c.rec, id, ch, c.options())
 	return c.accountResult(res, err, id)

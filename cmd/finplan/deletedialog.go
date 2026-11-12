@@ -54,6 +54,10 @@ func deleteLines(plan ops.DeletePlan) []string {
 			out = append(out, fmt.Sprintf("Projection %q: remove the modification %s", a.In, a.Detail))
 		case a.Kind == ops.AffectedHousehold:
 			out = append(out, "Household: reconciliation account resets to the first checking account")
+		case a.Kind == ops.AffectedTerms:
+			out = append(out, fmt.Sprintf("Account %q: remove its mortgage terms, %s", a.In, a.Detail))
+		case a.Kind == ops.AffectedBudgetItem && a.Effect == ops.EffectRemoved:
+			out = append(out, fmt.Sprintf("%s: remove %s", planWhere(a.In), a.Detail))
 		case a.In == "budget":
 			out = append(out, "Base budget: delete the item "+a.Detail)
 		default:
@@ -61,6 +65,14 @@ func deleteLines(plan ops.DeletePlan) []string {
 		}
 	}
 	return out
+}
+
+// planWhere names the holder of a budget item: the base budget or a projection.
+func planWhere(in string) string {
+	if in == "budget" {
+		return "Base budget"
+	}
+	return fmt.Sprintf("Projection %q", in)
 }
 
 // draw draws the modal, when open, and returns the user's choice. canClose says whether a blocked account can be closed instead; closeBlock, if not empty, is why it cannot be closed on the date the form holds.

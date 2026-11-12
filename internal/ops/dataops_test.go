@@ -755,7 +755,7 @@ func TestEditBudgetItem(t *testing.T) {
 		t.Errorf("item %+v", it)
 	}
 	// Order and the other items stay.
-	if got := reload(t, st).Budget.Items; len(got) != len(rec.Budget.Items) || got[4].ID != "groceries" {
+	if got := reload(t, st).Budget.Items; len(got) != len(rec.Budget.Items) || slices.IndexFunc(got, func(it model.BudgetItem) bool { return it.ID == "groceries" }) != slices.IndexFunc(rec.Budget.Items, func(it model.BudgetItem) bool { return it.ID == "groceries" }) {
 		t.Errorf("items %v", got)
 	}
 	if _, err := EditBudgetItem(st, reload(t, st), "groceries", groceries, Options{}); !errors.Is(err, ErrNoChange) {

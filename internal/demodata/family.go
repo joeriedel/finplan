@@ -8,6 +8,7 @@ package demodata
 import (
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/joeriedel/finplan/internal/model"
@@ -85,12 +86,12 @@ type accountSpec struct {
 var accountSpecs = []accountSpec{
 	{Checking, "Checking", model.TypeChecking, model.Taxable, 0, 18000, 0},
 	{Savings, "Savings", model.TypeSavings, model.Taxable, 0.04, 40000, 0},
-	{Card, "Credit card", model.TypeCreditCard, model.Taxable, 0, -2700, 0},
+	{Card, "Credit card", model.TypeCreditCard, model.Taxable, 0.2299, -2700, 0},
 	{Brokerage, "Brokerage", model.TypeBrokerage, model.Taxable, 0.06, 120000, 0},
 	{K401, "401k", model.Type401k, model.TaxDeferred, 0.06, 310000, 0},
 	{Roth, "Roth IRA", model.TypeRothIRA, model.TaxFree, 0.06, 85000, 0},
 	{TSP, "TSP", model.TypeTSP, model.TaxDeferred, 0.055, 140000, tspEnd},
-	{Mortgage, "Mortgage", model.TypeMortgage, model.Taxable, 0.06, -412000, 0},
+	{Mortgage, "Mortgage", model.TypeMortgage, model.Taxable, 0.06, -411877.57, 0},
 	{College1, "529 oldest", model.Type529, model.Tax529, 0.05, 38000, 0},
 	{College2, "529 middle", model.Type529, model.Tax529, 0.05, 26000, 0},
 	{College3, "529 youngest", model.Type529, model.Tax529, 0.05, 14000, 0},
@@ -98,6 +99,30 @@ var accountSpecs = []accountSpec{
 
 func monthly(day int) model.Recurrence {
 	return model.Recurrence{Kind: model.Monthly, Day: day}
+}
+
+// setMortgageTerms gives the account the invented terms of the family's mortgage: 433,600 borrowed for 30 years at the account's rate, paid from checking on the first of each month from February 2021, which leaves 411,877.57 owed when the history opens.
+func setMortgageTerms(a *model.Account) {
+	a.OriginalAmount, a.TermMonths, a.PaidFrom = 433600, 360, Checking
+	a.FirstPayment = model.Ptr(model.D(2021, time.February, 1))
+}
+
+// mortgagePayments is the history's monthly mortgage payment as a budget item, which the record does not keep: the engine pays an amortized mortgage from its terms.
+func mortgagePayments() model.BudgetItem {
+	terms := &model.Account{Type: model.TypeMortgage, StatedRate: 0.06}
+	setMortgageTerms(terms)
+	return model.BudgetItem{ID: "mortgage-payment", Name: "Mortgage payment", Kind: model.ItemTransfer, Amount: model.Constant(terms.MonthlyPayment()), Recurrence: monthly(1), From: Checking, To: Mortgage}
+}
+
+// mortgageOwed is the balance, as a negative number, that the mortgage's payment schedule leaves owed on d, so the recorded balances agree with the schedule the engine continues from them.
+func mortgageOwed(a *model.Account, d model.Date) float64 {
+	fy, fm, _ := a.FirstPayment.YMD()
+	y, m, _ := d.YMD()
+	owed, pay := a.OriginalAmount, a.MonthlyPayment()
+	for n := (y-fy)*12 + int(m) - int(fm) + 1; n > 0; n-- {
+		owed -= pay - math.Round(owed*a.StatedRate/12*100)/100
+	}
+	return -math.Round(owed*100) / 100
 }
 
 func familyBudget() model.Budget {
@@ -110,10 +135,13 @@ func familyBudget() model.Budget {
 	transfer := func(id, name string, from, to model.AccountID, amount float64, day int) model.BudgetItem {
 		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemTransfer, Amount: model.Constant(amount), Recurrence: monthly(day), From: from, To: to}
 	}
+	salaryA := income("salary-a", "Salary (Parent A)", 5000, model.Recurrence{Kind: model.Semimonthly, Day: 15, Day2: 31})
+	salaryA.MatchPercent, salaryA.MatchUpTo, salaryA.MatchAccount = 50, 6, K401
+	salaryB := income("salary-b", "Salary (Parent B)", 3700, model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2024, time.November, 8)})
+	salaryB.MatchPercent, salaryB.MatchUpTo, salaryB.MatchAccount = 100, 4, TSP
 	return model.Budget{Items: []model.BudgetItem{
-		income("salary-a", "Salary (Parent A)", 5000, model.Recurrence{Kind: model.Semimonthly, Day: 15, Day2: 31}),
-		income("salary-b", "Salary (Parent B)", 3700, model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2024, time.November, 8)}),
-		transfer("mortgage-payment", "Mortgage payment", Checking, Mortgage, 2600, 1),
+		salaryA,
+		salaryB,
 		transfer("card-payment", "Credit card payment", Checking, Card, 2700, 5),
 		expense("groceries", "Groceries", Card, 1800, monthly(3)),
 		expense("dining", "Dining out", Card, 900, monthly(6)),
@@ -160,6 +188,9 @@ func Family() *model.Record {
 		a := &model.Account{ID: s.id, Name: s.name, Type: s.typ, Tax: s.tax, StatedRate: s.rate, Allocation: model.DefaultAllocation(s.typ)}
 		if s.id == Roth {
 			a.Default.Intervals = []model.Interval{{From: model.MinDate, To: model.Ptr(historyOpen.Add(-1)), Value: 70000}}
+		}
+		if s.id == Mortgage {
+			setMortgageTerms(a)
 		}
 		must(rec.AddAccount(a))
 		if s.id == Brokerage {
@@ -261,7 +292,7 @@ func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
 	if end == 0 {
 		end = FamilyToday
 	}
-	for _, it := range rec.Budget.Items {
+	for _, it := range append(slices.Clone(rec.Budget.Items), mortgagePayments()) {
 		if !it.Touches(a.ID) {
 			continue
 		}
@@ -292,6 +323,9 @@ func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
 		next := min(model.D(y, m+1, 0), end)
 		bal = bal*rate.Compound(prev, next) + sumAmounts(a.TransactionsIn(prev, next))
 		bal = math.Round(bal*100) / 100
+		if a.ID == Mortgage {
+			bal = mortgageOwed(a, next)
+		}
 		a.AddSnapshot(next, bal)
 		prev = next
 	}
