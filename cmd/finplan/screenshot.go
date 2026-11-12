@@ -63,6 +63,7 @@ var openNames = []openState{
 	{"budget-item", "Budget", "", false},
 	{"budget-delete", "Budget", "", false},
 	{"budget-taxes", "Budget", "", false},
+	{"budget-period", "Budget", "", false},
 	{"member-benefits", "Accounts", "", false},
 	{"tax-tables", "Budget", "", false},
 	{"tax-tables-federal", "Budget", "", false},
@@ -170,7 +171,7 @@ func (o *shotOptions) openName() (n openState) {
 	return n
 }
 
-// applyOpen puts the app in the state --open asks for that is not a picker: the About dialog (about), the Net worth line soloed with Monte Carlo on (monte-carlo), the Net worth line selected so that the breakdown panel follows it (breakdown-line), also with the interval set to the calendar year before today (breakdown-interval), also with the first cause row folded out to its member accounts (breakdown-expand), the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the Projections Add form on the focal grant, shock or rebalance kind (focal-grant, shock, rebalance), the first Budget item's editor (budget-item) or its delete confirmation (budget-delete), the Taxes view (budget-taxes) or with its tax tables editor shown, on the household's state table (tax-tables) or the federal table (tax-tables-federal), the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth, the confirmation for deleting the selected asset (asset-delete) or account (account-delete), which lists the saved view presets that show it (on the demo, a new account Brokerage 2 in a new preset, since the demo's own accounts all have history), the selected account's ledger panel (ledger), the household members' Benefits sections folded out (member-benefits), or one of the equity states, which scroll the selected equity account's detail to a section: its grants table (equity-grants), the Add grant form filled in by dollar value (equity-add-grant), the schedule of its first grant with recorded and planned vests (equity-schedule), the Record vest form of that grant's first planned vest with a changed federal rate (equity-vest) or tied to a deposit (equity-tie, with the picker closed), the Move date form of that planned vest (equity-move), the untouched Correct or void form of that grant (equity-correct), the Prices section (equity-prices) and the vest calendar editor (equity-calendar).
+// applyOpen puts the app in the state --open asks for that is not a picker: the About dialog (about), the Net worth line soloed with Monte Carlo on (monte-carlo), the Net worth line selected so that the breakdown panel follows it (breakdown-line), also with the interval set to the calendar year before today (breakdown-interval), also with the first cause row folded out to its member accounts (breakdown-expand), the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the Projections Add form on the focal grant, shock or rebalance kind (focal-grant, shock, rebalance), the first Budget item's editor (budget-item) or its delete confirmation (budget-delete), the Taxes view (budget-taxes), the This period view (budget-period) or with its tax tables editor shown, on the household's state table (tax-tables) or the federal table (tax-tables-federal), the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth, the confirmation for deleting the selected asset (asset-delete) or account (account-delete), which lists the saved view presets that show it (on the demo, a new account Brokerage 2 in a new preset, since the demo's own accounts all have history), the selected account's ledger panel (ledger), the household members' Benefits sections folded out (member-benefits), or one of the equity states, which scroll the selected equity account's detail to a section: its grants table (equity-grants), the Add grant form filled in by dollar value (equity-add-grant), the schedule of its first grant with recorded and planned vests (equity-schedule), the Record vest form of that grant's first planned vest with a changed federal rate (equity-vest) or tied to a deposit (equity-tie, with the picker closed), the Move date form of that planned vest (equity-move), the untouched Correct or void form of that grant (equity-correct), the Prices section (equity-prices) and the vest calendar editor (equity-calendar).
 func (o *shotOptions) applyOpen(a *app) error {
 	switch o.open {
 	case "member", "member-form":
@@ -228,6 +229,8 @@ func (o *shotOptions) applyOpen(a *app) error {
 		return fmt.Errorf("the budget has no items to delete")
 	case "budget-taxes":
 		a.budget.showTaxes = true
+	case "budget-period":
+		a.budget.showPeriod = true
 	case "member-benefits":
 		a.accts.openBenefits, a.accts.scrollHousehold = true, true
 	case "tax-tables", "tax-tables-federal":

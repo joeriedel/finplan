@@ -77,6 +77,8 @@ type AccountStart struct {
 	HasActual       bool
 	OverrideHistory bool
 	ProjectionStart model.Date
+	// FlowsAfter is the date after which the budget's flows count for the account: the budget items' occurrences up to it are in the balance.
+	FlowsAfter model.Date
 }
 
 // Balances returns the target asset's value at each time under the projection, and "" for reality
@@ -429,6 +431,7 @@ func prepareDrawn(base *model.Record, projection string, target model.AssetID, h
 		}
 		p.amortized = acct.Amortized()
 		p.info.Start = p.start
+		p.info.FlowsAfter = p.flowsAfter
 		p.startVal = p.readBack(p.start)
 		if acct.Opens != nil && flowsAfter < *acct.Opens {
 			// The path starts the day before the account opens, so the opening balance is a change like any other on its date.
@@ -491,6 +494,7 @@ func prepareDrawn(base *model.Record, projection string, target model.AssetID, h
 	// Every side of an item that touches a hypothetical account, or two record accounts, counts only the occurrences after the latest cutoff of the accounts it touches, wherever they sit relative to the target, so both sides of a transfer agree and no date is projected on one side while the other reads it from actual data.
 	cutoffs := map[string]model.Date{}
 	hyp := map[string]model.Date{}
+	itemCuts := map[string]model.Date{}
 	outside := map[model.AccountID]*path{}
 	for _, it := range items {
 		cut := model.MinDate
@@ -511,6 +515,9 @@ func prepareDrawn(base *model.Record, projection string, target model.AssetID, h
 				p = outside[id]
 			}
 			cut = max(cut, p.flowsAfter)
+		}
+		if touched > 0 {
+			itemCuts[it.ID] = cut
 		}
 		if hypothetical || touched > 1 {
 			cutoffs[it.ID] = cut
@@ -553,6 +560,7 @@ func prepareDrawn(base *model.Record, projection string, target model.AssetID, h
 	// The tax of a year depends on the interest of the savings and checking accounts and lands on the reconciliation account, so their paths are built with the target's, wherever they sit.
 	ht := newHouseholdTax(rec, items, amounts, growths, infl, plans, hyp, &r.diag)
 	ht.benefits = kinds
+	ht.cuts = itemCuts
 	ht.draw = &plan
 	r.tax = ht
 	var all, savers []*path
@@ -626,7 +634,7 @@ func prepareDrawn(base *model.Record, projection string, target model.AssetID, h
 		}
 	}
 	for _, p := range all {
-		p.collect(rec, items, cutoffs, amounts, growths, infl, horizon, plans)
+		p.collect(rec, items, cutoffs, itemCuts, amounts, growths, infl, horizon, plans)
 	}
 	byID := map[model.AccountID]*path{}
 	for _, p := range all {
@@ -889,7 +897,7 @@ func amountOn(rec *model.Record, it model.BudgetItem, d model.Date, amounts, gro
 }
 
 // collect gathers the changes the budget, the equity plans and mirrored transfers make to the account up to the horizon.
-func (p *path) collect(rec *model.Record, items []model.BudgetItem, cutoffs map[string]model.Date, amounts, growths map[string]model.Schedule, infl model.Schedule, horizon model.Date, plans []*equityPlan) {
+func (p *path) collect(rec *model.Record, items []model.BudgetItem, cutoffs, itemCuts map[string]model.Date, amounts, growths map[string]model.Schedule, infl model.Schedule, horizon model.Date, plans []*equityPlan) {
 	p.points = []point{{date: p.start, bal: p.startVal}}
 	p.idle = horizon <= p.start
 	if p.idle {
@@ -899,24 +907,23 @@ func (p *path) collect(rec *model.Record, items []model.BudgetItem, cutoffs map[
 		if !it.Touches(p.acct.ID) && it.MatchAccount != p.acct.ID {
 			continue
 		}
-		after, upTo := p.flowsAfter, horizon
+		after := p.flowsAfter
 		// An item touching a hypothetical account is modelled on every side only after the latest cutoff of the accounts it touches.
 		if c, ok := cutoffs[it.ID]; ok {
 			after = c
 		}
-		if it.Start != nil {
-			after = max(after, it.Start.Add(-1))
+		after, upTo := itemSpan(rec, it, after, horizon)
+		matchOnly := !it.Touches(p.acct.ID)
+		payCut, paid := itemCuts[it.ID]
+		if !matchOnly {
+			paid = false
 		}
-		if it.End != nil {
-			upTo = min(upTo, *it.End)
-		}
-		// An item stops on both sides after the close date of any closed account it touches, so a transfer neither drains an account into a closed one nor creates money out of it.
-		for _, id := range []model.AccountID{it.Account, it.From, it.To} {
-			if a := rec.Account(id); a != nil && a.Closed != nil {
-				upTo = min(upTo, *a.Closed)
-			}
-		}
+		p.remainders(rec, it, after, upTo, matchOnly, payCut, paid, amounts, growths, infl)
 		for _, d := range it.Dates(after, upTo) {
+			// An occurrence with a fact was booked by remainders, except on a match account, whose occurrences after its cutoff the fact does not describe.
+			if _, found := rec.Occurrences.Get(it.ID, d); found && !matchOnly {
+				continue
+			}
 			if amt, ok := amountOn(rec, it, d, amounts, growths, infl); ok {
 				p.flows(rec, it, d, amt)
 			}
@@ -940,6 +947,151 @@ func (p *path) collect(rec *model.Record, items []model.BudgetItem, cutoffs map[
 	for _, pl := range plans {
 		p.changes = append(p.changes, pl.deposits(p.acct.ID, p.flowsAfter)...)
 	}
+}
+
+// itemSpan narrows the span the item is modelled over, after its cutoff and up to the horizon, to its own start and end and to the close date of any closed account it touches. An item stops on both sides after the close date of such an account, so a transfer neither drains an account into a closed one nor creates money out of it.
+func itemSpan(rec *model.Record, it model.BudgetItem, after, horizon model.Date) (model.Date, model.Date) {
+	upTo := horizon
+	if it.Start != nil {
+		after = max(after, it.Start.Add(-1))
+	}
+	if it.End != nil {
+		upTo = min(upTo, *it.End)
+	}
+	for _, id := range []model.AccountID{it.Account, it.From, it.To} {
+		if a := rec.Account(id); a != nil && a.Closed != nil {
+			upTo = min(upTo, *a.Closed)
+		}
+	}
+	return after, upTo
+}
+
+// remainders books what is still to come of the item's periods that the user has said something about, and of the one containing the cutoff: the occurrence facts and the posted estimate say how much. Periods are the cutoff's, the one before it if its occurrence is marked pending, and every later one with an occurrence fact; the other later periods are the occurrences after the cutoff and are not touched here. A lump's remainder lands on the later of the day after the cutoff and the occurrence's date; a spread item's is spread evenly over the days of the period after the cutoff. Taxes and employer matches come from the occurrence's date, in the share the remainder is of what the period is planned for. The facts describe the paycheck side: on a match account the item does not touch, only the periods the cutoff has reached are booked, and later occurrences get their full match.
+func (p *path) remainders(rec *model.Record, it model.BudgetItem, cutoff, upTo model.Date, matchOnly bool, payCut model.Date, paid bool, amounts, growths map[string]model.Schedule, infl model.Schedule) {
+	if upTo <= cutoff {
+		return
+	}
+	eval := func(per model.Period) model.PeriodView {
+		return periodView(rec, it, per, cutoff, amounts, growths, infl)
+	}
+	// The paycheck side writes off the remainder of a period it no longer books; the match on it is not booked either.
+	var payPeriods map[model.Date]bool
+	if matchOnly && paid {
+		payPeriods = map[model.Date]bool{}
+		payEval := func(per model.Period) model.PeriodView {
+			return periodView(rec, it, per, payCut, amounts, growths, infl)
+		}
+		for _, per := range remainderPeriods(rec, it, payCut, upTo, payEval) {
+			payPeriods[per.Start] = true
+		}
+	}
+	for _, per := range remainderPeriods(rec, it, cutoff, upTo, eval) {
+		if matchOnly && (per.Start > cutoff || payPeriods != nil && !payPeriods[per.Start]) {
+			continue
+		}
+		v := eval(per)
+		counted := countedAmount(rec, it, per, v, cutoff)
+		if matchOnly && paid {
+			counted = countedAmount(rec, it, per, periodView(rec, it, per, payCut, amounts, growths, infl), payCut)
+		}
+		p.bookRemainder(rec, it, per, v, counted, cutoff, upTo)
+	}
+}
+
+// periodView evaluates the item's period against the cutoff with its budgeted amount and occurrence fact.
+func periodView(rec *model.Record, it model.BudgetItem, per model.Period, cutoff model.Date, amounts, growths map[string]model.Schedule, infl model.Schedule) model.PeriodView {
+	budgeted, _ := amountOn(rec, it, per.Start, amounts, growths, infl)
+	var ov *model.Occurrence
+	if o, found := rec.Occurrences.Get(it.ID, per.Start); found {
+		ov = &o
+	}
+	return model.EvalPeriod(it, per, budgeted, ov, cutoff)
+}
+
+// remainderPeriods lists the periods of the item whose remainder is booked: the cutoff's, the one before it if its occurrence is marked pending, and every later one up to upTo with an occurrence fact.
+func remainderPeriods(rec *model.Record, it model.BudgetItem, cutoff, upTo model.Date, eval func(model.Period) model.PeriodView) []model.Period {
+	var out []model.Period
+	if cur, ok := it.PeriodAt(cutoff); ok {
+		out = append(out, cur)
+		if prev, ok := it.PeriodBefore(cur); ok {
+			if v := eval(prev); v.Overridden && v.Status == model.StatusPending {
+				out = append(out, prev)
+			}
+		}
+	}
+	for _, o := range rec.Occurrences.All() {
+		if o.Item != it.ID || o.Period <= cutoff || o.Period > upTo {
+			continue
+		}
+		if per, ok := it.PeriodAt(o.Period); ok && per.Start == o.Period {
+			out = append(out, per)
+		}
+	}
+	return out
+}
+
+// remainderBooked is the amount of the period's remainder that bookRemainder books.
+func remainderBooked(per model.Period, v model.PeriodView, cutoff, upTo model.Date) float64 {
+	if v.Remaining <= 0 {
+		return 0
+	}
+	if v.Timing == model.Lump || per.End <= cutoff {
+		return v.Remaining
+	}
+	first := max(per.Start, cutoff+1)
+	return v.Remaining * float64(max(min(per.End, upTo)-first+1, 0)) / (float64(per.End-first) + 1)
+}
+
+// countedAmount is what the occurrence of the period counts for tax: what has posted plus the part of the remainder that is booked over the item's whole span, which ends with the item and its accounts, not with the horizon.
+func countedAmount(rec *model.Record, it model.BudgetItem, per model.Period, v model.PeriodView, cutoff model.Date) float64 {
+	after, upTo := itemSpan(rec, it, cutoff, model.MaxDate)
+	amt := v.Posted
+	if upTo > after {
+		amt += remainderBooked(per, v, after, upTo)
+	}
+	return amt
+}
+
+func (p *path) bookRemainder(rec *model.Record, it model.BudgetItem, per model.Period, v model.PeriodView, counted float64, cutoff, upTo model.Date) {
+	if v.Remaining <= 0 {
+		return
+	}
+	share := 0.0
+	if counted > 0 {
+		share = v.Remaining / counted
+	}
+	first := max(per.Start, cutoff+1)
+	if v.Timing == model.Lump || per.End <= cutoff {
+		p.flowsFrom(rec, it, first, v.Remaining, per.Start, share)
+		return
+	}
+	days := float64(per.End-first) + 1
+	for d := first; d <= min(per.End, upTo); d++ {
+		p.flowsFrom(rec, it, d, v.Remaining/days, per.Start, share/days)
+	}
+}
+
+// ItemCutoffs returns the date after which each base budget item's flows count under the projection: the latest of the dates after which the accounts it touches count them. An item that touches no account of the record has no entry.
+func ItemCutoffs(rec *model.Record, projection string) (map[string]model.Date, error) {
+	starts, err := AllStarts(rec, projection)
+	if err != nil {
+		return nil, err
+	}
+	after := map[model.AccountID]model.Date{}
+	for _, s := range starts {
+		after[s.Account] = s.FlowsAfter
+	}
+	out := map[string]model.Date{}
+	for _, it := range rec.Budget.Items {
+		for _, id := range []model.AccountID{it.Account, it.From, it.To} {
+			if c, ok := after[id]; ok {
+				if prev, seen := out[it.ID]; !seen || c > prev {
+					out[it.ID] = c
+				}
+			}
+		}
+	}
+	return out, nil
 }
 
 // settle orders the changes and works out the balance after each date with one.
@@ -1179,6 +1331,11 @@ func (p *path) settleLegs(from model.Date, keep int) {
 }
 
 func (p *path) flows(rec *model.Record, it model.BudgetItem, d model.Date, amt float64) {
+	p.flowsFrom(rec, it, d, amt, d, 1)
+}
+
+// flowsFrom books amt of the item on d as part of its occurrence on sched: a wages paycheck's withholding and the employer match are those of sched, times share.
+func (p *path) flowsFrom(rec *model.Record, it model.BudgetItem, d model.Date, amt float64, sched model.Date, share float64) {
 	add := func(rank int, cause Cause, amount float64, counter model.AccountID) {
 		p.changes = append(p.changes, change{date: d, cause: cause, amount: amount, counter: counter, rank: rank})
 	}
@@ -1187,11 +1344,11 @@ func (p *path) flows(rec *model.Record, it model.BudgetItem, d model.Date, amt f
 		if it.Account == p.acct.ID {
 			add(rankIncome, p.ht.incomeCause(it.ID), amt, "")
 			if it.Income() == model.IncomeWages {
-				add(rankIncome, CauseTax, -p.ht.paycheckTax(it.ID, d), "")
+				add(rankIncome, CauseTax, -p.ht.paycheckTax(it.ID, sched)*share, "")
 			}
 		}
 		if it.MatchAccount == p.acct.ID && !p.acct.ClosedOn(d) {
-			if m := p.ht.match(it.ID, d); m != 0 {
+			if m := p.ht.match(it.ID, sched) * share; m != 0 {
 				add(rankIncome, CauseMatch, m, "")
 			}
 		}
@@ -1202,7 +1359,7 @@ func (p *path) flows(rec *model.Record, it model.BudgetItem, d model.Date, amt f
 		}
 		add(rankExpense, CauseExpense, -amt, "")
 	case model.ItemTransfer:
-		amt = p.ht.moved(it, d, amt)
+		amt = p.ht.moved(it, sched, amt, share)
 		if amt == 0 {
 			return
 		}

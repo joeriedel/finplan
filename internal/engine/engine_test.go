@@ -65,7 +65,7 @@ func fixture(t *testing.T) *model.Record {
 	monthly := func(day int) model.Recurrence { return model.Recurrence{Kind: model.Monthly, Day: day} }
 	rec.Budget.Items = []model.BudgetItem{
 		{ID: "salary", Kind: model.ItemIncome, Amount: model.Constant(1000), Recurrence: monthly(15), Account: "chk"},
-		{ID: "rent", Kind: model.ItemExpense, Amount: model.Constant(200), Recurrence: monthly(20), Account: "chk"},
+		{ID: "rent", Kind: model.ItemExpense, Amount: model.Constant(200), Recurrence: monthly(20), Account: "chk", Timing: model.Lump},
 		{ID: "save", Kind: model.ItemTransfer, Amount: model.Constant(300), Recurrence: monthly(16), From: "chk", To: "inv"},
 		{ID: "late-deposit", Kind: model.ItemTransfer, Amount: model.Constant(100), Recurrence: monthly(1), From: "chk", To: "late"},
 	}

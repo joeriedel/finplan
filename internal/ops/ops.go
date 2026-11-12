@@ -114,6 +114,8 @@ type Result struct {
 	Grant *model.Grant
 	Vest  *model.RecordedVest
 	Price *model.PriceObservation
+	// Occurrence is the occurrence fact SetOccurrence or ClearOccurrence stored or voided, with its values after the operation (for a clear, as it was). Its ID is 0 for one added in a dry run. Record has the edit applied, reloaded unless the run was a dry run.
+	Occurrence *model.Occurrence
 	// Household is the household a household edit changed, in Record; Member the member a member edit changed or added, or for a removal the member as it was.
 	Household *model.Household
 	Member    *model.HouseholdMember

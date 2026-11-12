@@ -17,8 +17,8 @@ import (
 // converts it. Format 2 added the modification mode and the budget item growth to format 1's shape; a
 // format 1 document has neither and reads as set and zero, and the bump makes an older build refuse a
 // document whose scale modifications it would otherwise silently ignore. Format 3 added the accounts a
-// projection defines; a format 1 or 2 document has none and reads as an empty list. Format 4 added the close date of an account; an older document has none and reads as an open account, and the bump makes an older build refuse a document whose closed accounts it would otherwise show as open. Format 5 stores a budget item's amount and growth as segment arrays and adds the count and unit of a custom recurrence; an older document has numbers there, which read as a one-segment schedule (a zero growth as none), and the bump makes an older build refuse a document whose schedules it would otherwise misread. Format 6 adds the income type of a budget item, the household and the tax tables; a budget item of an older document has no income type, which an income item reads as wages, and a record with no tax tables is given the shipped ones when it is loaded. Format 7 stores a market class's return as a segment array with its volatility, the correlations of the classes and the allocation of an account; an older class document has a number as its return, which reads as a one-segment schedule, and the bump makes an older build refuse a document whose allocations it would otherwise ignore. Format 8 adds the yearly rebalance setting of an account; an older document has none and reads as off, and the bump makes an older build refuse a document whose setting it would otherwise drop. Format 9 adds the terms of a mortgage account and the employer match of a wages budget item; an older document has none and reads as a mortgage without terms and an item without a match, and the bump makes an older build refuse a document whose terms and matches it would otherwise drop. Format 10 adds the Social Security and FERS inputs of a household member and the benefit taxation thresholds of the federal tax tables; an older member has none and reads as without benefits, an older table borrows the shipped thresholds, and the bump makes an older build refuse a household whose benefits it would otherwise drop. Format 11 adds the retirement date, withdrawal order and Roth conversion bracket of a projection; an older projection has none and inherits them, and the bump makes an older build refuse a document whose retirement it would otherwise drop. Format 12 adds the beneficiary and contribution basis of a 529 account; an older account has neither and reads as without a beneficiary and with a basis equal to its balance, and the bump makes an older build refuse a document whose beneficiaries it would otherwise drop. Format 13 adds the volatility of a stock as a document of its own; an older record has none and every stock reads with the default, and the bump makes an older build refuse a record whose volatilities it would otherwise drop.
-const formatCurrent = 13
+// projection defines; a format 1 or 2 document has none and reads as an empty list. Format 4 added the close date of an account; an older document has none and reads as an open account, and the bump makes an older build refuse a document whose closed accounts it would otherwise show as open. Format 5 stores a budget item's amount and growth as segment arrays and adds the count and unit of a custom recurrence; an older document has numbers there, which read as a one-segment schedule (a zero growth as none), and the bump makes an older build refuse a document whose schedules it would otherwise misread. Format 6 adds the income type of a budget item, the household and the tax tables; a budget item of an older document has no income type, which an income item reads as wages, and a record with no tax tables is given the shipped ones when it is loaded. Format 7 stores a market class's return as a segment array with its volatility, the correlations of the classes and the allocation of an account; an older class document has a number as its return, which reads as a one-segment schedule, and the bump makes an older build refuse a document whose allocations it would otherwise ignore. Format 8 adds the yearly rebalance setting of an account; an older document has none and reads as off, and the bump makes an older build refuse a document whose setting it would otherwise drop. Format 9 adds the terms of a mortgage account and the employer match of a wages budget item; an older document has none and reads as a mortgage without terms and an item without a match, and the bump makes an older build refuse a document whose terms and matches it would otherwise drop. Format 10 adds the Social Security and FERS inputs of a household member and the benefit taxation thresholds of the federal tax tables; an older member has none and reads as without benefits, an older table borrows the shipped thresholds, and the bump makes an older build refuse a household whose benefits it would otherwise drop. Format 11 adds the retirement date, withdrawal order and Roth conversion bracket of a projection; an older projection has none and inherits them, and the bump makes an older build refuse a document whose retirement it would otherwise drop. Format 12 adds the beneficiary and contribution basis of a 529 account; an older account has neither and reads as without a beneficiary and with a basis equal to its balance, and the bump makes an older build refuse a document whose beneficiaries it would otherwise drop. Format 13 adds the volatility of a stock as a document of its own; an older record has none and every stock reads with the default, and the bump makes an older build refuse a record whose volatilities it would otherwise drop. Format 14 adds the timing of a budget item, lump or spread; an older item has none and reads as its default timing, and the bump makes an older build refuse a document whose timings it would otherwise drop.
+const formatCurrent = 14
 
 // Document kinds.
 const (
@@ -144,6 +144,8 @@ type budgetItemDoc struct {
 	MatchPercent float64         `json:"match_percent,omitempty"`
 	MatchUpTo    float64         `json:"match_up_to,omitempty"`
 	MatchAccount model.AccountID `json:"match_account,omitempty"`
+	// Timing is empty for an item written before format 14, which reads as its default timing.
+	Timing model.Timing `json:"timing,omitempty"`
 }
 
 type budgetDoc struct {
@@ -337,7 +339,7 @@ type docRow struct {
 // decodeDoc decodes a document body of the given format version into v, the current shape.
 func decodeDoc(row docRow, v any) error {
 	switch row.format {
-	case 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13:
+	case 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14:
 		if err := json.Unmarshal(row.body, v); err != nil {
 			return fmt.Errorf("store: %s %q: %w", row.kind, row.key, err)
 		}
@@ -409,7 +411,7 @@ func docDefault(d []intervalDoc) model.DefaultBalance {
 func itemDoc(b model.BudgetItem) budgetItemDoc {
 	r := b.Recurrence
 	return budgetItemDoc{b.ID, b.Name, b.Kind, scheduleDoc(b.Amount), recurrenceDoc{r.Kind, r.Anchor, int(r.Month), r.Day, r.Day2, r.Count, r.Unit},
-		b.Start, b.End, b.Indexed, scheduleDoc(b.Growth), b.Account, b.From, b.To, b.IncomeType, b.MatchPercent, b.MatchUpTo, b.MatchAccount}
+		b.Start, b.End, b.Indexed, scheduleDoc(b.Growth), b.Account, b.From, b.To, b.IncomeType, b.MatchPercent, b.MatchUpTo, b.MatchAccount, b.Timing}
 }
 
 // upgradeIncome gives an income item of a document older than format 6 the income type it was always taxed as.
@@ -436,7 +438,7 @@ func docItem(d budgetItemDoc) (model.BudgetItem, error) {
 	return model.BudgetItem{ID: d.ID, Name: d.Name, Kind: d.Kind, Amount: amount,
 		Recurrence: model.Recurrence{Kind: r.Kind, Anchor: r.Anchor, Month: time.Month(r.Month), Day: r.Day, Day2: r.Day2, Count: r.Count, Unit: r.Unit},
 		Start:      d.Start, End: d.End, Indexed: d.Indexed, Growth: growth, Account: d.Account, From: d.From, To: d.To, IncomeType: d.IncomeType,
-		MatchPercent: d.MatchPercent, MatchUpTo: d.MatchUpTo, MatchAccount: d.MatchAccount}, nil
+		MatchPercent: d.MatchPercent, MatchUpTo: d.MatchUpTo, MatchAccount: d.MatchAccount, Timing: d.Timing}, nil
 }
 
 func memberToDoc(m model.Member) memberDoc {

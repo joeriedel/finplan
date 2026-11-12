@@ -89,6 +89,7 @@ func TestScreenshotSmoke(t *testing.T) {
 		{"budget-item", "Budget", "", "budget-item"},
 		{"budget-delete", "Budget", "", "budget-delete"},
 		{"budget-taxes", "Budget", "", "budget-taxes"},
+		{"budget-period", "Budget", "", "budget-period"},
 		{"tax-tables", "Budget", "", "tax-tables"},
 		{"tax-tables-federal", "Budget", "", "tax-tables-federal"},
 		{"projections-timeline", "Projections", "New job", "timeline"},

@@ -15,7 +15,7 @@ import (
 func TestMissingTargetsAgreeWithSkipped(t *testing.T) {
 	rec := fixture(t)
 	chk := model.DefaultAssetID("chk")
-	extra := model.BudgetItem{ID: "extra", Kind: model.ItemExpense, Amount: model.Constant(5), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 3}, Account: "chk"}
+	extra := model.BudgetItem{ID: "extra", Kind: model.ItemExpense, Amount: model.Constant(5), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 3}, Account: "chk", Timing: model.Lump}
 	amount := func(kind model.ObjectKind, id string) model.Modification {
 		return model.Modification{Target: model.ObjectRef{Kind: kind, ID: id}, Property: model.PropAmount, Values: model.Constant(1)}
 	}
@@ -31,7 +31,7 @@ func TestMissingTargetsAgreeWithSkipped(t *testing.T) {
 		amount(model.KindBudgetItem, "salary"),
 		amount(model.KindBudgetItem, "extra"),
 		amount(model.KindBudgetItem, "later"),
-		{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: "later"}, Property: model.PropAddItem, Item: &model.BudgetItem{ID: "later", Kind: model.ItemExpense, Amount: model.Constant(1), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 3}, Account: "chk"}},
+		{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: "later"}, Property: model.PropAddItem, Item: &model.BudgetItem{ID: "later", Kind: model.ItemExpense, Amount: model.Constant(1), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 3}, Account: "chk", Timing: model.Lump}},
 		amount(model.KindBudgetItem, "later"),
 		amount(model.KindBudgetItem, "gone"),
 		growth(model.KindAccount, "chk"),

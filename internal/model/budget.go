@@ -211,6 +211,8 @@ type BudgetItem struct {
 	// MatchPercent, MatchUpTo and MatchAccount are the employer match of a wages item: on each paycheck the employer deposits MatchPercent percent of the employee's contributions to MatchAccount, up to MatchUpTo percent of the paycheck's gross. Zero or an empty account means no match.
 	MatchPercent, MatchUpTo float64
 	MatchAccount            AccountID
+	// Timing says when the item's amount is spent within a period; empty reads as the item's default (see EffectiveTiming).
+	Timing Timing
 }
 
 // Income returns how the item is taxed: its income type, wages when it has none. It is meaningful for an income item only.

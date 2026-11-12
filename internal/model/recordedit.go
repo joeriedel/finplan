@@ -52,6 +52,7 @@ func (r *Record) Clone() *Record {
 	}
 	c.Correlations = slices.Clone(r.Correlations)
 	c.Prices = r.Prices.clone()
+	c.Occurrences = r.Occurrences.clone()
 	c.StockGrowth = cloneSchedules(r.StockGrowth)
 	c.StockVolatility = maps.Clone(r.StockVolatility)
 	c.Household = r.Household.Clone()

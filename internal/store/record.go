@@ -496,12 +496,14 @@ func linkTies(r *model.Record, entries []Entry) {
 	}
 }
 
-// attachFacts puts the stored grants, vests and price observations into the record. A grant of an account the record lacks, or a vest of a grant it lacks, is an error.
+// attachFacts puts the stored grants, vests, price observations and occurrences into the record. A grant of an account the record lacks, or a vest of a grant it lacks, is an error.
 func attachFacts(r *model.Record, facts []Fact) error {
 	for _, f := range facts {
 		switch f.Kind {
 		case FactPrice:
 			r.Prices.Add(*f.Price)
+		case FactOccurrence:
+			r.Occurrences.Add(*f.Occurrence)
 		case FactGrant:
 			a := r.Account(f.Grant.Account)
 			if a == nil {

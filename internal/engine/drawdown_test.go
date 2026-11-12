@@ -67,7 +67,7 @@ func TestRetirementStopsWagesAndDrawsTaxableThenDeferredThenRoth(t *testing.T) {
 	rec := retireRecord(t, 1960, 20000, 100000, 200000, 50000)
 	addItems(rec,
 		model.BudgetItem{ID: "salary", Kind: model.ItemIncome, Amount: model.Constant(5000), Recurrence: monthlyOn(1), Account: "chk", IncomeType: model.IncomeWages},
-		model.BudgetItem{ID: "living", Kind: model.ItemExpense, Amount: model.Constant(5000), Recurrence: monthlyOn(10), Account: "chk"},
+		model.BudgetItem{ID: "living", Kind: model.ItemExpense, Amount: model.Constant(5000), Recurrence: monthlyOn(10), Account: "chk", Timing: model.Lump},
 		model.BudgetItem{ID: "save", Kind: model.ItemTransfer, Amount: model.Constant(100), Recurrence: monthlyOn(20), From: "chk", To: "roth"},
 	)
 	retire(t, rec, "retired", d(2027, time.January, 1), nil)
@@ -97,7 +97,7 @@ func TestRetirementStopsWagesAndDrawsTaxableThenDeferredThenRoth(t *testing.T) {
 
 func TestWithdrawalOrderChoosesTheBucketsAndTheirTax(t *testing.T) {
 	rec := retireRecord(t, 1960, 20000, 100000, 200000, 50000)
-	addItems(rec, model.BudgetItem{ID: "living", Kind: model.ItemExpense, Amount: model.Constant(5000), Recurrence: monthlyOn(10), Account: "chk"})
+	addItems(rec, model.BudgetItem{ID: "living", Kind: model.ItemExpense, Amount: model.Constant(5000), Recurrence: monthlyOn(10), Account: "chk", Timing: model.Lump})
 	retire(t, rec, "roth first", d(2026, time.January, 1), func(p *model.Projection) {
 		p.WithdrawalOrder = []model.Bucket{model.BucketRoth, model.BucketDeferred, model.BucketTaxable}
 	})
@@ -124,7 +124,7 @@ func TestTaxableSalesRealizeGainsAndTheTaxIsPaidFromTheNextDrawdown(t *testing.T
 	rec := retireRecord(t, 1960, 0, 100000, 0, 0)
 	rec.Classes, rec.Correlations = model.DefaultClasses(), model.DefaultCorrelations()
 	rec.Account("brk").Allocation = []model.Holding{{Class: model.ClassLargeCap, Percent: 100}}
-	addItems(rec, model.BudgetItem{ID: "living", Kind: model.ItemExpense, Amount: model.Constant(5000), Recurrence: monthlyOn(10), Account: "chk"})
+	addItems(rec, model.BudgetItem{ID: "living", Kind: model.ItemExpense, Amount: model.Constant(5000), Recurrence: monthlyOn(10), Account: "chk", Timing: model.Lump})
 	retire(t, rec, "retired", d(2026, time.January, 1), nil)
 	ty := taxYear(t, rec, "retired", 2027)
 	if ty.ShortTermGains+ty.LongTermGains <= 0 {
@@ -138,7 +138,7 @@ func TestTaxableSalesRealizeGainsAndTheTaxIsPaidFromTheNextDrawdown(t *testing.T
 
 func TestEarlyDeferredWithdrawalsArePenalized(t *testing.T) {
 	rec := retireRecord(t, 1975, 0, 0, 200000, 0)
-	addItems(rec, model.BudgetItem{ID: "living", Kind: model.ItemExpense, Amount: model.Constant(1000), Recurrence: monthlyOn(10), Account: "chk"})
+	addItems(rec, model.BudgetItem{ID: "living", Kind: model.ItemExpense, Amount: model.Constant(1000), Recurrence: monthlyOn(10), Account: "chk", Timing: model.Lump})
 	retire(t, rec, "retired", d(2026, time.January, 1), nil)
 	ty := taxYear(t, rec, "retired", 2026)
 	if !near(ty.EarlyWithdrawal, 12000) || !near(ty.Result.Penalty, 1200) || ty.RMD != 0 {
@@ -148,7 +148,7 @@ func TestEarlyDeferredWithdrawalsArePenalized(t *testing.T) {
 
 func TestMoneyRunningOutIsNotedOnce(t *testing.T) {
 	rec := retireRecord(t, 1960, 10000, 0, 0, 0)
-	addItems(rec, model.BudgetItem{ID: "living", Kind: model.ItemExpense, Amount: model.Constant(4000), Recurrence: monthlyOn(10), Account: "chk"})
+	addItems(rec, model.BudgetItem{ID: "living", Kind: model.ItemExpense, Amount: model.Constant(4000), Recurrence: monthlyOn(10), Account: "chk", Timing: model.Lump})
 	retire(t, rec, "retired", d(2026, time.January, 1), nil)
 	res, err := Balances(rec, "retired", model.DefaultAssetID("chk"), []model.Date{d(2026, time.December, 31)})
 	must(t, err)
@@ -204,7 +204,7 @@ func TestRequiredDistributionsStartAtTheRightAgeAndAmount(t *testing.T) {
 
 func TestWithdrawalsCountTowardTheRequiredDistribution(t *testing.T) {
 	rec := retireRecord(t, 1950, 0, 0, 600000, 0)
-	addItems(rec, model.BudgetItem{ID: "living", Kind: model.ItemExpense, Amount: model.Constant(2000), Recurrence: monthlyOn(10), Account: "chk"})
+	addItems(rec, model.BudgetItem{ID: "living", Kind: model.ItemExpense, Amount: model.Constant(2000), Recurrence: monthlyOn(10), Account: "chk", Timing: model.Lump})
 	retire(t, rec, "retired", d(2026, time.January, 1), nil)
 	ty := taxYear(t, rec, "retired", 2026)
 	rmd := 600000 / benefits.UniformLifetimeDivisor(76)
@@ -304,7 +304,7 @@ func TestTaxFreeRetirementAccountsAreDrawnAsRothMoney(t *testing.T) {
 	r401.AddSnapshot(d(2025, time.December, 1), 100000)
 	r401.AddSnapshot(d(2026, time.January, 1), 100000)
 	must(t, rec.AddAccount(r401))
-	addItems(rec, model.BudgetItem{ID: "living", Kind: model.ItemExpense, Amount: model.Constant(1000), Recurrence: monthlyOn(10), Account: "chk"})
+	addItems(rec, model.BudgetItem{ID: "living", Kind: model.ItemExpense, Amount: model.Constant(1000), Recurrence: monthlyOn(10), Account: "chk", Timing: model.Lump})
 	retire(t, rec, "retired", d(2026, time.January, 1), func(p *model.Projection) {
 		p.WithdrawalOrder = []model.Bucket{model.BucketRoth, model.BucketDeferred, model.BucketTaxable}
 	})

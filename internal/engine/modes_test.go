@@ -111,7 +111,7 @@ func gymRecord(t *testing.T, start model.Date, growth float64, indexed bool) *mo
 	}
 	rec.Budget.Items = []model.BudgetItem{{
 		ID: "gym", Kind: model.ItemExpense, Amount: model.Constant(100), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 10},
-		Start: &start, Account: "chk", Indexed: indexed,
+		Start: &start, Account: "chk", Indexed: indexed, Timing: model.Lump,
 	}}
 	if growth != 0 {
 		rec.Budget.Items[0].Growth = model.Constant(growth)

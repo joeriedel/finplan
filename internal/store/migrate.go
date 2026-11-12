@@ -95,6 +95,37 @@ var migrations = []string{
 		('class', 'cash', 5, 7, '{"id":"cash","name":"Cash","return":[{"from":-2147483648,"end":null,"value":0.03}],"volatility":0.01}'),
 		('correlations', '', 0, 7, '[{"a":"international","b":"treasuries","value":-0.05},{"a":"international","b":"us-bonds","value":0.1},{"a":"international","b":"us-large-cap","value":0.75},{"a":"international","b":"us-small-cap","value":0.7},{"a":"treasuries","b":"us-bonds","value":0.9},{"a":"treasuries","b":"us-large-cap","value":-0.1},{"a":"treasuries","b":"us-small-cap","value":-0.15},{"a":"us-bonds","b":"us-large-cap","value":0.1},{"a":"us-bonds","b":"us-small-cap","value":0.05},{"a":"us-large-cap","b":"us-small-cap","value":0.85}]')
 	) WHERE NOT EXISTS (SELECT 1 FROM documents WHERE kind = 'class');`,
+	// 6: occurrence facts, the per-period records of budget items. The facts table is rebuilt to widen its kind check; the corrections are parked and rebuilt too, so no row references facts while it is dropped and foreign keys stay on.
+	`CREATE TABLE facts_new (
+		id      INTEGER PRIMARY KEY AUTOINCREMENT,
+		kind    TEXT    NOT NULL CHECK (kind IN ('grant', 'vest', 'price', 'occurrence')),
+		body    BLOB    NOT NULL,
+		made_at INTEGER NOT NULL
+	);
+	INSERT INTO facts_new (id, kind, body, made_at) SELECT id, kind, body, made_at FROM facts;
+	CREATE TABLE fact_corrections_parked AS SELECT id, fact, body, note, void, made_at FROM fact_corrections;
+	DROP TABLE fact_corrections;
+	DROP TABLE facts;
+	ALTER TABLE facts_new RENAME TO facts;
+	CREATE TABLE fact_corrections (
+		id      INTEGER PRIMARY KEY AUTOINCREMENT,
+		fact    INTEGER NOT NULL REFERENCES facts (id),
+		body    BLOB    NOT NULL,
+		note    TEXT    NOT NULL DEFAULT '',
+		void    INTEGER NOT NULL DEFAULT 0,
+		made_at INTEGER NOT NULL
+	);
+	INSERT INTO fact_corrections (id, fact, body, note, void, made_at) SELECT id, fact, body, note, void, made_at FROM fact_corrections_parked;
+	DROP TABLE fact_corrections_parked;
+	CREATE INDEX fact_corrections_fact ON fact_corrections (fact, id);
+	CREATE TRIGGER facts_no_update BEFORE UPDATE ON facts
+		BEGIN SELECT RAISE(ABORT, 'facts are append-only'); END;
+	CREATE TRIGGER facts_no_delete BEFORE DELETE ON facts
+		BEGIN SELECT RAISE(ABORT, 'facts are append-only'); END;
+	CREATE TRIGGER fact_corrections_no_update BEFORE UPDATE ON fact_corrections
+		BEGIN SELECT RAISE(ABORT, 'fact corrections are append-only'); END;
+	CREATE TRIGGER fact_corrections_no_delete BEFORE DELETE ON fact_corrections
+		BEGIN SELECT RAISE(ABORT, 'fact corrections are append-only'); END;`,
 }
 
 // migrate brings the database up to schema version target in one transaction. It fails, changing

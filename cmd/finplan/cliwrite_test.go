@@ -538,7 +538,7 @@ func TestCLIWriteHelp(t *testing.T) {
 		"asset add-default", "asset edit-default", "asset move-default", "asset remove-default", "asset set-param", "account new", "account edit",
 		"account close", "account reopen", "account delete",
 		"entry add-snapshot", "entry add-transaction", "entry correct", "entry void",
-		"budget add", "budget edit", "budget end", "budget delete",
+		"budget add", "budget edit", "budget end", "budget delete", "budget period set",
 		"asset-setting add", "asset-setting edit", "asset-setting move", "asset-setting remove",
 	} {
 		if !writes[name] {

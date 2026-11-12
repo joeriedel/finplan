@@ -121,7 +121,7 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	want := demodata.Family()
 	mustSave(t, s, want)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 13 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 14 {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
 	// Format 1 documents have no mode and no growth; a schedule of no growth is not stored.

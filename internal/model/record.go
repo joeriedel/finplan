@@ -24,6 +24,8 @@ type Record struct {
 	// Calendars are the employers' vest calendars; Prices the stock price observations that equity accounts are valued at.
 	Calendars []*VestCalendar
 	Prices    *PriceBook
+	// Occurrences are the per-period facts of budget items: what has posted, and what to expect, in a period.
+	Occurrences *OccurrenceBook
 
 	// StockGrowth is each stock's base growth schedule by symbol; a stock with none is projected flat.
 	StockGrowth map[string]Schedule
@@ -49,6 +51,7 @@ func NewRecord(today Date) *Record {
 		Today:           today,
 		Globals:         map[string]Schedule{},
 		Prices:          &PriceBook{},
+		Occurrences:     &OccurrenceBook{},
 		StockGrowth:     map[string]Schedule{},
 		StockVolatility: map[string]float64{},
 		Household:       DefaultHousehold(),

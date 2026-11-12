@@ -65,7 +65,7 @@ var commands = []*command{
 	},
 	{
 		Name: "budget list", Summary: "list the budget items",
-		Output: "[{id, name, kind, amount, amount_schedule: [{from, end, value}], recurrence: {kind, anchor, month, day, day2, count, unit}, start, end, indexed, growth, growth_schedule: [{from, end, value}], account, from, to}]; amount and growth are the values in effect on the record's today (growth 0 for none), and the schedules hold every segment, growth_schedule being empty for no growth; recurrence kind is one-time, weekly, biweekly, semimonthly, monthly, quarterly, annual (shown as Annually) or custom, and the recurrence fields its kind does not use are null: anchor is the date a one-time item happens or an interval item counts from (null when the start is used), month and day are for annual, day for monthly, day and day2 for semimonthly, count and unit (days, weeks, months or years) for custom; growth is the annual raise as a fraction (0.03 for 3%)",
+		Output: "[{id, name, kind, amount, amount_schedule: [{from, end, value}], recurrence: {kind, anchor, month, day, day2, count, unit}, start, end, indexed, growth, growth_schedule: [{from, end, value}], account, from, to, timing}]; timing is lump or spread, the item's own or its default; amount and growth are the values in effect on the record's today (growth 0 for none), and the schedules hold every segment, growth_schedule being empty for no growth; recurrence kind is one-time, weekly, biweekly, semimonthly, monthly, quarterly, annual (shown as Annually) or custom, and the recurrence fields its kind does not use are null: anchor is the date a one-time item happens or an interval item counts from (null when the start is used), month and day are for annual, day for monthly, day and day2 for semimonthly, count and unit (days, weeks, months or years) for custom; growth is the annual raise as a fraction (0.03 for 3%)",
 		run:    cmdBudgetList,
 	},
 	{
@@ -149,6 +149,8 @@ type jbudgetItem struct {
 	To         *string     `json:"to"`
 	// IncomeType is how an income item is taxed, wages when none is set; null for the other kinds.
 	IncomeType *string `json:"income_type"`
+	// Timing is lump or spread: the item's own, or its default when none is set.
+	Timing string `json:"timing"`
 	// Match is the employer match of a wages income item; null for an item without one.
 	Match *jmatch `json:"match"`
 }
@@ -195,7 +197,7 @@ func budgetItemJSON(it model.BudgetItem, today model.Date) jbudgetItem {
 		ID: it.ID, Name: it.Name, Kind: string(it.Kind), Amount: amount, AmountSch: scheduleJSONOut(it.Amount), Recurrence: jr,
 		Start: jdp(it.Start), End: jdp(it.End), Indexed: it.Indexed, Growth: growth, GrowthSch: scheduleJSONOut(it.Growth),
 		Account: nullable(string(it.Account)), From: nullable(string(it.From)), To: nullable(string(it.To)),
-		IncomeType: incomeTypeJSON(it), Match: matchJSON(it),
+		IncomeType: incomeTypeJSON(it), Timing: string(it.EffectiveTiming()), Match: matchJSON(it),
 	}
 }
 

@@ -95,6 +95,8 @@ type itemForm struct {
 	indexed               bool
 	// income is the income type as stored: empty for an income item that has none, which is wages.
 	income model.IncomeType
+	// timing is the timing as stored: empty for an item that has none, which has its default.
+	timing model.Timing
 	// matchPercent and matchUpTo are the texts of the employer match of a wages income item, and matchAccount the account it goes into.
 	matchPercent, matchUpTo string
 	matchAccount            model.AccountID
@@ -129,7 +131,7 @@ func valueNow(s model.Schedule, today model.Date) float64 {
 // formOf returns the form that shows the item as it is on today.
 func formOf(it model.BudgetItem, today model.Date) itemForm {
 	r := it.Recurrence
-	f := itemForm{kind: it.Kind, name: it.Name, amount: trimFloat(valueNow(it.Amount, today)), every: r.Kind, unit: r.Unit, account: it.Account, from: it.From, to: it.To, indexed: it.Indexed, income: it.IncomeType, matchAccount: it.MatchAccount, amountSched: !isPlain(it.Amount), growthSched: !isPlain(it.Growth)}
+	f := itemForm{kind: it.Kind, name: it.Name, amount: trimFloat(valueNow(it.Amount, today)), every: r.Kind, unit: r.Unit, account: it.Account, from: it.From, to: it.To, indexed: it.Indexed, income: it.IncomeType, timing: it.Timing, matchAccount: it.MatchAccount, amountSched: !isPlain(it.Amount), growthSched: !isPlain(it.Growth)}
 	switch {
 	case r.Kind == model.OneTime || r.Kind == model.Biweekly:
 		f.date = r.Anchor.String()
@@ -163,7 +165,7 @@ func formOf(it model.BudgetItem, today model.Date) itemForm {
 	return f
 }
 
-// set changes one field: kind, name, amount, growth, every, date, day, day2, month, count, unit, end, account, from, to, income (an income type) or indexed (text "true" or "false").
+// set changes one field: kind, name, amount, growth, every, date, day, day2, month, count, unit, end, account, from, to, income (an income type), timing or indexed (text "true" or "false").
 func (f *itemForm) set(field, text string) {
 	switch field {
 	case "kind":
@@ -172,6 +174,8 @@ func (f *itemForm) set(field, text string) {
 		f.indexed = text == "true"
 	case "income":
 		f.income = model.IncomeType(text)
+	case "timing":
+		f.timing = model.Timing(text)
 	case "matchpercent":
 		f.matchPercent = text
 	case "matchupto":
@@ -289,7 +293,7 @@ func (f *itemForm) seed() {
 
 // item builds the budget item the form describes; an item that is not one-time or biweekly and has no date starts today. It fails on what it cannot read and on a missing account; ops checks the rest.
 func (f itemForm) item(today model.Date) (model.BudgetItem, error) {
-	it := model.BudgetItem{Name: f.name, Kind: f.kind, Account: f.account, From: f.from, To: f.to, Indexed: f.indexed, IncomeType: f.income}
+	it := model.BudgetItem{Name: f.name, Kind: f.kind, Account: f.account, From: f.from, To: f.to, Indexed: f.indexed, IncomeType: f.income, Timing: f.timing}
 	if strings.TrimSpace(f.amount) == "" {
 		return it, errors.New("enter an amount")
 	}

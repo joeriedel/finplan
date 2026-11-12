@@ -147,13 +147,13 @@ func mortgageOwed(a *model.Account, d model.Date) float64 {
 
 func familyBudget() model.Budget {
 	income := func(id, name string, amount float64, rec model.Recurrence) model.BudgetItem {
-		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemIncome, Amount: model.Constant(amount), Recurrence: rec, Indexed: true, Account: Checking, IncomeType: model.IncomeWages}
+		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemIncome, Amount: model.Constant(amount), Recurrence: rec, Indexed: true, Account: Checking, IncomeType: model.IncomeWages, Timing: model.Lump}
 	}
 	expense := func(id, name string, from model.AccountID, amount float64, rec model.Recurrence) model.BudgetItem {
-		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemExpense, Amount: model.Constant(amount), Recurrence: rec, Indexed: true, Account: from}
+		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemExpense, Amount: model.Constant(amount), Recurrence: rec, Indexed: true, Account: from, Timing: model.Lump}
 	}
 	transfer := func(id, name string, from, to model.AccountID, amount float64, day int) model.BudgetItem {
-		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemTransfer, Amount: model.Constant(amount), Recurrence: monthly(day), From: from, To: to}
+		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemTransfer, Amount: model.Constant(amount), Recurrence: monthly(day), From: from, To: to, Timing: model.Lump}
 	}
 	salaryA := income("salary-a", "Salary (Parent A)", 5000, model.Recurrence{Kind: model.Semimonthly, Day: 15, Day2: 31})
 	salaryA.MatchPercent, salaryA.MatchUpTo, salaryA.MatchAccount = 50, 6, K401
@@ -164,6 +164,11 @@ func familyBudget() model.Budget {
 	cardPayment.Indexed = true
 	cardPayoff := transfer("card-payoff", "Credit card opening balance", Checking, Card, 550, 2)
 	cardPayoff.Start, cardPayoff.End = model.Ptr(FamilyToday), model.Ptr(model.D(2027, time.November, 30))
+	// Groceries, dining, utilities and transportation are spread over the month; the rest are paid on one date.
+	spread := func(it model.BudgetItem) model.BudgetItem {
+		it.Timing = model.Spread
+		return it
+	}
 	var collegeBills []model.BudgetItem
 	for _, c := range colleges {
 		for _, term := range []struct {
@@ -181,11 +186,11 @@ func familyBudget() model.Budget {
 		salaryB,
 		cardPayment,
 		cardPayoff,
-		expense("groceries", "Groceries", Card, 1800, monthly(3)),
-		expense("dining", "Dining out", Card, 900, monthly(6)),
-		expense("utilities", "Utilities", Checking, 450, monthly(12)),
+		spread(expense("groceries", "Groceries", Card, 1800, monthly(3))),
+		spread(expense("dining", "Dining out", Card, 900, monthly(6))),
+		spread(expense("utilities", "Utilities", Checking, 450, monthly(12))),
 		expense("childcare", "Childcare and activities", Checking, 1200, monthly(3)),
-		expense("transport", "Transportation", Checking, 600, monthly(8)),
+		spread(expense("transport", "Transportation", Checking, 600, monthly(8))),
 		expense("insurance", "Insurance", Checking, 700, monthly(20)),
 		expense("vacation", "Family vacation", Checking, 6000, model.Recurrence{Kind: model.Annual, Month: time.June, Day: 15}),
 		transfer("save-401k", "401k contribution", Checking, K401, 1000, 16),
@@ -252,6 +257,12 @@ func Family() *model.Record {
 	home.AddSnapshot(model.D(2026, time.May, 10), 548000)
 	must(rec.AddAccount(home))
 	rsu.addTo(rec)
+	// Groceries has posted more than its budget in the current period.
+	last := int64(0)
+	for _, p := range rec.Prices.All() {
+		last = max(last, p.ID)
+	}
+	rec.Occurrences.Add(model.Occurrence{ID: last + 1, Item: "groceries", Period: model.D(2026, time.November, 3), Status: model.StatusAuto, Posted: model.Ptr(2050.0)})
 
 	cash := []model.AccountType{model.TypeChecking, model.TypeSavings}
 	must(rec.AddAsset(&model.Asset{ID: AllCash, Name: "All cash", Members: []model.Member{model.RuleMember(model.Rule{Types: cash})}}))
@@ -351,6 +362,21 @@ func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
 				continue
 			}
 			t := model.Transaction{Date: d, Memo: it.Name}
+			if it.Kind == model.ItemExpense && it.Timing == model.Spread {
+				t.Kind = model.TxExpense
+				// A spread item posts evenly over its period, as the engine assumes of it; the last day takes the rounding.
+				per, _ := it.PeriodAt(d)
+				days := per.Days()
+				daily := math.Round(amount/float64(days)*100) / 100
+				for day := d; day <= min(per.End, end); day++ {
+					t.Date, t.Amount = day, -daily
+					if day == per.End {
+						t.Amount = -(amount - daily*float64(days-1))
+					}
+					must(a.AddTransaction(t))
+				}
+				continue
+			}
 			switch {
 			case it.Kind == model.ItemIncome:
 				t.Kind, t.Amount = model.TxIncome, amount*netPay(rec, d)

@@ -150,10 +150,12 @@ type householdTax struct {
 	plans   []*equityPlan
 	// hypothetical maps an item touching a hypothetical account to the date its flows count after.
 	hypothetical map[string]model.Date
-	diag         *Diagnostics
-	years        map[int]*yearInputs
-	results      map[int]*TaxYear
-	reported     map[string]bool
+	// cuts maps an item to the date after which the projection models it, as collect does.
+	cuts map[string]model.Date
+	diag     *Diagnostics
+	years    map[int]*yearInputs
+	results  map[int]*TaxYear
+	reported map[string]bool
 	// savers are the savings and checking paths whose interest is taxed.
 	savers []*path
 	// lots are the paths of taxable investment accounts, whose sales realize gains.
@@ -209,6 +211,26 @@ func (h *householdTax) dates(it model.BudgetItem, year int) []model.Date {
 	return it.Dates(after, upTo)
 }
 
+// amountOn is the amount of the occurrence of the item on d that counts for tax: the budgeted one, or, if the occurrence has a fact for its period, what the fact says (see model.Occurrence.Counted). Where the engine books a remainder for the period, with or without a fact, the occurrence counts what has posted plus the part of that remainder it books; that span ends with the item and its accounts, not with the horizon, so the tax inputs do not depend on the query.
+func (h *householdTax) amountOn(it model.BudgetItem, d model.Date) (float64, bool) {
+	amt, ok := amountOn(h.rec, it, d, h.amounts, h.growths, h.infl)
+	if o, found := h.rec.Occurrences.Get(it.ID, d); ok && found {
+		amt = o.Counted(amt)
+	}
+	if cut, ok := h.cuts[it.ID]; ok {
+		eval := func(per model.Period) model.PeriodView {
+			return periodView(h.rec, it, per, cut, h.amounts, h.growths, h.infl)
+		}
+		_, upTo := itemSpan(h.rec, it, cut, model.MaxDate)
+		for _, per := range remainderPeriods(h.rec, it, cut, upTo, eval) {
+			if per.Start == d {
+				amt = countedAmount(h.rec, it, per, eval(per), cut)
+			}
+		}
+	}
+	return amt, ok
+}
+
 // earlyOn reports whether a withdrawal on d is before the household's earner is 59 and a half. Without an earner none is.
 func (h *householdTax) earlyOn(d model.Date) bool {
 	for _, m := range h.rec.Household.Members {
@@ -245,7 +267,7 @@ func (h *householdTax) year(y int) *yearInputs {
 				continue
 			}
 			for _, d := range h.dates(it, y) {
-				amt, ok := amountOn(h.rec, it, d, h.amounts, h.growths, h.infl)
+				amt, ok := h.amountOn(it, d)
 				if !ok {
 					continue
 				}
@@ -261,7 +283,7 @@ func (h *householdTax) year(y int) *yearInputs {
 		case model.ItemTransfer:
 			src, dst := h.rec.Account(it.From), h.rec.Account(it.To)
 			for _, d := range h.dates(it, y) {
-				amt, ok := amountOn(h.rec, it, d, h.amounts, h.growths, h.infl)
+				amt, ok := h.amountOn(it, d)
 				if !ok {
 					continue
 				}
@@ -354,19 +376,20 @@ func (h *householdTax) limit(y int, in *yearInputs, contribs []contribution) {
 	}
 }
 
-// moved is the amount of the occurrence of the transfer item on d that is moved: the amount, less what the year's 401(k) limit refuses of a contribution to a limited account. A refusal is noted once for the account and year.
-func (h *householdTax) moved(it model.BudgetItem, d model.Date, amt float64) float64 {
-	y, _, _ := d.YMD()
+// moved is the amount of amt, the part booked of the occurrence of the transfer item scheduled on sched (share of it), that is moved: the amount, less what the year's 401(k) limit refuses of a contribution to a limited account. A refusal is noted once for the account and year.
+func (h *householdTax) moved(it model.BudgetItem, sched model.Date, amt, share float64) float64 {
+	y, _, _ := sched.YMD()
 	in := h.year(y)
-	moved, ok := in.moved[paycheckKey{it.ID, d}]
+	moved, ok := in.moved[paycheckKey{it.ID, sched}]
 	if !ok {
 		return amt
 	}
-	if moved < amt {
+	capped := min(amt, moved*share)
+	if capped < amt {
 		a := h.rec.Account(it.To)
 		h.note("the %d 401(k) limit of %.2f refuses %.2f of the contributions to %s (%s): they are capped at the limit and the rest stays in the paying account", y, in.limit, in.refused[a.ID], a.Name, a.ID)
 	}
-	return moved
+	return capped
 }
 
 // match is the employer match the paycheck of the income item on d earns.

@@ -23,29 +23,41 @@ const (
 	FactGrant FactKind = "grant"
 	FactVest  FactKind = "vest"
 	FactPrice FactKind = "price"
+	// FactOccurrence is what the user recorded of one period of a budget item.
+	FactOccurrence FactKind = "occurrence"
 )
 
-// FactValue is the contents of a fact: exactly one of the three is set. Each carries the fact's ID, which the store sets when it reads a fact and ignores when it writes one.
+// FactValue is the contents of a fact: exactly one of the four is set. Each carries the fact's ID, which the store sets when it reads a fact and ignores when it writes one.
 type FactValue struct {
-	Grant *model.Grant
-	Vest  *model.RecordedVest
-	Price *model.PriceObservation
+	Grant      *model.Grant
+	Vest       *model.RecordedVest
+	Price      *model.PriceObservation
+	Occurrence *model.Occurrence
 }
 
 // Kind returns the kind of fact the value holds, or "" if it holds none or several.
 func (v FactValue) Kind() FactKind {
+	n := 0
+	for _, set := range []bool{v.Grant != nil, v.Vest != nil, v.Price != nil, v.Occurrence != nil} {
+		if set {
+			n++
+		}
+	}
 	switch {
-	case v.Grant != nil && v.Vest == nil && v.Price == nil:
+	case n != 1:
+	case v.Grant != nil:
 		return FactGrant
-	case v.Vest != nil && v.Grant == nil && v.Price == nil:
+	case v.Vest != nil:
 		return FactVest
-	case v.Price != nil && v.Grant == nil && v.Vest == nil:
+	case v.Price != nil:
 		return FactPrice
+	default:
+		return FactOccurrence
 	}
 	return ""
 }
 
-// Fact is a stored grant, recorded vest or price observation with its current, corrected values. Facts are append-only like entries: a correction supersedes a fact and a void takes it out of the record, and the original and every correction stay in its history.
+// Fact is a stored grant, recorded vest, price observation or budget item occurrence with its current, corrected values. Facts are append-only like entries: a correction supersedes a fact and a void takes it out of the record, and the original and every correction stay in its history.
 type Fact struct {
 	ID   int64
 	Kind FactKind
@@ -99,6 +111,14 @@ type priceDoc struct {
 	Price  float64    `json:"price"`
 }
 
+type occurrenceDoc struct {
+	Item     string                 `json:"item"`
+	Period   model.Date             `json:"period"`
+	Status   model.OccurrenceStatus `json:"status"`
+	Posted   *float64               `json:"posted"`
+	Expected *float64               `json:"expected"`
+}
+
 func encodeFact(v FactValue) ([]byte, error) {
 	switch v.Kind() {
 	case FactGrant:
@@ -111,8 +131,11 @@ func encodeFact(v FactValue) ([]byte, error) {
 	case FactPrice:
 		p := v.Price
 		return json.Marshal(priceDoc{p.Symbol, p.Date, p.Price})
+	case FactOccurrence:
+		o := v.Occurrence
+		return json.Marshal(occurrenceDoc{o.Item, o.Period, o.Status, o.Posted, o.Expected})
 	}
-	return nil, fmt.Errorf("%w: a fact holds exactly one of a grant, a vest and a price", ErrInvalidEntry)
+	return nil, fmt.Errorf("%w: a fact holds exactly one of a grant, a vest, a price and an occurrence", ErrInvalidEntry)
 }
 
 func decodeFact(kind FactKind, id int64, body []byte) (FactValue, error) {
@@ -135,6 +158,11 @@ func decodeFact(kind FactKind, id int64, body []byte) (FactValue, error) {
 		var d priceDoc
 		if err = json.Unmarshal(body, &d); err == nil {
 			return FactValue{Price: &model.PriceObservation{ID: id, Symbol: d.Symbol, Date: d.Date, Price: d.Price}}, nil
+		}
+	case FactOccurrence:
+		var d occurrenceDoc
+		if err = json.Unmarshal(body, &d); err == nil {
+			return FactValue{Occurrence: &model.Occurrence{ID: id, Item: d.Item, Period: d.Period, Status: d.Status, Posted: d.Posted, Expected: d.Expected}}, nil
 		}
 	default:
 		err = errors.New("unknown kind")
@@ -318,6 +346,17 @@ func (f FactTx) Add(v FactValue) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if o := v.Occurrence; o != nil {
+		live, err := queryFacts(f.tx, false, `f.kind = 'occurrence'`)
+		if err != nil {
+			return 0, err
+		}
+		for _, l := range live {
+			if l.Occurrence.Item == o.Item && l.Occurrence.Period == o.Period {
+				return 0, fmt.Errorf("%w: occurrence %d already records %s for the period of %s: reload and correct it", ErrRecordChanged, l.ID, o.Item, o.Period)
+			}
+		}
+	}
 	res, err := f.tx.Exec(`INSERT INTO facts (kind, body, made_at) VALUES (?, ?, ?)`, string(v.Kind()), body, f.s.now().UnixNano())
 	if err != nil {
 		return 0, err
@@ -344,7 +383,7 @@ func (s *Store) Write(r *model.Record, then func(FactTx) error) error {
 	return s.save(r, then)
 }
 
-// recordFacts returns the grants, vests and prices of the record that have an id, in id order. One without an id is not stored yet and Save leaves it alone: it is added with FactTx.Add.
+// recordFacts returns the grants, vests, prices and occurrences of the record that have an id, in id order. One without an id is not stored yet and Save leaves it alone: it is added with FactTx.Add.
 func recordFacts(r *model.Record) []Fact {
 	var out []Fact
 	for _, a := range r.Accounts {
@@ -364,11 +403,16 @@ func recordFacts(r *model.Record) []Fact {
 			out = append(out, Fact{ID: p.ID, Kind: FactPrice, FactValue: FactValue{Price: &p}})
 		}
 	}
+	for _, o := range r.Occurrences.All() {
+		if o.ID != 0 {
+			out = append(out, Fact{ID: o.ID, Kind: FactOccurrence, FactValue: FactValue{Occurrence: &o}})
+		}
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 
-// syncFacts stores the record's facts that are not stored yet, under the ids the record gives them, and reports ErrRecordChanged if a stored fact (with its corrections applied) is missing from or differs in the record, or the record has a fact that is stored but voided. Changes to stored facts go through CorrectFact and VoidFact.
+// syncFacts stores the record's facts that are not stored yet, under the ids the record gives them, and reports ErrRecordChanged if a stored fact (with its corrections applied) is missing from or differs in the record, or the record has a fact that is stored but voided; a stored occurrence is not missing if the record holds a later one of its item and period. Changes to stored facts go through CorrectFact and VoidFact.
 func (s *Store) syncFacts(tx *sql.Tx, r *model.Record) error {
 	stored, err := queryFacts(tx, false, ``)
 	if err != nil {
@@ -406,6 +450,12 @@ func (s *Store) syncFacts(tx *sql.Tx, r *model.Record) error {
 		}
 	}
 	for id, f := range current {
+		// An older occurrence of a period the record holds another for is shadowed by the later one.
+		if f.Kind == FactOccurrence {
+			if _, shadowed := r.Occurrences.Get(f.Occurrence.Item, f.Occurrence.Period); shadowed {
+				continue
+			}
+		}
 		return fmt.Errorf("%w: %s %d is absent from the record", ErrRecordChanged, f.Kind, id)
 	}
 	return nil

@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -36,6 +37,9 @@ type budgetTab struct {
 	showTaxes bool
 	// tables is the tax tables editor of the Taxes view.
 	tables taxTablesUI
+	// period is the This period view's memo and fields; showPeriod selects that view on the next frame.
+	period     periodState
+	showPeriod bool
 }
 
 func newBudgetTab(a *app) *budgetTab {
@@ -47,7 +51,7 @@ func newBudgetTab(a *app) *budgetTab {
 // itemPrefix is the id prefix of the fields of the base item with the id.
 func itemPrefix(id string) string { return "base" + id + "." }
 
-// setField changes one field of the base item through ops.EditBudgetItem: kind, name, amount, growth, every, date, day, day2, month, count, unit, end, account, from, to, or indexed (text "true" or "false"). An input that cannot be read, or that ops refuses, changes nothing.
+// setField changes one field of the base item through ops.EditBudgetItem: kind, name, amount, growth, every, date, day, day2, month, count, unit, end, account, from, to, timing (lump or spread), or indexed (text "true" or "false"). An input that cannot be read, or that ops refuses, changes nothing.
 func (t *budgetTab) setField(id, field, text string) bool {
 	fid := itemPrefix(id) + field
 	old, ok := t.a.rec.Budget.Item(id)
@@ -173,6 +177,14 @@ func (t *budgetTab) draw() {
 		t.taxes()
 		imgui.EndTabItem()
 	}
+	flags = imgui.TabItemFlagsNone
+	if t.showPeriod {
+		flags, t.showPeriod = imgui.TabItemFlagsSetSelected, false
+	}
+	if imgui.BeginTabItemV("This period##budgetview", nil, flags) {
+		t.periods()
+		imgui.EndTabItem()
+	}
 }
 
 // items draws the Items view: the totals, the base budget items and the Add form.
@@ -271,6 +283,14 @@ func (t *budgetTab) editor(id string) {
 	if imgui.Checkbox("rises with inflation##"+prefix, &indexed) {
 		t.setField(id, "indexed", boolText(indexed))
 	}
+	imgui.AlignTextToFramePadding()
+	disabledText("timing")
+	imgui.SameLine()
+	timings := []string{"Lump", "Spread"}
+	if k := pick(prefix+"timing", strings.ToUpper(string(it.EffectiveTiming()[:1]))+string(it.EffectiveTiming()[1:]), em*7, timings, slices.Index(model.Timings, it.EffectiveTiming())); k >= 0 {
+		t.setField(id, "timing", string(model.Timings[k]))
+	}
+	tooltipOn("Lump: the amount lands on each occurrence's date. Spread: it is spent evenly over the period from one occurrence to the day before the next, which is how the projection treats a month that is partly over")
 
 	imgui.AlignTextToFramePadding()
 	disabledText("end on")

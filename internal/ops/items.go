@@ -64,6 +64,9 @@ func checkItemAs(rec *model.Record, it model.BudgetItem, existing *model.BudgetI
 	if err := checkMatch(rec, it); err != nil {
 		return it, err
 	}
+	if it.Timing != "" && !it.Timing.Valid() {
+		return it, refuse(ErrInvalidValue, "the timing %q must be lump or spread", it.Timing)
+	}
 	r := it.Recurrence
 	// A legacy item may stay without a start if its recurrence is unchanged or needs no phase; otherwise an anchor phases it.
 	legacy := existing != nil && existing.Start == nil
