@@ -169,15 +169,28 @@ func TestFamilyProjections(t *testing.T) {
 		t.Errorf("Base changed: %v vs %v", again, base)
 	}
 
-	// Withdraw: the 401k drops by the withdrawal and its tax; net worth loses only the tax and lost growth.
+	// Withdraw: the 401k drops by the withdrawal and the growth it would have earned; net worth loses only that growth until the tax is paid with the return in April 2028, then the extra tax too.
 	after := d(2027, time.July, 1)
 	k401Base, k401W := at(ProjBase, model.DefaultAssetID(K401), after).Amount, at(ProjWithdraw, model.DefaultAssetID(K401), after).Amount
-	if drop := k401Base - k401W; drop < 132000 || drop > 135000 {
-		t.Errorf("401k drop: got %v, want about 132000", drop)
+	if drop := k401Base - k401W; drop < 100000 || drop > 102000 {
+		t.Errorf("401k drop: got %v, want about 100000", drop)
 	}
 	lost := at(ProjBase, NetWorth, after).Amount - at(ProjWithdraw, NetWorth, after).Amount
-	if lost < 32000 || lost > 34000 {
-		t.Errorf("net worth lost: got %v, want about 32000", lost)
+	if lost < 0 || lost > 2000 {
+		t.Errorf("net worth lost: got %v, want only lost growth", lost)
+	}
+	base27, err := engine.TaxYearOf(rec, ProjBase, 2027)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w27, err := engine.TaxYearOf(rec, ProjWithdraw, 2027)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra, paid := w27.Result.Total-base27.Result.Total, d(2028, time.June, 1)
+	lost = at(ProjBase, NetWorth, paid).Amount - at(ProjWithdraw, NetWorth, paid).Amount
+	if lost < extra || lost > extra+8000 {
+		t.Errorf("net worth lost after the return: got %v, want the extra tax %v and a little growth", lost, extra)
 	}
 }
 
@@ -229,8 +242,12 @@ func TestFamilyBreakdowns(t *testing.T) {
 			t.Errorf("net worth shows %+v", l)
 		}
 	}
-	// The withdrawal's tax is real money leaving, in the projected column only.
-	base, err := engine.Breakdown(rec, ProjBase, NetWorth, d(2026, time.January, 1), d(2028, time.January, 1))
+	// The withdrawal's tax is real money leaving, in the projected column only, with the 2027 return in April 2028.
+	bd, err = engine.Breakdown(rec, ProjWithdraw, NetWorth, d(2026, time.January, 1), d(2028, time.December, 31))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := engine.Breakdown(rec, ProjBase, NetWorth, d(2026, time.January, 1), d(2028, time.December, 31))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,8 +259,16 @@ func TestFamilyBreakdowns(t *testing.T) {
 		}
 		return engine.Line{}
 	}
-	if diff := taxOf(bd).Projected - taxOf(base).Projected; math.Abs(diff+32000) > 1e-6 {
-		t.Errorf("withdrawal tax: got %v, want -32000", diff)
+	base27, err := engine.TaxYearOf(rec, ProjBase, 2027)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w27, err := engine.TaxYearOf(rec, ProjWithdraw, 2027)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff, want := taxOf(bd).Projected-taxOf(base).Projected, base27.Result.Total-w27.Result.Total; math.Abs(diff-want) > 0.01 || want > -30000 {
+		t.Errorf("withdrawal tax: got %v, want %v", diff, want)
 	}
 	// The 401k alone sees the withdrawal and the tax.
 	k, _ := engine.Breakdown(rec, ProjWithdraw, model.DefaultAssetID(K401), d(2027, time.January, 1), d(2027, time.December, 31))

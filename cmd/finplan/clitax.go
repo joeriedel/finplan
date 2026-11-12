@@ -7,14 +7,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
+	"strconv"
 	"strings"
 
+	"github.com/joeriedel/finplan/internal/engine"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/ops"
 	"github.com/joeriedel/finplan/internal/tax"
 )
 
-// The commands for the household and the tax tables: household show, household set, household member add|edit|remove, tax table show|set|revert and tax compute.
+// The commands for the household and the tax tables: household show, household set, household member add|edit|remove, tax table show|set|revert, tax compute and tax year.
 
 const (
 	householdOut = "{dry_run, changed, household: as household show prints it, after the edit}"
@@ -52,6 +54,13 @@ var taxReadCommands = []*command{
 		},
 		Output: "without flags {federal: [year], state: [{name, year}]}; with flags the table, as tax table set reads it: " + taxTableNote,
 		run:    cmdTaxTableShow,
+	},
+	{
+		Name: "tax year", Summary: "the household's tax for a calendar year under a projection, as the engine books it: the year's income, contributions and withdrawals, the tax by kind, what paychecks and vests withheld and the reconciliation on 15 April of the next year",
+		Args:   []argDef{{Name: "year", Description: "the calendar year", Required: true}},
+		Flags:  []flagDef{{Name: "projection", Type: typeString, Description: projDesc}},
+		Output: "{year, projection, filing_status, state, inputs: {wages (paychecks), vest_wages, pre_tax: {k401, ira, hsa} (before the limits), ordinary_income (other-ordinary items, interest and taxable withdrawals that are not early), interest (included in ordinary_income), early_withdrawal, dependent_ages, contrib_529: [one per 529 account]}, tax: {agi, federal_taxable, federal_tax (before credits), credits, niit, early_withdrawal_penalty, state_taxable, state_tax, social_security, medicare, additional_medicare, total}, withheld: {paychecks, vests, total} (those before the projection's start included), due_minus_withheld, reconciliation: {date, account (null without a checking account), amount (positive paid, negative refunded)}, " + diagShape + "}; dollars rounded to cents",
+		run:    cmdTaxYear,
 	},
 	{
 		Name: "tax compute", Summary: "compute the household's tax for a year from the tax tables, the household's filing status, dependents and state, and the amounts given",
@@ -137,19 +146,6 @@ type jhouseholdMember struct {
 	Role  string `json:"role"`
 }
 
-// reconciliationAccount is the account tax is reconciled against: the household's choice, else the first checking account, "" if there is none.
-func reconciliationAccount(rec *model.Record) model.AccountID {
-	if rec.Household.Checking != "" {
-		return rec.Household.Checking
-	}
-	for _, a := range rec.Accounts {
-		if a.Type == model.TypeChecking {
-			return a.ID
-		}
-	}
-	return ""
-}
-
 func householdJSON(rec *model.Record) any {
 	h := rec.Household
 	members := []jhouseholdMember{}
@@ -162,7 +158,7 @@ func householdJSON(rec *model.Record) any {
 		Checking       *string            `json:"checking"`
 		Reconciliation *string            `json:"reconciliation_account"`
 		Members        []jhouseholdMember `json:"members"`
-	}{string(h.Filing), h.State, nullable(string(h.Checking)), nullable(string(reconciliationAccount(rec))), members}
+	}{string(h.Filing), h.State, nullable(string(h.Checking)), nullable(string(engine.ReconciliationAccount(rec, rec.Today))), members}
 }
 
 func cmdHouseholdShow(c *call) (any, error) {
@@ -488,4 +484,97 @@ func cmdTaxCompute(c *call) (any, error) {
 		Total          float64 `json:"total"`
 	}{year, string(in.Status), in.State, ages, cents(res.AGI), cents(res.FederalTaxable), cents(res.FederalTax), cents(res.Credits), cents(res.NIIT),
 		cents(res.Penalty), cents(res.StateTaxable), cents(res.StateTax), cents(res.SocialSecurity), cents(res.Medicare), cents(res.AdditionalMedicare), cents(res.Total)}, nil
+}
+
+type jtax struct {
+	AGI            float64 `json:"agi"`
+	FederalTaxable float64 `json:"federal_taxable"`
+	FederalTax     float64 `json:"federal_tax"`
+	Credits        float64 `json:"credits"`
+	NIIT           float64 `json:"niit"`
+	Penalty        float64 `json:"early_withdrawal_penalty"`
+	StateTaxable   float64 `json:"state_taxable"`
+	StateTax       float64 `json:"state_tax"`
+	SocialSecurity float64 `json:"social_security"`
+	Medicare       float64 `json:"medicare"`
+	AddlMedicare   float64 `json:"additional_medicare"`
+	Total          float64 `json:"total"`
+}
+
+type jtaxYear struct {
+	Year       int     `json:"year"`
+	Projection *string `json:"projection"`
+	Filing     string  `json:"filing_status"`
+	State      string  `json:"state"`
+	Inputs     struct {
+		Wages     float64 `json:"wages"`
+		VestWages float64 `json:"vest_wages"`
+		PreTax    struct {
+			K401 float64 `json:"k401"`
+			IRA  float64 `json:"ira"`
+			HSA  float64 `json:"hsa"`
+		} `json:"pre_tax"`
+		Ordinary        float64   `json:"ordinary_income"`
+		Interest        float64   `json:"interest"`
+		EarlyWithdrawal float64   `json:"early_withdrawal"`
+		DependentAges   []int     `json:"dependent_ages"`
+		Contrib529      []float64 `json:"contrib_529"`
+	} `json:"inputs"`
+	Tax      jtax `json:"tax"`
+	Withheld struct {
+		Paychecks float64 `json:"paychecks"`
+		Vests     float64 `json:"vests"`
+		Total     float64 `json:"total"`
+	} `json:"withheld"`
+	Due            float64 `json:"due_minus_withheld"`
+	Reconciliation struct {
+		Date    jdate   `json:"date"`
+		Account *string `json:"account"`
+		Amount  float64 `json:"amount"`
+	} `json:"reconciliation"`
+	Diagnostics jdiagnostics `json:"diagnostics"`
+}
+
+func cmdTaxYear(c *call) (any, error) {
+	_, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	year, err := strconv.Atoi(c.args[0])
+	if err != nil || year < 1 || year > 9998 {
+		return nil, usageErr("year %q is not a calendar year", c.args[0])
+	}
+	projection, err := c.projection(rec)
+	if err != nil {
+		return nil, err
+	}
+	ty, err := engine.TaxYearOf(rec, projection, year)
+	if err != nil {
+		return nil, failErr("invalid", "%v", err)
+	}
+	cents := func(v float64) float64 { return math.Round(v*100) / 100 }
+	ages := ty.Input.DependentAges
+	if ages == nil {
+		ages = []int{}
+	}
+	contrib := []float64{}
+	for _, v := range ty.Input.Contrib529 {
+		contrib = append(contrib, cents(v))
+	}
+	res := ty.Result
+	var out jtaxYear
+	out.Year, out.Projection = year, nullable(projection)
+	out.Filing, out.State = string(ty.Input.Status), ty.Input.State
+	in := &out.Inputs
+	in.Wages, in.VestWages = cents(ty.Wages), cents(ty.VestWages)
+	in.PreTax.K401, in.PreTax.IRA, in.PreTax.HSA = cents(ty.K401), cents(ty.IRA), cents(ty.HSA)
+	in.Ordinary, in.Interest, in.EarlyWithdrawal = cents(ty.Ordinary), cents(ty.Interest), cents(ty.EarlyWithdrawal)
+	in.DependentAges, in.Contrib529 = ages, contrib
+	out.Tax = jtax{cents(res.AGI), cents(res.FederalTaxable), cents(res.FederalTax), cents(res.Credits), cents(res.NIIT), cents(res.Penalty),
+		cents(res.StateTaxable), cents(res.StateTax), cents(res.SocialSecurity), cents(res.Medicare), cents(res.AdditionalMedicare), cents(res.Total)}
+	out.Withheld.Paychecks, out.Withheld.Vests, out.Withheld.Total = cents(ty.WithheldPaychecks), cents(ty.WithheldVests), cents(ty.Withheld())
+	out.Due = cents(ty.Due)
+	out.Reconciliation.Date, out.Reconciliation.Account, out.Reconciliation.Amount = jd(ty.ReconciliationDate), nullable(string(ty.ReconciliationAccount)), cents(ty.Due)
+	out.Diagnostics = diagnosticsJSON(ty.Diagnostics)
+	return out, nil
 }

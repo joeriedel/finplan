@@ -2,7 +2,7 @@
 
 This document describes finplan's data model, projection engine, analysis tools and agent access. It records decisions, not code: where the code and this document disagree, one of them is wrong and should be fixed. It describes capabilities only; a user's own accounts, household and numbers are data entered into the app, never written here or anywhere in the repository.
 
-Status: agreed design. The data model, asset rules and a placeholder projection engine with breakdowns exist as standalone libraries (`internal/model`, `internal/engine`) that import only the standard library; the Graph and Projections tabs use them. Financial rules are placeholders (see Implementation notes); market classes, shocks and rebalances have types only.
+Status: agreed design. The data model, asset rules and a projection engine with breakdowns exist as standalone libraries (`internal/model`, `internal/engine`) that import only the standard library; the Graph and Projections tabs use them. Taxes are computed and reconciled by the engine with the rules package (see Taxes); market classes, shocks and rebalances have types only.
 
 ## Principles
 
@@ -219,19 +219,24 @@ The engine computes taxes from income, realized gains, contributions and deducti
 
 The household (`model.Household`, document kind `household`) names who files and how: its members (name, birth date, role earner, spouse or dependent), the filing status (default married filing jointly), the name of the state table that taxes it (default VA) and the checking account tax is reconciled against (empty means the first checking account; deleting that account resets it and changing its type is refused). State tables share one generic shape (brackets, standard deduction by filing status, exemptions, 529 cap) that Virginia fits, so a user can add another state as a table; only federal and Virginia ship.
 
-`tax.Compute` (`internal/tax/compute.go`) computes one year from amounts given: federal brackets and standard deduction, the child tax credit (dependents under 17) and the credit for other dependents, Social Security (wage base per earner), Medicare and additional Medicare, the net investment income tax, 401(k)/TSP and IRA limits per earner and the HSA family limit per return (an excess is post-tax; Roth contributions are not deductible), the Virginia 529 deduction with a cap per account, and the 10% early-withdrawal penalty. It is exposed by `finplan tax compute`. The engine does not use it yet: it still charges the placeholder rates below, and withholding and year-end reconciliation are not built.
+`tax.Compute` (`internal/tax/compute.go`) computes one year from amounts given: federal brackets and standard deduction, the child tax credit (dependents under 17) and the credit for other dependents, Social Security (wage base per earner), Medicare and additional Medicare, the net investment income tax, 401(k)/TSP and IRA limits per earner and the HSA family limit per return (an excess is post-tax; Roth contributions are not deductible), the Virginia 529 deduction with a cap per account, and the 10% early-withdrawal penalty. It is exposed by `finplan tax compute`. The engine uses it for every calendar year (`internal/engine/taxes.go`), as described below, and `finplan tax year` shows the result.
 
 Scope: US federal and Virginia, modeled properly; no generic multi-state support. Filing status, dependents (including the child tax credit), the Virginia 529 deduction, early-withdrawal penalties and the net investment income tax are in scope.
 
-Withholding, estimated payments, refunds and amounts owed are what land in accounts. At each year end the engine reconciles tax due against tax paid (planned; not built).
+Withholding, refunds and amounts owed are what land in accounts; estimated payments are not modelled. The engine computes the household's tax for each calendar year with `tax.Compute` and reconciles it against what was withheld:
+
+- **Withholding.** A wages income item's paychecks stay gross (cause income) and each carries a tax change on the same account: its share, in proportion to its gross, of the federal and state income tax on the year's projected household wages alone (wages less pre-tax 401(k)/IRA/HSA deferrals; no interest, withdrawals or RSU wages), plus payroll tax: Social Security up to the wage base cumulatively through the year, Medicare and additional Medicare, with HSA contributions excluded from FICA wages. Ordinary and tax-free income items carry no withholding. An RSU vest keeps its own per-grant withholding rates.
+- **The year's tax.** Wages and vest value are wages. Pre-tax amounts are transfers from unsheltered accounts into a tax-deferred 401(k) or TSP (401(k) bucket), a tax-deferred IRA (IRA), an HSA (HSA) or a 529 (the Virginia deduction, per account); Roth (tax-free) contributions reduce nothing, and `tax.Compute` applies the limits and caps. Interest and growth on savings and checking accounts is ordinary income and net investment income in the year earned, including the growth that snapshots show before an account's projection starts (never negative), until the account closes. A transfer from a tax-deferred account to an unsheltered one is ordinary income, and is early, with the 10% penalty, when the first earner-role household member is under 59 and a half on the date; nothing is withheld at the withdrawal and it is settled at reconciliation. Tax-free (Roth) withdrawals are untaxed.
+- **One earner.** Budget items have no member, so all household wages and pre-tax contributions are attributed to a single earner. This is a default the user should review. The demo family's recorded paychecks are net of the real effective rate on the year's wages and 401(k)/TSP deferrals (`demodata.netPay`), not a fixed share.
+- **Reconciliation.** On 15 April of the next year the year's tax less what was withheld (paychecks and vests) is booked as tax on the household's checking account: a payment when positive, a refund when negative. The account is `Household.Checking` if open on that date, else the first checking account open on that date (`engine.ReconciliationAccount`); with none, nothing is booked and a note is added to the diagnostics (`notes` in the CLI's diagnostics JSON). It is booked only when 15 April lies within the horizon. Years are processed in order, so a year's interest sees the earlier reconciliations.
 
 ## The engine
 
 The engine is event-driven, with no fixed time step. It advances from one dated flow to the next (each paycheck, bill, vest, contribution, shock and rebalance on its actual date) and grows balances over exactly the time elapsed between them. Granularity is therefore not a property of the engine: `balance(t)` is defined for any instant, and the caller chooses how to sample it (the graph by its zoom level, a report by its interval, the CLI by a flag). Zoomed out over decades the graph samples sparsely; zoomed in on a month it shows each paycheck landing.
 
 - **Growth** compounds by each account's own convention: daily for credit-card interest, per period for a mortgage's amortization schedule, and continuously over elapsed time for market classes.
-- **Ordering on one date:** income, then payroll deductions (401k/TSP and employer match, HSA, withholding), RSU vests taxed as income, expenses, debt payments, then contributions and where leftover cash goes (a waterfall), then shocks and rebalances. As built so far, one date's changes apply in the order opening, income, grant (a new RSU grant), vest, expense, transfer (`rankOpening` to `rankTransfer` in `internal/engine/engine.go`).
-- **Taxes** are computed per tax year, because that is how they work: withholding and estimated payments flow on their dates, and each year end reconciles tax due against tax paid.
+- **Ordering on one date:** income, then payroll deductions (401k/TSP and employer match, HSA, withholding), RSU vests taxed as income, expenses, debt payments, then contributions and where leftover cash goes (a waterfall), then shocks and rebalances. As built so far, one date's changes apply in the order opening, income, grant (a new RSU grant), vest, expense, transfer, tax (`rankOpening` to `rankTax` in `internal/engine/engine.go`; withholding sits at income rank and the reconciliation at tax rank).
+- **Taxes** are computed per tax year, because that is how they work: withholding flows on the paychecks' and vests' dates, and the previous year's tax is reconciled against what was withheld on 15 April.
 - **Breakdowns** cover any interval the caller picks.
 - **Monte Carlo** draws class returns at a chosen base resolution, since randomized returns need a step; the rest of the engine is unchanged.
 
@@ -241,7 +246,7 @@ The engine must be fast: goal solving and Monte Carlo rerun it thousands of time
 
 ## Implementation notes
 
-Details the build settled, and the placeholders it uses until the real rules arrive.
+Details the build settled.
 
 **Layout.** Model types and asset rules are in `internal/model`; the engine is in `internal/engine` and imports the model. The invented family-of-six dataset (`demodata.Family()`, whose household files jointly in Virginia and whose salaries are typed as wages; reference date 2026-11-08; 13 accounts, among them the equity account `equity`, see "Equity: RSU grants") is in `internal/demodata`; the older `demodata.Generate` is gone.
 
@@ -263,13 +268,13 @@ Details the build settled, and the placeholders it uses until the real rules arr
 
 **Transfer classification.** Unsheltered to sheltered (tax-deferred, tax-free, 529) is a contribution, sheltered to unsheltered a withdrawal, anything else a transfer. A transfer to an account outside the target's scope counts as money leaving.
 
-**Placeholder rules.** Tax is 25% of gross on income flows; a withdrawal from a tax-deferred account also charges 32% tax on top, to the source, with no penalty. On one date the engine applies opening, income, grant, vest, expense, then transfers (the full order under The engine is not yet modelled). Indexed budget items scale by the global inflation schedule compounded from `Record.Today` to the flow date; history is never indexed. An item's amount is its resolved amount (after amount modifications) times its raise factor times, if indexed, the inflation compound (`raiseFactor`, `path.build`). The raise factor multiplies `1+g` for each anniversary after the later of the anchor and `Record.Today`, up to the flow date, using the growth in effect on that anniversary; a step factor is clamped at 0, and a Feb 29 anchor falls on Feb 28 in other years.
+**Order and indexing.** On one date the engine applies opening, income, grant, vest, expense, transfer, then tax (the full order under The engine is not yet all modelled). Indexed budget items scale by the global inflation schedule compounded from `Record.Today` to the flow date; history is never indexed. An item's amount is its resolved amount (after amount modifications) times its raise factor times, if indexed, the inflation compound (`raiseFactor`, `path.build`). The raise factor multiplies `1+g` for each anniversary after the later of the anchor and `Record.Today`, up to the flow date, using the growth in effect on that anniversary; a step factor is clamped at 0, and a Feb 29 anchor falls on Feb 28 in other years.
 
 **Modifications supported.** A budget item's `amount` and `growth` schedules (each set or scale), an account or asset `growth` schedule, an account or asset `default` schedule (see Default balances), global `inflation` (set or scale), a stock's `growth` (target kind `stock`, the id being the symbol; set or scale), `add_item` (adds a whole budget item) and `add_grant` (adds a focal grant to an equity account, see Equity: RSU grants). Unsupported properties and dangling targets are skipped and reported in the result's diagnostics.
 
 ### Equity: RSU grants
 
-The model, storage, shared operations and CLI, the Equity UI and the engine's projection of vests, stock prices and focal grants (with attribution in the breakdown) are built. W shows as tax in the Breakdown; only the year-end tax tally and reconciliation remain unbuilt.
+The model, storage, shared operations and CLI, the Equity UI and the engine's projection of vests, stock prices and focal grants (with attribution in the breakdown) are built. Tax is built (see Taxes): the Breakdown's tax line is the withholding of paychecks and vests plus the reconciliations dated in the period, split actual and projected.
 
 **Vest calendars** (`model.VestCalendar`) are named documents (kind `calendar`) shared by the grants of one employer. A calendar has one rule per month, either a fixed day of the month or the 1st to 4th or last weekday, and overrides that each move one generated date to another. `Validate` refuses a month outside 1 to 12, two rules for a month, a rule that does not set exactly one of day and Nth weekday, a fixed day that does not exist in every year (so February at most 28, and 31 in a 30-day month), an override whose From is not a generated date, an override that does not move its date, and a date overridden twice. `Dates(from, to)` lists the generated dates with overrides applied.
 
@@ -464,6 +469,7 @@ Commands are data: `cmd/finplan/cliread.go` holds the read command table and `cm
     finplan tax table show [--year Y [--state NAME]]
     finplan tax table set [--json-file F]   # JSON table from stdin or F; a body with `name` is a state table, a new name adds a state
     finplan tax table revert --year Y [--state NAME]   # restore the shipped table; not_found when none ships
+    finplan tax year <year> [--projection P]   # the engine's tax for a calendar year: inputs, tax by kind, withheld, due, reconciliation
     finplan tax compute [--year Y --wages W1,W2 --k401 --ira --hsa --other-income N --net-investment-income N --early-withdrawal N --contrib-529 A,B --inflation F]
     finplan asset-setting add <projection> --asset A [--start D] [--override-history true|false] [--at N]
     finplan asset-setting edit <projection> <index> [--asset A] [--start D|none] [--override-history true|false|none]

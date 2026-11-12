@@ -12,6 +12,9 @@ import (
 	"github.com/joeriedel/finplan/internal/model"
 )
 
+// fica is the payroll tax withheld from the fixture's salary: it is far below the standard deduction, so no income tax is.
+const fica = 0.0765
+
 func d(y int, m time.Month, day int) model.Date { return model.D(y, m, day) }
 
 func must(t *testing.T, err error) {
@@ -302,10 +305,10 @@ func TestPerAssetStartAndOverrideFollowOrder(t *testing.T) {
 func TestOverrideHistoryIgnoresLaterRealData(t *testing.T) {
 	rec := fixture(t)
 	must(t, rec.AddProjection(&model.Projection{Name: "back", Start: model.Ptr(d(2025, time.December, 10)), OverrideHistory: model.Ptr(true)}))
-	// Real data says 1000 on 2026-01-01. Starting at 12-10 replays 12-15 salary +750, 16th -300, 20th -200, 1st -100.
+	// Real data says 1000 on 2026-01-01. Starting at 12-10 replays 12-15 salary +923.50 net of payroll tax, 16th -300, 20th -200, 1st -100.
 	got := sample(t, rec, "back", model.DefaultAssetID("chk"), d(2026, time.January, 1))
-	if got.Status != StatusProjected || !near(got.Amount, 1150) {
-		t.Errorf("overridden: got %+v, want 1150 projected", got)
+	if got.Status != StatusProjected || !near(got.Amount, 1000+1000*(1-fica)-600) {
+		t.Errorf("overridden: got %+v, want %v projected", got, 1000+1000*(1-fica)-600)
 	}
 	got = sample(t, rec, "back", model.DefaultAssetID("chk"), d(2025, time.December, 10))
 	if got.Status != StatusActual || !near(got.Amount, 1000) {
@@ -320,8 +323,8 @@ func TestExactFlows(t *testing.T) {
 	if got := sample(t, rec, "", chk, d(2025, time.December, 16)); got.Status != StatusActual || !near(got.Amount, 1200) {
 		t.Errorf("actual: got %+v", got)
 	}
-	// From 2026-01-01: three salaries (750 net of the 25% placeholder tax), rents and saves, and two late deposits.
-	want := 1000.0 + 3*(750-200-300) - 2*100
+	// From 2026-01-01: three salaries (net of payroll tax), rents and saves, and two late deposits.
+	want := 1000.0 + 3*(1000*(1-fica)-200-300) - 2*100
 	if got := sample(t, rec, "", chk, d(2026, time.March, 31)); got.Status != StatusProjected || !near(got.Amount, want) {
 		t.Errorf("projected: got %+v, want %v", got, want)
 	}
@@ -449,7 +452,7 @@ func TestBreakdownCauses(t *testing.T) {
 	if l := line(bd, CauseExpense); !near(l.Actual, -200) || !near(l.Projected, -400) {
 		t.Errorf("expense: got %+v", l)
 	}
-	if l := line(bd, CauseTax); !near(l.Projected, -500) || l.Actual != 0 {
+	if l := line(bd, CauseTax); !near(l.Projected, -2000*fica) || l.Actual != 0 {
 		t.Errorf("tax: got %+v", l)
 	}
 	if l := line(bd, CauseGrowth); l.Projected <= 0 || l.Actual != 0 {
@@ -483,7 +486,7 @@ func TestModificationsAndSkipping(t *testing.T) {
 	raise := model.Modification{
 		Target:   model.ObjectRef{Kind: model.KindBudgetItem, ID: "salary"},
 		Property: model.PropAmount,
-		Values:   model.MustSchedule(model.Segment{From: d(2026, time.February, 1), Value: 2000}),
+		Values:   model.MustSchedule(model.Segment{From: d(2026, time.February, 1), Value: 1300}),
 	}
 	must(t, rec.AddProjection(&model.Projection{Name: "raise", Mods: []model.Modification{raise}}))
 	must(t, rec.AddProjection(&model.Projection{Name: "broken", Parent: "raise", Mods: []model.Modification{
@@ -493,16 +496,16 @@ func TestModificationsAndSkipping(t *testing.T) {
 		{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: "salary"}, Property: model.PropAddItem, Item: &model.BudgetItem{ID: "salary"}},
 	}}))
 	base := sample(t, rec, "", chk, d(2026, time.March, 31)).Amount
-	// Salary Feb 15 and Mar 15 are 2000 gross: 750 net becomes 1500 each.
-	if got := sample(t, rec, "raise", chk, d(2026, time.March, 31)).Amount; !near(got, base+1500) {
-		t.Errorf("raise: got %v, want %v", got, base+1500)
+	// Salary Feb 15 and Mar 15 are 1300 gross: each pays 300 more, net of payroll tax; the year stays under the deductions.
+	if got := sample(t, rec, "raise", chk, d(2026, time.March, 31)).Amount; !near(got, base+2*300*(1-fica)) {
+		t.Errorf("raise: got %v, want %v", got, base+2*300*(1-fica))
 	}
 	res, err := Balances(rec, "broken", chk, []model.Date{d(2026, time.March, 31)})
 	must(t, err)
 	if len(res.Skipped) != 4 || res.Skipped[0].Reason != "budget item not found" || res.Skipped[3].Index != 3 || res.Skipped[3].Projection != "broken" {
 		t.Errorf("skipped: got %+v", res.Skipped)
 	}
-	if !near(res.Samples[0].Amount, base+1500) {
+	if !near(res.Samples[0].Amount, base+2*300*(1-fica)) {
 		t.Errorf("a skipped modification must not stop the others: got %v", res.Samples[0].Amount)
 	}
 	if _, err := Balances(rec, "missing", chk, nil); err == nil {
@@ -510,7 +513,7 @@ func TestModificationsAndSkipping(t *testing.T) {
 	}
 }
 
-func TestWithdrawalPaysTax(t *testing.T) {
+func TestWithdrawalIsTaxedAtReconciliation(t *testing.T) {
 	rec := fixture(t)
 	w := model.BudgetItem{
 		ID: "out", Kind: model.ItemTransfer, Amount: model.Constant(1000), From: "inv", To: "chk",
@@ -525,13 +528,19 @@ func TestWithdrawalPaysTax(t *testing.T) {
 	if l := line(bd, CauseWithdrawal); !near(l.Projected, -1000) {
 		t.Errorf("withdrawal: got %+v", l)
 	}
-	if l := line(bd, CauseTax); !near(l.Projected, -1000*PlaceholderWithdrawalTaxRate) {
-		t.Errorf("tax: got %+v", l)
+	if l := line(bd, CauseTax); l != (Line{}) {
+		t.Errorf("a withdrawal is not taxed where it happens: got %+v", l)
 	}
-	// Seen from the pair, the money only moves inside it and just the tax is lost.
+	// Seen from the pair, the money only moves inside it, so only growth differs.
 	a, b := sample(t, rec, "", "pair", to).Amount, sample(t, rec, "w", "pair", to).Amount
-	if lost := a - b; lost < 1000*PlaceholderWithdrawalTaxRate || lost > 1000*PlaceholderWithdrawalTaxRate+10 {
-		t.Errorf("lost to tax and growth: got %v", lost)
+	if lost := a - b; lost < 0 || lost > 10 {
+		t.Errorf("lost to growth: got %v", lost)
+	}
+	// The year's income stays under the standard deduction, so nothing is settled in April: the tax that month is the 15 April paycheck's.
+	bd, err = Breakdown(rec, "w", model.DefaultAssetID("chk"), d(2027, time.April, 1), d(2027, time.April, 30))
+	must(t, err)
+	if l := line(bd, CauseTax); !near(l.Projected, -1000*fica) {
+		t.Errorf("reconciliation: got %+v", l)
 	}
 }
 

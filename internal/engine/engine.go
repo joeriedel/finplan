@@ -7,8 +7,8 @@
 //
 // Each account is read back from real data up to its own start and extrapolated from there by
 // applying budget flows on their calendar dates and compounding growth over the exact time elapsed.
-// An asset's value is the sum of its accounts, resolved by the model's asset rules. Taxes, growth
-// and the lack of market classes are placeholders.
+// An asset's value is the sum of its accounts, resolved by the model's asset rules. Growth and the lack
+// of market classes are placeholders; taxes follow the rules package (see taxes.go).
 package engine
 
 import (
@@ -16,15 +16,6 @@ import (
 	"sort"
 
 	"github.com/joeriedel/finplan/internal/model"
-)
-
-// Placeholder tax rates; real tax rules are future work.
-const (
-	// PlaceholderIncomeTaxRate is withheld from every income flow.
-	PlaceholderIncomeTaxRate = 0.25
-	// PlaceholderWithdrawalTaxRate is charged, on top of the amount, to the tax-deferred account that
-	// a withdrawal leaves.
-	PlaceholderWithdrawalTaxRate = 0.32
 )
 
 // Status says how a sampled value was obtained.
@@ -64,6 +55,8 @@ type Diagnostics struct {
 	Skipped []Skipped
 	// Overlaps: members of assets under the target that were left out of the sums.
 	Overlaps []model.Overlap
+	// Notes are problems with the tax calculation: a year the rules cannot compute, or tax that cannot be reconciled for want of a checking account.
+	Notes []string
 }
 
 // BalanceResult answers Balances.
@@ -133,6 +126,7 @@ type run struct {
 	res   *model.Resolution
 	paths map[model.AccountID]*path
 	diag  Diagnostics
+	tax   *householdTax
 }
 
 func (r *run) eval(d model.Date) model.Evaluation {
@@ -364,6 +358,7 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 	}
 	// Every side of an item that touches a hypothetical account, or two record accounts, counts only the occurrences after the latest cutoff of the accounts it touches, wherever they sit relative to the target, so both sides of a transfer agree and no date is projected on one side while the other reads it from actual data.
 	cutoffs := map[string]model.Date{}
+	hyp := map[string]model.Date{}
 	outside := map[model.AccountID]*path{}
 	for _, it := range items {
 		cut := model.MinDate
@@ -387,6 +382,9 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 		}
 		if hypothetical || touched > 1 {
 			cutoffs[it.ID] = cut
+		}
+		if hypothetical {
+			hyp[it.ID] = cut
 		}
 	}
 	// Every equity account is planned, in or out of the target, since its vests pay into other accounts.
@@ -414,9 +412,36 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 			p.plan, p.rate = pl, model.Schedule{}
 		}
 	}
-	// An account whose data ends before a counterpart's receives the transfers the counterpart recorded with it in between, so a recorded transfer lands on both sides; the budget item takes over on both sides after the later end. Equity accounts are left out on either side, since their plans and recorded vests already book the vests and the deposits that pay for them.
+	// The tax of a year depends on the interest of the savings and checking accounts and lands on the reconciliation account, so their paths are built with the target's, wherever they sit.
+	ht := newHouseholdTax(rec, items, amounts, growths, infl, plans, hyp, &r.diag)
+	r.tax = ht
+	var all, savers []*path
+	seen := map[model.AccountID]bool{}
+	add := func(id model.AccountID) *path {
+		p := pathOf(id)
+		if !seen[id] {
+			seen[id] = true
+			p.ht = ht
+			all = append(all, p)
+		}
+		return p
+	}
 	for _, id := range res.Accounts {
-		p := r.paths[id]
+		add(id)
+	}
+	if horizon > model.MinDate {
+		for _, a := range rec.Accounts {
+			if a.Type == model.TypeSavings || a.Type == model.TypeChecking {
+				savers = append(savers, add(a.ID))
+			}
+		}
+		if id := rec.Household.Checking; id != "" && rec.Account(id) != nil {
+			add(id)
+		}
+	}
+	// An account whose data ends before a counterpart's receives the transfers the counterpart recorded with it in between, so a recorded transfer lands on both sides; the budget item takes over on both sides after the later end. Equity accounts are left out on either side, since their plans and recorded vests already book the vests and the deposits that pay for them.
+	for _, p := range all {
+		id := p.acct.ID
 		if p.plan != nil {
 			continue
 		}
@@ -436,8 +461,12 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 			}
 		}
 	}
-	for _, id := range res.Accounts {
-		r.paths[id].build(rec, items, cutoffs, amounts, growths, infl, horizon, plans)
+	for _, p := range all {
+		p.collect(rec, items, cutoffs, amounts, growths, infl, horizon, plans)
+		p.settle()
+	}
+	if horizon > model.MinDate {
+		ht.reconcile(all, savers, horizon)
 	}
 	return r, nil
 }
@@ -534,6 +563,10 @@ type path struct {
 	points  []point  // balance after each date with a flow, from start
 	// mirrored are the transfers other accounts recorded with this one as counter after this account's data ends.
 	mirrored []change
+	// ht is the household's tax, which withholds from the paychecks the path receives.
+	ht *householdTax
+	// idle is set when the query ends on or before start, so nothing is extrapolated.
+	idle bool
 }
 
 // Order of flows on one date (docs/design.md, "The engine"): income, grants, vests, expenses, then transfers
@@ -545,6 +578,7 @@ const (
 	rankVest
 	rankExpense
 	rankTransfer
+	rankTax
 )
 
 func (p *path) readBack(d model.Date) float64 {
@@ -593,9 +627,32 @@ func (p *path) growthAt(d model.Date) float64 {
 	return pt.cumGrowth + pt.bal*(p.rate.Compound(pt.date, d)-1)
 }
 
-func (p *path) build(rec *model.Record, items []model.BudgetItem, cutoffs map[string]model.Date, amounts, growths map[string]model.Schedule, infl model.Schedule, horizon model.Date, plans []*equityPlan) {
+// amountOn is the item's amount on d under the projection's amounts and raises: the schedule's value lifted by the raises and, if the item is indexed, by inflation. It reports false if the schedule has no value on d.
+func amountOn(rec *model.Record, it model.BudgetItem, d model.Date, amounts, growths map[string]model.Schedule, infl model.Schedule) (float64, bool) {
+	raises, ok := growths[it.ID]
+	if !ok {
+		raises = it.Growth
+	}
+	pays, ok := amounts[it.ID]
+	if !ok {
+		pays = it.Amount
+	}
+	amt, ok := pays.At(d)
+	if !ok {
+		return 0, false
+	}
+	amt *= raiseFactor(it, rec.Today, d, raises)
+	if it.Indexed {
+		amt *= infl.Compound(rec.Today, d)
+	}
+	return amt, true
+}
+
+// collect gathers the changes the budget, the equity plans and mirrored transfers make to the account up to the horizon.
+func (p *path) collect(rec *model.Record, items []model.BudgetItem, cutoffs map[string]model.Date, amounts, growths map[string]model.Schedule, infl model.Schedule, horizon model.Date, plans []*equityPlan) {
 	p.points = []point{{date: p.start, bal: p.startVal}}
-	if horizon <= p.start {
+	p.idle = horizon <= p.start
+	if p.idle {
 		return
 	}
 	for _, it := range items {
@@ -619,24 +676,10 @@ func (p *path) build(rec *model.Record, items []model.BudgetItem, cutoffs map[st
 				upTo = min(upTo, *a.Closed)
 			}
 		}
-		raises, ok := growths[it.ID]
-		if !ok {
-			raises = it.Growth
-		}
-		pays, ok := amounts[it.ID]
-		if !ok {
-			pays = it.Amount
-		}
 		for _, d := range it.Dates(after, upTo) {
-			amt, ok := pays.At(d)
-			if !ok {
-				continue
+			if amt, ok := amountOn(rec, it, d, amounts, growths, infl); ok {
+				p.flows(rec, it, d, amt)
 			}
-			amt *= raiseFactor(it, rec.Today, d, raises)
-			if it.Indexed {
-				amt *= infl.Compound(rec.Today, d)
-			}
-			p.flows(rec, it, d, amt)
 		}
 	}
 	p.changes = append(p.changes, p.mirrored...)
@@ -645,6 +688,14 @@ func (p *path) build(rec *model.Record, items []model.BudgetItem, cutoffs map[st
 	}
 	for _, pl := range plans {
 		p.changes = append(p.changes, pl.deposits(p.acct.ID, p.flowsAfter)...)
+	}
+}
+
+// settle orders the changes and works out the balance after each date with one.
+func (p *path) settle() {
+	p.points = []point{{date: p.start, bal: p.startVal}}
+	if p.idle {
+		return
 	}
 	sort.SliceStable(p.changes, func(i, j int) bool {
 		a, b := p.changes[i], p.changes[j]
@@ -677,16 +728,15 @@ func (p *path) flows(rec *model.Record, it model.BudgetItem, d model.Date, amt f
 	switch it.Kind {
 	case model.ItemIncome:
 		add(rankIncome, CauseIncome, amt, "")
-		add(rankIncome, CauseTax, -amt*PlaceholderIncomeTaxRate, "")
+		if it.Income() == model.IncomeWages {
+			add(rankIncome, CauseTax, -p.ht.paycheckTax(it.ID, d), "")
+		}
 	case model.ItemExpense:
 		add(rankExpense, CauseExpense, -amt, "")
 	case model.ItemTransfer:
 		cause := transferCause(rec, it.From, it.To)
 		if it.From == p.acct.ID {
 			add(rankTransfer, cause, -amt, it.To)
-			if cause == CauseWithdrawal && p.acct.Tax == model.TaxDeferred {
-				add(rankTransfer, CauseTax, -amt*PlaceholderWithdrawalTaxRate, "")
-			}
 		}
 		if it.To == p.acct.ID {
 			add(rankTransfer, cause, amt, it.From)

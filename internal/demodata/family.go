@@ -62,9 +62,6 @@ const (
 	ProjAcmeGrants = "Acme yearly grants"
 )
 
-// netPay is the share of gross pay that lands in an account, matching the engine's placeholder tax.
-const netPay = 0.75
-
 var (
 	historyOpen = model.D(2024, time.October, 31)
 	tspEnd      = model.D(2026, time.June, 30)
@@ -259,7 +256,7 @@ func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
 			t := model.Transaction{Date: d, Memo: it.Name}
 			switch {
 			case it.Kind == model.ItemIncome:
-				t.Kind, t.Amount = model.TxIncome, amount*netPay
+				t.Kind, t.Amount = model.TxIncome, amount*netPay(rec, d)
 			case it.Kind == model.ItemExpense:
 				t.Kind, t.Amount = model.TxExpense, -amount
 			case it.From == a.ID:
@@ -281,6 +278,30 @@ func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
 		a.AddSnapshot(next, bal)
 		prev = next
 	}
+}
+
+// netPay is the share of gross pay that lands in an account on d: what remains after the year's tax on the budget's wages and 401k and TSP contributions, as the engine withholds it through the year.
+func netPay(rec *model.Record, d model.Date) float64 {
+	year, _, _ := d.YMD()
+	var earner tax.Earner
+	for _, it := range rec.Budget.Items {
+		for _, day := range it.Dates(model.D(year, time.January, 1).Add(-1), model.D(year, time.December, 31)) {
+			amount, ok := it.Amount.At(day)
+			switch {
+			case !ok:
+			case it.Kind == model.ItemIncome:
+				earner.Wages += amount
+			case it.To == K401 || it.To == TSP:
+				earner.K401 += amount
+			}
+		}
+	}
+	res, err := tax.Compute(rec.Tax, tax.Input{
+		Year: year, Status: rec.Household.Filing, State: rec.Household.State,
+		Earners: []tax.Earner{earner}, DependentAges: rec.Household.DependentAges(year), Inflation: 0.025,
+	})
+	must(err)
+	return 1 - res.Total/earner.Wages
 }
 
 func sumAmounts(ts []model.Transaction) float64 {

@@ -22,7 +22,7 @@ const (
 	dateNote  = "YYYY-MM-DD, or YYYY-MM for the first day of the month"
 	endNote   = "YYYY-MM-DD, or YYYY-MM for the last day of the month"
 	projDesc  = "projection to evaluate under, whose own accounts and those it inherits can be targets; reality when omitted"
-	diagShape = "diagnostics {skipped: [{projection, index, target: {kind, id}, property, reason}], overlaps: [{asset, seq, member, duplicates, against}]}"
+	diagShape = "diagnostics {skipped: [{projection, index, target: {kind, id}, property, reason}], overlaps: [{asset, seq, member, duplicates, against}], notes: [problems with the tax calculation]}"
 	jsonNote  = "Dates are YYYY-MM-DD, null when absent or unbounded. Money is a plain number. Statuses are lowercase: default, actual, projected, partly_projected."
 )
 
@@ -690,6 +690,7 @@ func projectionJSON(rec *model.Record, p *model.Projection) any {
 type jdiagnostics struct {
 	Skipped  []jskipped   `json:"skipped"`
 	Overlaps []joverlapOf `json:"overlaps"`
+	Notes    []string     `json:"notes"`
 }
 
 type jskipped struct {
@@ -709,7 +710,7 @@ type joverlapOf struct {
 }
 
 func diagnosticsJSON(d engine.Diagnostics) jdiagnostics {
-	out := jdiagnostics{Skipped: []jskipped{}, Overlaps: []joverlapOf{}}
+	out := jdiagnostics{Skipped: []jskipped{}, Overlaps: []joverlapOf{}, Notes: []string{}}
 	for _, s := range d.Skipped {
 		js := jskipped{Projection: s.Projection, Index: s.Index, Property: s.Property, Reason: s.Reason}
 		js.Target.Kind, js.Target.ID = string(s.Target.Kind), s.Target.ID
@@ -718,6 +719,7 @@ func diagnosticsJSON(d engine.Diagnostics) jdiagnostics {
 	for _, o := range d.Overlaps {
 		out.Overlaps = append(out.Overlaps, joverlapOf{string(o.Asset), overlapJSON(o)})
 	}
+	out.Notes = append(out.Notes, d.Notes...)
 	return out
 }
 

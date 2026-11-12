@@ -2,7 +2,7 @@
 
 finplan is a personal financial planner for one user. It is a Linux desktop app written in Go, drawing its UI with Dear ImGui and ImPlot (via cimgui-go) on SDL3, as a native Wayland client. It shows a tabbed application shell with working Graph, Projections, Assets, Accounts and Budget tabs over the record in its database (an invented family record with `--demo`); the other tabs are placeholders. The UI uses a dark theme and the bundled Inter font.
 
-The data model, projection engine and planned features are described in [docs/design.md](docs/design.md). The model and a placeholder engine exist as standalone Go packages, `internal/model` and `internal/engine` and the Graph tab draws from them. A storage layer, `internal/store`, saves and loads the record to SQLite, and the app uses it.
+The data model, projection engine and planned features are described in [docs/design.md](docs/design.md). The model and a projection engine, which withholds, computes and reconciles taxes with the rules package, exist as standalone Go packages, `internal/model` and `internal/engine` and the Graph tab draws from them. A storage layer, `internal/store`, saves and loads the record to SQLite, and the app uses it.
 
 ## Prerequisites
 
@@ -86,7 +86,7 @@ Read commands:
 | `projection list` | projections: name, parent, start, override history, modification count |
 | `projection show <name>` | a projection's settings, per-asset settings, the hypothetical accounts it defines (`accounts`: id, name, type, tax, stated_rate, opening, from; not the inherited ones) and modifications in the order they apply (each with `missing`, and `missing_target` naming a target that no longer exists) |
 | `balance <target> --from D --to D [--step day\|week\|month\|year] [--projection P]` | samples of date, value and status, plus diagnostics; `--step` defaults to `month` |
-| `breakdown <target> --from D --to D [--projection P]` | start and end values, total, and lines of cause with actual and projected parts, plus diagnostics |
+| `breakdown <target> --from D --to D [--projection P]` | start and end values, total, and lines of cause with actual and projected parts, plus diagnostics (`skipped`, `overlaps` and `notes`, the problems with the tax calculation) |
 | `starts [--projection P] [<target>]` | where each account switches from recorded data to projection; every account when no target is given |
 | `help [--json]` | the command reference |
 
@@ -157,6 +157,7 @@ Write commands (see below):
 | `tax table show [--year Y [--state NAME]]` | (read) without flags which tables exist; with `--year` the federal table of that year, with `--state` too a state table |
 | `tax table set [--json-file F]` | replace or add a tax table from JSON (stdin or the file); a body with `name` is a state table and a new name adds a state; the table is validated |
 | `tax table revert --year Y [--state NAME]` | restore the shipped table; refused with `not_found` for a table the program does not ship |
+| `tax year <year> [--projection P]` | (read) the household's tax for a calendar year as the engine books it: `inputs` (wages, vest_wages, pre_tax, ordinary_income, interest, early_withdrawal, dependent_ages, contrib_529), `tax` by kind, `withheld` (paychecks, vests, total), `due_minus_withheld` and `reconciliation` (date, account, amount: positive paid, negative refunded), plus diagnostics |
 | `tax compute [--year Y] [--wages W1,W2] [--k401 ...] [--ira ...] [--hsa ...] [--other-income N] [--net-investment-income N] [--early-withdrawal N] [--contrib-529 A,B] [--inflation F]` | (read) compute the household's tax for a year from the tax tables, its filing status, dependents and state and the amounts given (comma lists are per earner, in the order of `--wages`) |
 | `budget end <item> <date>` | set the base item's last date |
 | `budget delete <item>` | delete a base budget item; a projection's modification of it is kept but points at nothing, so the engine skips it and `projection show` marks it `missing` |

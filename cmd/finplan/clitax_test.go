@@ -299,3 +299,73 @@ func TestCLITaxComputeEarners(t *testing.T) {
 	nearTo(t, "agi", c.AGI, 300000-2*23500-7000)
 	cliFail(t, exitUsage, "--db", path, "tax", "compute", "--wages", "1,x")
 }
+
+type ttaxYear struct {
+	Year   int
+	Inputs struct {
+		Wages         float64
+		VestWages     float64                          `json:"vest_wages"`
+		PreTax        struct{ K401, IRA, HSA float64 } `json:"pre_tax"`
+		Ordinary      float64                          `json:"ordinary_income"`
+		Early         float64                          `json:"early_withdrawal"`
+		DependentAges []int                            `json:"dependent_ages"`
+		Contrib529    []float64                        `json:"contrib_529"`
+	}
+	Tax struct {
+		Penalty float64 `json:"early_withdrawal_penalty"`
+		Total   float64
+	}
+	Withheld       struct{ Paychecks, Vests, Total float64 }
+	Due            float64 `json:"due_minus_withheld"`
+	Reconciliation struct {
+		Date    string
+		Account *string
+		Amount  float64
+	}
+}
+
+// tax year reports the inputs, the tax, the withholding and the April settlement of a year, and agrees with the breakdown: its tax line for 2027 is the reconciliation of 2026 plus 2027's withholding.
+func TestCLITaxYearMatchesBreakdown(t *testing.T) {
+	var y26, y27 ttaxYear
+	cliJSON(t, &y26, "--demo", "tax", "year", "2026", "--projection", "Base")
+	cliJSON(t, &y27, "--demo", "tax", "year", "2027", "--projection", "Base")
+	if y27.Year != 2027 || y27.Inputs.Wages < 200000 || y27.Inputs.VestWages <= 0 || y27.Inputs.PreTax.K401 < 20000 || len(y27.Inputs.DependentAges) != 4 || len(y27.Inputs.Contrib529) != 3 {
+		t.Fatalf("2027 inputs = %+v", y27.Inputs)
+	}
+	if y27.Reconciliation.Date != "2028-04-15" || y27.Reconciliation.Account == nil || *y27.Reconciliation.Account != "checking" {
+		t.Errorf("reconciliation = %+v", y27.Reconciliation)
+	}
+	nearTo(t, "withheld total", y27.Withheld.Total, y27.Withheld.Paychecks+y27.Withheld.Vests)
+	if math.Abs(y27.Due-(y27.Tax.Total-y27.Withheld.Total)) > 0.02 || y27.Reconciliation.Amount != y27.Due {
+		t.Errorf("due %v, tax %v, withheld %v, reconciliation %v", y27.Due, y27.Tax.Total, y27.Withheld.Total, y27.Reconciliation.Amount)
+	}
+	var bd struct {
+		Lines []struct {
+			Cause             string
+			Actual, Projected float64
+		}
+	}
+	cliJSON(t, &bd, "--demo", "breakdown", "net-worth", "--from", "2026-12-31", "--to", "2027-12-31", "--projection", "Base")
+	var got float64
+	for _, l := range bd.Lines {
+		if l.Cause == "tax" {
+			got = l.Actual + l.Projected
+		}
+	}
+	if want := -(y26.Reconciliation.Amount + y27.Withheld.Total); math.Abs(got-want) > 0.05 {
+		t.Errorf("breakdown tax %v, want 2026 reconciliation %v plus 2027 withholding %v = %v", got, y26.Reconciliation.Amount, y27.Withheld.Total, want)
+	}
+}
+
+func TestCLITaxYearEarlyWithdrawalAndErrors(t *testing.T) {
+	var w ttaxYear
+	cliJSON(t, &w, "--demo", "tax", "year", "2027", "--projection", "Withdraw $100k")
+	if w.Inputs.Early != 100000 || w.Tax.Penalty != 10000 || w.Due <= 30000 {
+		t.Errorf("withdrawal year = %+v", w)
+	}
+	cliFail(t, exitUsage, "--demo", "tax", "year", "soon")
+	cliFail(t, exitUsage, "--demo", "tax", "year")
+	if code, _ := cliFail(t, exitFailure, "--demo", "tax", "year", "2027", "--projection", "nope"); code != "not_found" {
+		t.Errorf("unknown projection: code %q", code)
+	}
+}

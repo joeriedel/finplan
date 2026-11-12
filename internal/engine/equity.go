@@ -122,6 +122,7 @@ type equityEvent struct {
 // equityPlan is what an equity account holds from its path's start and what happens to it after: the unvested shares per stock, and the grants and unrecorded vests to come, grants before vests on one date.
 type equityPlan struct {
 	account model.AccountID
+	start   model.Date
 	prices  *stockPrices
 	held    map[priceKey]int
 	events  []equityEvent
@@ -129,7 +130,7 @@ type equityPlan struct {
 
 // newEquityPlan plans the account from start up to horizon. Its real grants dated after start and the focal grants dated after start (generated up to horizon, shares from the projected price on their dates) add their shares on their dates; every planned vest that no recorded vest dated on or before start fulfils happens on its date, or on the day after start if that date is not after start. A grant's vests never vest more than its shares that are left.
 func newEquityPlan(rec *model.Record, a *model.Account, start, horizon model.Date, prices *stockPrices, focal []model.FocalGrant) *equityPlan {
-	pl := &equityPlan{account: a.ID, prices: prices, held: map[priceKey]int{}}
+	pl := &equityPlan{account: a.ID, start: start, prices: prices, held: map[priceKey]int{}}
 	grants := slices.Clone(a.Grants)
 	var keys []priceKey
 	for i := range grants {
