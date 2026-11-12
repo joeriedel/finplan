@@ -185,6 +185,9 @@ type acctTab struct {
 	// eq is the state of the equity sections of an equity account.
 	eq equityUI
 
+	// scrollHousehold scrolls the household editor into view the next time it is drawn.
+	scrollHousehold bool
+
 	// ledger says whether the ledger panel is folded out to the right of the detail.
 	ledger  bool
 	closeOn string

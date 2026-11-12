@@ -67,9 +67,27 @@ func taxViewOf(rec *model.Record, projection string, year int) taxView {
 	v := taxView{Rows: taxRows(rec, ty)}
 	v.Notes = append(v.Notes, ty.Notes...)
 	for _, s := range ty.Skipped {
-		v.Notes = append(v.Notes, fmt.Sprintf("skipped modification: %v", s))
+		v.Notes = append(v.Notes, skippedSentence(s))
 	}
 	return v
+}
+
+// skippedSentence describes a modification the engine did not apply.
+func skippedSentence(s engine.Skipped) string {
+	return fmt.Sprintf("Modification %d of %s was skipped: %s %s %s: %s", s.Index+1, s.Projection, s.Target.Kind, s.Target.ID, s.Property, s.Reason)
+}
+
+// showHousehold selects the Accounts tab and scrolls its household editor into view.
+func (a *app) showHousehold() {
+	a.forceTab = "Accounts"
+	a.accts.scrollHousehold = true
+}
+
+// renameProjection makes the selection follow its projection to a new name.
+func (s *taxState) renameProjection(from, to string) {
+	if s.chosen && s.projection == from {
+		s.projection = to
+	}
 }
 
 // taxRows lists the year's figures in the order the CLI's tax year command reports them. Pre-tax deductions are what the tax rules deducted after the contribution limits, so they can be less than the contributions.

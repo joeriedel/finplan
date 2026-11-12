@@ -9,6 +9,8 @@ import (
 
 	"github.com/joeriedel/finplan/internal/demodata"
 	"github.com/joeriedel/finplan/internal/engine"
+	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/ops"
 )
 
 func taxRowValue(t *testing.T, v taxView, label string) string {
@@ -97,5 +99,44 @@ func TestTaxViewReportsProblems(t *testing.T) {
 	v := taxViewOf(a.rec, "no such projection", 2026)
 	if v.Err == "" || strings.Contains(v.Err, "panic") {
 		t.Errorf("error %q", v.Err)
+	}
+}
+
+func TestSkippedSentenceIsReadable(t *testing.T) {
+	s := engine.Skipped{Projection: "Base", Index: 1, Target: model.ObjectRef{Kind: "budget_item", ID: "401k"}, Property: "amount", Reason: "budget item not found"}
+	got := skippedSentence(s)
+	for _, w := range []string{"Modification 2", "Base", "401k", "amount", "budget item not found"} {
+		if !strings.Contains(got, w) {
+			t.Errorf("%q lacks %q", got, w)
+		}
+	}
+	if strings.Contains(got, "{") {
+		t.Errorf("raw struct in %q", got)
+	}
+}
+
+func TestHouseholdButtonTargetsEditor(t *testing.T) {
+	a := demoApp(t)
+	a.showHousehold()
+	if a.forceTab != "Accounts" || !a.accts.scrollHousehold {
+		t.Fatal("flags not set")
+	}
+}
+
+func TestTaxSelectionFollowsProjectionRename(t *testing.T) {
+	a := demoApp(t)
+	a.budget.tax.view(a.rec)
+	if a.budget.tax.projection != a.rec.Projections[0].Name {
+		t.Fatalf("selected %q", a.budget.tax.projection)
+	}
+	from := a.rec.Projections[0].Name
+	if !a.edit("rename projection", func() (*ops.Result, error) {
+		return ops.RenameProjection(a.st, a.rec, from, "Renamed", ops.Options{})
+	}) {
+		t.Fatal("rename failed")
+	}
+	a.budget.tax.view(a.rec)
+	if got := a.budget.tax.projection; got != "Renamed" {
+		t.Errorf("selection after rename: %q", got)
 	}
 }

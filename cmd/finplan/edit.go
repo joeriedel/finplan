@@ -156,6 +156,7 @@ func (a *app) install(res *ops.Result) {
 	a.rec = res.Record
 	if r := res.Rename; r != nil {
 		a.graph.renameProjection(r.From, r.To, res.Rewritten)
+		a.budget.tax.renameProjection(r.From, r.To)
 	}
 	for _, w := range res.Warnings {
 		a.notify(fmt.Sprintf("Could not save %v", w))

@@ -133,6 +133,10 @@ func (t *acctTab) household() {
 	em := imgui.FontSize()
 	imgui.Spacing()
 	imgui.SeparatorText("Household")
+	if t.scrollHousehold {
+		t.scrollHousehold = false
+		imgui.SetScrollHereYV(0)
+	}
 	wrappedText("Who is on the tax return and how they file. The filing status, the dependents and the state table decide the household's tax.")
 
 	t.label("Filing status")
