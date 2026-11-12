@@ -38,6 +38,7 @@ var (
 	ColorRetirement = RGB(0xC678DD)
 	ColorTSP        = RGB(0xE5C07B)
 	ColorSavings    = RGB(0x56B6C2)
+	ColorEquity     = RGB(0xF08A4B)
 	ColorTotal      = RGB(0xD8DEE9)
 )
 
@@ -52,6 +53,7 @@ const (
 	kindBrokerage
 	kindRetirement
 	kindTSP
+	kindEquity
 )
 
 func kindOf(t model.AccountType) kind {
@@ -68,8 +70,10 @@ func kindOf(t model.AccountType) kind {
 		return kindRetirement
 	case model.TypeTSP:
 		return kindTSP
+	case model.TypeEquity:
+		return kindEquity
 	}
-	return kindOther // equity and property
+	return kindOther // property
 }
 
 func (k kind) color() Color {
@@ -86,12 +90,14 @@ func (k kind) color() Color {
 		return ColorRetirement
 	case kindTSP:
 		return ColorTSP
+	case kindEquity:
+		return ColorEquity
 	}
 	return ColorTotal
 }
 
 // TypeColor returns the series colour of an account type. Checking is cash, savings and 529 share teal,
-// credit cards and loans are debt, IRAs, 401k and HSAs are retirement, and equity and property use the totals colour.
+// credit cards and loans are debt, IRAs, 401k and HSAs are retirement, equity has its own colour, and property uses the totals colour.
 func TypeColor(t model.AccountType) Color { return kindOf(t).color() }
 
 // AssetColor returns the series colour of an asset: its account type's colour for a single account, and

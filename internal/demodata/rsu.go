@@ -39,14 +39,14 @@ var otherPrices = []struct {
 	{model.D(2026, time.November, 6), 233.10},
 }
 
-// familyRSU builds the employer's calendar (the third Monday of March, June and September and the second Monday of December) and two grants of ids 1 and 2 with their recorded vests: ids from 3 in order of grant and planned vest, then the prices, which are stored as the facts of those ids. The vests' TxEntry is set by addTo.
+// familyRSU builds the employer's calendar (the third Monday of March, June and September and the second Monday of December, with the last vest of 2028 moved a day) and two grants of ids 1 and 2 with their recorded vests: ids from 3 in order of grant and planned vest, then the prices, which are stored as the facts of those ids. The vests' TxEntry is set by addTo.
 func familyRSU() *rsuData {
 	d := &rsuData{calendar: &model.VestCalendar{Name: CalendarName, Rules: []model.VestRule{
 		{Month: time.March, Nth: 3, Weekday: time.Monday},
 		{Month: time.June, Nth: 3, Weekday: time.Monday},
 		{Month: time.September, Nth: 3, Weekday: time.Monday},
 		{Month: time.December, Nth: 2, Weekday: time.Monday},
-	}}}
+	}, Overrides: []model.DateOverride{{From: model.D(2028, time.December, 11), To: model.D(2028, time.December, 12)}}}}
 	specs := []struct {
 		date, first model.Date
 		value, px   float64

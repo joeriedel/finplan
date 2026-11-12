@@ -139,6 +139,22 @@ func TestNewAccountFormProblems(t *testing.T) {
 	}
 }
 
+func TestNewAccountFormEquityHasNoRate(t *testing.T) {
+	a := demoApp(t)
+	f := newAcctForm{name: "Beta RSUs", typ: model.TypeEquity, tax: model.Taxable, rate: "lots"}
+	if p := newAcctProblem(a.st, a.rec, f); p != "" {
+		t.Errorf("an equity account is added without a rate: %q", p)
+	}
+	acct, err := f.account()
+	if err != nil || acct.StatedRate != 0 {
+		t.Errorf("form: %+v, %v", acct, err)
+	}
+	f.typ = model.TypeSavings
+	if p := newAcctProblem(a.st, a.rec, f); !strings.Contains(p, "not a number") {
+		t.Errorf("another type still reads the rate: %q", p)
+	}
+}
+
 func TestAddAccountThenFirstBalanceThenGraph(t *testing.T) {
 	a := demoApp(t)
 	f := newAcctForm{name: "TSP Two", typ: model.TypeTSP, tax: model.TaxDeferred, rate: "5"}

@@ -15,7 +15,7 @@ func TestUntouchedForms(t *testing.T) {
 	if !allBlank() || !allBlank("", "  ") || allBlank("", "x") {
 		t.Error("allBlank wrong")
 	}
-	if !(newAcctForm{}).untouched() || (newAcctForm{name: "x"}).untouched() || (newAcctForm{rate: "3"}).untouched() {
+	if !(newAcctForm{}).untouched() || (newAcctForm{name: "x"}).untouched() || (newAcctForm{rate: "3"}).untouched() || !(newAcctForm{typ: model.TypeEquity, rate: "3"}).untouched() {
 		t.Error("newAcctForm.untouched wrong")
 	}
 	if !(entryDraft{kind: model.TxKind("x")}).untouched() || (entryDraft{amount: "5"}).untouched() || (entryDraft{memo: "m"}).untouched() {

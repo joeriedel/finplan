@@ -311,9 +311,9 @@ func TestEditCalendarRegeneratesAndUndoes(t *testing.T) {
 	from, to := a.rec.Today, a.rec.Today.Add(3*366)
 	cal := a.rec.Calendar("Test vests")
 	d = draftOfCalendar(cal)
-	before, err := calendarDates(*cal, from, to)
-	if err != nil || len(before) < 3 || before[0].Generated.String()[8:] != "15" {
-		t.Fatalf("dates %+v %v", before, err)
+	before := cal.Dates(from, to)
+	if len(before) < 3 || before[0].String()[8:] != "15" {
+		t.Fatalf("dates %v", before)
 	}
 	orig := a.rec
 
@@ -327,9 +327,9 @@ func TestEditCalendarRegeneratesAndUndoes(t *testing.T) {
 	}) {
 		t.Fatal("not edited")
 	}
-	after, err := calendarDates(*a.rec.Calendar("Test vests"), from, to)
-	if err != nil || after[0].Generated.String()[8:] != "20" || after[0].Generated == before[0].Generated {
-		t.Fatalf("regenerated %+v %v", after, err)
+	after := a.rec.Calendar("Test vests").Dates(from, to)
+	if after[0].String()[8:] != "20" || after[0] == before[0] {
+		t.Fatalf("regenerated %v", after)
 	}
 
 	a.undo()
@@ -344,12 +344,11 @@ func TestEditCalendarRegeneratesAndUndoes(t *testing.T) {
 	// An override moves one generated date; a rule change drops overrides of dates it no longer generates.
 	demo := a.rec.Calendar(demodata.CalendarName)
 	dd := draftOfCalendar(demo)
-	dates, _ := calendarDates(*demo, from, to)
-	dd.over[dates[0].Generated] = dates[0].Generated.Add(1).String()
+	gen := demo.Dates(from, to)[0]
+	dd.overrides = moveOverride(dd.overrides, gen, gen.Add(1))
 	oc, _ := dd.calendar()
-	moved, err := calendarDates(oc, from, to)
-	if err != nil || moved[0].Used != dates[0].Generated.Add(1) || moved[0].Generated != dates[0].Generated {
-		t.Errorf("override %+v %v", moved, err)
+	if moved := oc.Dates(from, to)[0]; moved != gen.Add(1) {
+		t.Errorf("override moved %v to %v", gen, moved)
 	}
 	dd.rules[0] = ruleDraft{month: time.March, kind: ruleFixed, day: "31"}
 	if _, err := dd.calendar(); err != nil {
@@ -357,6 +356,107 @@ func TestEditCalendarRegeneratesAndUndoes(t *testing.T) {
 	}
 	if p := calendarProblem(a.st, a.rec, dd); p == "" {
 		t.Error("a rule that leaves the grants' first vests off the calendar is refused")
+	}
+}
+
+func TestRuleHint(t *testing.T) {
+	today := model.D(2026, time.November, 11)
+	for _, c := range []struct {
+		d    ruleDraft
+		want string
+	}{
+		{ruleDraft{month: time.March, kind: 3, weekday: time.Monday}, "3rd Monday \u00b7 next: 2027-03-15"},
+		{ruleDraft{month: time.December, kind: 2, weekday: time.Monday}, "2nd Monday \u00b7 next: 2026-12-14"},
+		{ruleDraft{month: time.November, kind: ruleFixed, day: "11"}, "day 11 \u00b7 next: 2026-11-11"},
+		{ruleDraft{month: time.November, kind: ruleFixed, day: "10"}, "day 10 \u00b7 next: 2027-11-10"},
+		{ruleDraft{month: time.February, kind: ruleLast, weekday: time.Friday}, "last Friday \u00b7 next: 2027-02-26"},
+		{ruleDraft{month: time.June, kind: ruleFixed, day: "31"}, ""},
+		{ruleDraft{month: time.June, kind: ruleFixed}, ""},
+	} {
+		if got := ruleHint(c.d, today); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.d, got, c.want)
+		}
+	}
+}
+
+func TestMoveAndRemoveOverride(t *testing.T) {
+	d1, d2 := model.D(2027, time.March, 15), model.D(2027, time.June, 21)
+	moved := moveOverride(nil, d2, d2.Add(1))
+	moved = moveOverride(moved, d1, d1.Add(2))
+	if want := []model.DateOverride{{From: d1, To: d1.Add(2)}, {From: d2, To: d2.Add(1)}}; !reflect.DeepEqual(moved, want) {
+		t.Fatalf("moved %v, want %v", moved, want)
+	}
+	// A date that is already an override's target updates that override rather than chaining a second one.
+	again := moveOverride(moved, d1.Add(2), d1.Add(5))
+	if want := []model.DateOverride{{From: d1, To: d1.Add(5)}, {From: d2, To: d2.Add(1)}}; !reflect.DeepEqual(again, want) {
+		t.Errorf("updated %v, want %v", again, want)
+	}
+	// Moving back to the generated date removes the override.
+	back := moveOverride(again, d1.Add(5), d1)
+	if want := []model.DateOverride{{From: d2, To: d2.Add(1)}}; !reflect.DeepEqual(back, want) {
+		t.Errorf("moved back %v, want %v", back, want)
+	}
+	if got := removeOverride(moved, d2); !reflect.DeepEqual(got, []model.DateOverride{{From: d1, To: d1.Add(2)}}) || len(moved) != 2 {
+		t.Errorf("removed %v from %v", got, moved)
+	}
+}
+
+func TestMoveVestDate(t *testing.T) {
+	a := demoApp(t)
+	g := &a.rec.Account(demodata.Equity).Grants[0]
+	_, rows, err := ops.GrantSchedule(a.rec, g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row ops.ScheduleRow
+	for _, r := range rows {
+		if r.Vest == nil {
+			row = r
+			break
+		}
+	}
+	f := moveForm{grant: g.ID, planned: row.Index, from: row.Date}
+	if !f.untouched() || moveProblem(a.st, a.rec, g, f) == "" {
+		t.Fatal("a blank form is untouched and cannot be saved")
+	}
+	f.to = "soon"
+	if moveProblem(a.st, a.rec, g, f) == "" {
+		t.Error("a date that does not parse is refused")
+	}
+	f.to = row.Date.String()
+	if p := moveProblem(a.st, a.rec, g, f); p != noChangeText {
+		t.Errorf("moving to its own date: %q", p)
+	}
+	f.to = row.Date.Add(1).String()
+	if p := moveProblem(a.st, a.rec, g, f); p != "" {
+		t.Fatal(p)
+	}
+	cal := a.rec.Calendar(g.Calendar)
+	if !a.edit("move vest date", func() (*ops.Result, error) {
+		return ops.EditCalendar(a.st, a.rec, cal.Name, cal.Rules, moveOverride(cal.Overrides, f.from, row.Date.Add(1)), ops.Options{})
+	}) {
+		t.Fatal("not moved")
+	}
+	if !a.rec.Calendar(g.Calendar).Has(row.Date.Add(1)) || a.rec.Calendar(g.Calendar).Has(row.Date) {
+		t.Error("the vest did not move")
+	}
+}
+
+func TestGrantDraftUntouched(t *testing.T) {
+	a := demoApp(t)
+	g := &a.rec.Account(demodata.Equity).Grants[0]
+	d := draftOfGrant(g)
+	if !d.untouched(g) {
+		t.Error("the draft of the grant is untouched")
+	}
+	d.note = "typo"
+	if d.untouched(g) {
+		t.Error("a note touches the form")
+	}
+	d = draftOfGrant(g)
+	d.price += "1"
+	if d.untouched(g) {
+		t.Error("a changed price touches the form")
 	}
 }
 

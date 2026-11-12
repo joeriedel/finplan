@@ -86,6 +86,8 @@ func TestScreenshotSmoke(t *testing.T) {
 		{"equity-schedule", "Accounts", "Acme RSUs", "equity-schedule"},
 		{"equity-vest", "Accounts", "Acme RSUs", "equity-vest"},
 		{"equity-tie", "Accounts", "Acme RSUs", "equity-tie"},
+		{"equity-move", "Accounts", "Acme RSUs", "equity-move"},
+		{"equity-correct", "Accounts", "Acme RSUs", "equity-correct"},
 		{"equity-prices", "Accounts", "Acme RSUs", "equity-prices"},
 		{"equity-calendar", "Accounts", "Acme RSUs", "equity-calendar"},
 	}

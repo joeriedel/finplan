@@ -37,9 +37,12 @@ func (f *newAcctForm) set(field, text string) {
 	}
 }
 
-// account reads the form. A blank rate is 0; the rate is a percentage.
+// account reads the form. A blank rate is 0; the rate is a percentage. An equity account has no rate, so the form's rate is ignored for it.
 func (f newAcctForm) account() (model.Account, error) {
 	a := model.Account{Name: strings.TrimSpace(f.name), Type: f.typ, Tax: f.tax}
+	if f.typ == model.TypeEquity {
+		return a, nil
+	}
 	var err error
 	a.StatedRate, err = acctRate(f.rate)
 	return a, err
@@ -204,7 +207,7 @@ func (t *acctTab) draw() {
 		t.sel = ""
 	}
 	acct := a.rec.Account(t.sel)
-	showLedger := t.ledger && acct != nil
+	showLedger := t.ledger && acct != nil && acct.Type != model.TypeEquity
 	em := imgui.FontSize()
 	listWidth, detailWidth := em*40, float32(0)
 	if showLedger {
@@ -426,16 +429,17 @@ func (t *acctTab) detail(acct *model.Account) {
 	if k := pick("tax", taxName(acct.Tax), em*16, taxLabels, slices.Index(taxTreatments, string(acct.Tax))); k >= 0 {
 		t.editAttr(id, "tax", taxTreatments[k])
 	}
+	if acct.Type == model.TypeEquity {
+		t.equity(acct)
+		t.lifecycle(acct)
+		return
+	}
 	t.label("Rate per year")
 	if s, done := t.field(string(id)+"rate", "percent, e.g. 3", formatValue(model.PropGrowth, model.ModeSet, acct.StatedRate), em*8); done {
 		t.editAttr(id, "rate", s)
 	}
 
-	if acct.Type == model.TypeEquity {
-		t.equity(acct)
-	} else {
-		t.snapshots(acct)
-	}
+	t.snapshots(acct)
 	t.entries(acct)
 	t.defaults(acct)
 	t.lifecycle(acct)
@@ -614,7 +618,9 @@ func (t *acctTab) addForm() {
 	choose("type", "type", string(f.typ), accountTypeName(f.typ), accountTypes, accountTypeLabels)
 	sameLine()
 	choose("tax", "tax", string(f.tax), taxName(f.tax), taxTreatments, taxLabels)
-	input("rate", "rate per year", "percent, e.g. 3", f.rate, em*6)
+	if f.typ != model.TypeEquity {
+		input("rate", "rate per year", "percent, e.g. 3", f.rate, em*6)
+	}
 	formButton("Add", t.addCheck.get(problemKey(t.a.rec, "", *f), func() string { return newAcctProblem(t.a.st, t.a.rec, *f) }), f.untouched(), func() {
 		acct, _ := f.account()
 		var added model.AccountID

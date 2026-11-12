@@ -35,11 +35,13 @@ type equityUI struct {
 	schedErr error
 	pct      []string
 	draft    grantDraft
-	problems [6]problemCache
+	problems [7]problemCache
 	// grantCheck and priceCheck keep the problems of the Add grant and Add price forms.
 	grantCheck, priceCheck problemCache
 
-	vest    *vestForm
+	vest *vestForm
+	// move is the Move date form of a planned vest.
+	move    *moveForm
 	selVest int64
 	vdraft  vestDraft
 	// deposits are the unmatched deposits the tie picker lists, read for depKey.
@@ -471,7 +473,7 @@ func (t *acctTab) grantsSection(acct *model.Account) {
 	u.scrollHere("grants")
 	if u.sel != 0 {
 		if g, _ := a.rec.Grant(u.sel); g == nil || g.Account != acct.ID {
-			u.sel, u.vest, u.selVest = 0, nil, 0
+			u.sel, u.vest, u.move, u.selVest = 0, nil, nil, 0
 		}
 	}
 	rows := grantRows(a.rec, acct)
@@ -486,7 +488,7 @@ func (t *acctTab) grantsSection(acct *model.Account) {
 			imgui.TableNextRowV(0, 0)
 			imgui.TableSetColumnIndex(0)
 			if imgui.SelectableBoolV(r.Symbol+"##grant"+strconv.FormatInt(r.ID, 10), u.sel == r.ID, imgui.SelectableFlagsSpanAllColumns, imgui.NewVec2(0, 0)) {
-				u.sel, u.selRec, u.vest, u.selVest = r.ID, nil, nil, 0
+				u.sel, u.selRec, u.vest, u.move, u.selVest = r.ID, nil, nil, nil, 0
 			}
 			for i, s := range []string{r.Date.String(), strconv.Itoa(r.Shares), formatDollars(r.Price), strconv.Itoa(r.Vested), strconv.Itoa(r.Unvested), formatDollars(r.UnvestedValue)} {
 				imgui.TableSetColumnIndex(int32(i + 1))
@@ -515,7 +517,7 @@ func (t *acctTab) loadGrant(g *model.Grant) {
 		u.pct[i] = trimFloat(r.Percent)
 	}
 	u.draft = draftOfGrant(g)
-	u.problems = [6]problemCache{}
+	u.problems = [7]problemCache{}
 }
 
 // grantPanel draws the selected grant's schedule, the record vest form and the correct and void buttons.
@@ -534,6 +536,10 @@ func (t *acctTab) grantPanel(acct *model.Account) {
 	recorded := slices.ContainsFunc(u.rows, func(r ops.ScheduleRow) bool { return r.Vest != nil })
 	if imgui.BeginTableV("##schedule", 10, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
 		for _, h := range []string{"#", "Date", "Percent", "Shares", "Status", "Price", "Proceeds", "Date diff", "Share diff", ""} {
+			if h == "Date" {
+				imgui.TableSetupColumnV(h, imgui.TableColumnFlagsWidthFixed, em*8, 0)
+				continue
+			}
 			imgui.TableSetupColumnV(h, 0, 1, 0)
 		}
 		imgui.TableHeadersRow()
@@ -561,6 +567,10 @@ func (t *acctTab) grantPanel(acct *model.Account) {
 				if imgui.Button("Record") {
 					u.vest, u.selVest = newVestForm(a.rec, g, r), 0
 				}
+				imgui.SameLine()
+				if imgui.Button("Move date") {
+					u.move = &moveForm{grant: g.ID, planned: r.Index, from: r.Date}
+				}
 			} else if imgui.Button("Open") {
 				u.vest, u.selVest, u.vdraft = nil, r.Vest.ID, draftOfVest(*r.Vest)
 			}
@@ -584,10 +594,70 @@ func (t *acctTab) grantPanel(acct *model.Account) {
 	if u.vest != nil {
 		t.vestForm(g)
 	}
+	if u.move != nil {
+		t.moveForm(g)
+	}
 	if u.selVest != 0 {
 		t.vestPanel(g)
 	}
 	t.grantCorrect(g)
+}
+
+// moveForm is the Move date form of one planned vest: the date it is on and the text of the date to move it to.
+type moveForm struct {
+	grant   int64
+	planned int
+	from    model.Date
+	to      string
+}
+
+// untouched reports whether no date has been typed.
+func (f moveForm) untouched() bool { return allBlank(f.to) }
+
+// moveProblem says why the calendar of the grant cannot move the vest's date to the one the form holds, or "" if it can.
+func moveProblem(st *store.Store, rec *model.Record, g *model.Grant, f moveForm) string {
+	to, err := parseDate(strings.TrimSpace(f.to))
+	if err != nil {
+		return err.Error()
+	}
+	cal := rec.Calendar(g.Calendar)
+	if cal == nil {
+		return fmt.Sprintf("there is no vest calendar %q", g.Calendar)
+	}
+	if to != f.from && cal.Has(to) {
+		return "the calendar already has a vest on that date"
+	}
+	_, err = ops.EditCalendar(st, rec, cal.Name, cal.Rules, moveOverride(cal.Overrides, f.from, to), ops.Options{DryRun: true})
+	return noChangeReason(err)
+}
+
+// moveForm draws the Move date form of the planned vest u.move: a date in the grant's calendar, which moves for every grant that vests on the day.
+func (t *acctTab) moveForm(g *model.Grant) {
+	u, a := &t.eq, t.a
+	em := imgui.FontSize()
+	f := u.move
+	imgui.Spacing()
+	imgui.SeparatorText(fmt.Sprintf("Move vest %d", f.planned))
+	u.scrollHere("move")
+	wrappedText(fmt.Sprintf("This changes the vest calendar %q, not just this grant: every grant that vests on %s moves to the new date.", g.Calendar, f.from))
+	t.label("New date")
+	imgui.SetNextItemWidth(em * 10)
+	imgui.InputTextWithHint("##mdate", dateHint, &f.to, 0, nil)
+	t.label("")
+	formButton("Move date##vest", u.problems[6].get(fmt.Sprintf("%p|%+v", a.rec, *f), func() string { return moveProblem(a.st, a.rec, g, *f) }), f.untouched(), func() {
+		cal := a.rec.Calendar(g.Calendar)
+		to, _ := parseDate(strings.TrimSpace(f.to))
+		overrides := moveOverride(cal.Overrides, f.from, to)
+		if a.edit("move vest date", func() (*ops.Result, error) {
+			return ops.EditCalendar(a.st, a.rec, cal.Name, cal.Rules, overrides, ops.Options{})
+		}) {
+			u.move = nil
+		}
+	})
+	imgui.SameLine()
+	if imgui.Button("Cancel##move") {
+		u.move = nil
+	}
 }
 
 // grantCorrect draws the correct form and the void button of the grant.
@@ -597,6 +667,7 @@ func (t *acctTab) grantCorrect(g *model.Grant) {
 	d := &u.draft
 	imgui.Spacing()
 	imgui.SeparatorText("Correct or void the grant")
+	u.scrollHere("correct")
 	t.label("Grant date")
 	imgui.SetNextItemWidth(em * 10)
 	imgui.InputTextWithHint("##gdate", dateHint, &d.date, 0, nil)
@@ -612,14 +683,15 @@ func (t *acctTab) grantCorrect(g *model.Grant) {
 	imgui.InputTextWithHint("##gnote", "why; kept in the history", &d.note, 0, nil)
 	key := fmt.Sprintf("%p|%+v", a.rec, *d)
 	t.label("")
-	actionButton("Correct##grant", u.problems[1].get(key, func() string { return grantCorrectProblem(a.st, a.rec, g, *d) }), func() {
+	untouched := d.untouched(g)
+	formButton("Correct##grant", u.problems[1].get(key, func() string { return grantCorrectProblem(a.st, a.rec, g, *d) }), untouched, func() {
 		ch, _ := grantChange(g, *d)
 		a.addEntry("correct grant", func() (*ops.Result, error) {
 			return ops.CorrectGrant(a.st, a.rec, g.ID, ch, d.note, ops.Options{})
 		})
 	})
 	t.label("")
-	actionButton("Void##grant", u.problems[2].get(key, func() string { return grantVoidProblem(a.st, a.rec, g.ID) }), func() {
+	formButton("Void##grant", u.problems[2].get(key, func() string { return grantVoidProblem(a.st, a.rec, g.ID) }), untouched, func() {
 		u.confirm.ask("Void grant?", fmt.Sprintf("Void the %s grant of %s (%d shares)? It leaves the record, along with its planned vests, and the account's balance no longer counts its shares. It has no recorded vests, so nothing else changes. It stays in the history.", g.Symbol, g.Date, g.Shares), func() {
 			a.addEntry("void grant", func() (*ops.Result, error) {
 				return ops.VoidGrant(a.st, a.rec, g.ID, d.note, ops.Options{})
@@ -737,7 +809,7 @@ func (t *acctTab) addGrantForm(acct *model.Account) {
 			return res, err
 		}) {
 			*f = newGrantForm(acct)
-			u.sel, u.selRec, u.vest, u.selVest = added, nil, nil, 0
+			u.sel, u.selRec, u.vest, u.move, u.selVest = added, nil, nil, nil, 0
 		}
 	})
 }

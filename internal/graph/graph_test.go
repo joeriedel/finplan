@@ -125,7 +125,7 @@ func TestTypeColors(t *testing.T) {
 		model.TypeCreditCard: ColorDebt, model.TypeMortgage: ColorDebt, model.TypeLoan: ColorDebt,
 		model.TypeBrokerage: ColorBrokerage, model.Type401k: ColorRetirement, model.TypeIRA: ColorRetirement,
 		model.TypeRothIRA: ColorRetirement, model.TypeHSA: ColorRetirement, model.TypeTSP: ColorTSP,
-		model.TypeProperty: ColorTotal, model.TypeEquity: ColorTotal,
+		model.TypeProperty: ColorTotal, model.TypeEquity: ColorEquity,
 	} {
 		if got := TypeColor(typ); got != want {
 			t.Errorf("%s: got %v, want %v", typ, got, want)
@@ -147,6 +147,8 @@ func TestAssetColor(t *testing.T) {
 	add("card", model.TypeCreditCard)
 	add("c1", model.Type529)
 	add("c2", model.Type529)
+	add("rsu", model.TypeEquity)
+	add("rsu2", model.TypeEquity)
 	agg := func(id string, accts ...string) model.AssetID {
 		a := &model.Asset{ID: model.AssetID(id)}
 		for _, x := range accts {
@@ -165,6 +167,8 @@ func TestAssetColor(t *testing.T) {
 		{agg("cash", "chk", "sav"), ColorCash},
 		{agg("ret", "k", "tsp"), ColorRetirement},
 		{agg("college", "c1", "c2"), ColorSavings},
+		{model.DefaultAssetID("rsu"), ColorEquity},
+		{agg("stock", "rsu", "rsu2"), ColorEquity},
 		{agg("net", "chk", "card", "k"), ColorTotal},
 		{agg("empty"), ColorTotal},
 		{"missing", ColorTotal},

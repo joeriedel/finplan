@@ -18,9 +18,6 @@ import (
 	"github.com/joeriedel/finplan/internal/store"
 )
 
-// calendarYears is how many years of generated dates the calendar editor lists, from today.
-const calendarYears = 3
-
 // Rule kinds of a ruleDraft: a fixed day, or the 1st to 4th or the last weekday of the month.
 const (
 	ruleFixed = 0
@@ -73,28 +70,24 @@ func (d ruleDraft) rule() (model.VestRule, error) {
 	return r, nil
 }
 
-// calDraft is a vest calendar as entered: its rules, and the overrides keyed by the generated date, each holding the text of the date it moves to. A new calendar also has a name.
+// calDraft is a vest calendar as entered: its rules and the overrides that move generated dates. A new calendar also has a name.
 type calDraft struct {
-	isNew bool
-	name  string
-	rules []ruleDraft
-	// over holds the date each overridden generated date moves to, as typed; blank for none.
-	over map[model.Date]string
+	isNew     bool
+	name      string
+	rules     []ruleDraft
+	overrides []model.DateOverride
 }
 
 // newCalDraft is the draft of a calendar not yet made: no name and one empty rule.
 func newCalDraft() calDraft {
-	return calDraft{isNew: true, rules: []ruleDraft{{month: time.January}}, over: map[model.Date]string{}}
+	return calDraft{isNew: true, rules: []ruleDraft{{month: time.January}}}
 }
 
 // draftOfCalendar is the draft of a saved vest calendar.
 func draftOfCalendar(c *model.VestCalendar) calDraft {
-	d := calDraft{name: c.Name, over: map[model.Date]string{}}
+	d := calDraft{name: c.Name, overrides: slices.Clone(c.Overrides)}
 	for _, r := range c.Rules {
 		d.rules = append(d.rules, draftOfRule(r))
-	}
-	for _, o := range c.Overrides {
-		d.over[o.From] = o.To.String()
 	}
 	return d
 }
@@ -114,16 +107,7 @@ func (d calDraft) calendar() (model.VestCalendar, error) {
 		}
 		c.Rules = append(c.Rules, r)
 	}
-	for from, text := range d.over {
-		if strings.TrimSpace(text) == "" {
-			continue
-		}
-		to, err := parseDate(strings.TrimSpace(text))
-		if err != nil {
-			return c, err
-		}
-		c.Overrides = append(c.Overrides, model.DateOverride{From: from, To: to})
-	}
+	c.Overrides = slices.Clone(d.overrides)
 	// An override of a date the rules no longer generate is dropped, so that changing a rule does not leave one behind that cannot be seen.
 	probe := model.VestCalendar{Rules: c.Rules}
 	c.Overrides = slices.DeleteFunc(c.Overrides, func(o model.DateOverride) bool { return len(probe.Dates(o.From, o.From)) != 1 })
@@ -148,32 +132,62 @@ func calendarProblem(st *store.Store, rec *model.Record, d calDraft) string {
 	return noChangeReason(err)
 }
 
-// calDate is a date the calendar's rules generate and the date it falls on once overridden.
-type calDate struct{ Generated, Used model.Date }
-
-// calendarDates lists the dates the calendar's rules generate from..to, with the overrides applied. It is an error for a calendar that does not validate.
-func calendarDates(c model.VestCalendar, from, to model.Date) ([]calDate, error) {
-	if err := c.Validate(); err != nil {
-		return nil, err
+// ruleSummary names the days a rule falls on, such as "day 15" or "3rd Monday".
+func ruleSummary(r model.VestRule) string {
+	if r.Nth == 0 {
+		return fmt.Sprintf("day %d", r.Day)
 	}
-	base := c
-	base.Overrides = nil
-	moves := map[model.Date]model.Date{}
-	for _, o := range c.Overrides {
-		moves[o.From] = o.To
+	kind := r.Nth
+	if r.Nth == model.NthLast {
+		kind = ruleLast
 	}
-	var out []calDate
-	for _, d := range base.Dates(from, to) {
-		used, ok := moves[d]
-		if !ok {
-			used = d
-		}
-		out = append(out, calDate{d, used})
-	}
-	return out, nil
+	return ruleKindLabels[kind] + " " + r.Weekday.String()
 }
 
-// calendarsSection draws the vest calendar editor: the picker of calendars, the rules, the dates they generate with an override each, and save and delete.
+// nextRuleDate is the first date the rule generates on or after today, before any override. The rule must be valid.
+func nextRuleDate(r model.VestRule, today model.Date) model.Date {
+	y, _, _ := today.YMD()
+	if d := r.On(y); d >= today {
+		return d
+	}
+	return r.On(y + 1)
+}
+
+// ruleHint describes the draft rule and its next date on or after today, or is "" while the rule is not valid.
+func ruleHint(d ruleDraft, today model.Date) string {
+	r, err := d.rule()
+	if err != nil {
+		return ""
+	}
+	probe := model.VestCalendar{Name: "probe", Rules: []model.VestRule{r}}
+	if probe.Validate() != nil {
+		return ""
+	}
+	return ruleSummary(r) + " \u00b7 next: " + nextRuleDate(r, today).String()
+}
+
+// moveOverride returns the overrides with the vest now on cur moved to the date to, in date order. A date that is already the target of an override is moved by updating that override, and moving a date back to the one the rules generate removes the override.
+func moveOverride(overrides []model.DateOverride, cur, to model.Date) []model.DateOverride {
+	from := cur
+	for _, o := range overrides {
+		if o.To == cur {
+			from = o.From
+		}
+	}
+	out := removeOverride(overrides, from)
+	if to != from {
+		out = append(out, model.DateOverride{From: from, To: to})
+	}
+	slices.SortFunc(out, func(a, b model.DateOverride) int { return int(a.From - b.From) })
+	return out
+}
+
+// removeOverride returns the overrides without the one of the generated date from.
+func removeOverride(overrides []model.DateOverride, from model.Date) []model.DateOverride {
+	return slices.DeleteFunc(slices.Clone(overrides), func(o model.DateOverride) bool { return o.From == from })
+}
+
+// calendarsSection draws the vest calendar editor: the picker of calendars, the rules with their next dates, the moved dates, and save and delete.
 func (t *acctTab) calendarsSection(acct *model.Account) {
 	u, a := &t.eq, t.a
 	em := imgui.FontSize()
@@ -181,7 +195,7 @@ func (t *acctTab) calendarsSection(acct *model.Account) {
 	if !u.section("Vest calendars", "calendars") {
 		return
 	}
-	wrappedText("A calendar says on which dates an employer's grants vest: one rule for each vest month, a fixed day or the Nth weekday. Any date it generates can be moved. Grants share the calendar they name.")
+	wrappedText("A calendar says on which dates an employer's grants vest: one rule for each vest month, a fixed day or the Nth weekday. A date it generates can be moved from a grant's schedule. Grants share the calendar they name.")
 
 	cal := a.rec.Calendar(u.cal)
 	if !u.calNew && cal == nil && len(a.rec.Calendars) > 0 {
@@ -226,7 +240,7 @@ func (t *acctTab) calendarsSection(acct *model.Account) {
 	if imgui.Button("Add rule") {
 		d.rules = append(d.rules, ruleDraft{month: time.January})
 	}
-	t.calendarDates(d)
+	t.movedDates(d)
 
 	t.label("")
 	problem := calendarProblem(a.st, a.rec, *d)
@@ -254,11 +268,11 @@ func (t *acctTab) calendarsSection(acct *model.Account) {
 // ruleTable draws one row for each rule of the draft: month, how the day is chosen, the day or weekday and a button that removes the rule.
 func (t *acctTab) ruleTable(d *calDraft) {
 	em := imgui.FontSize()
-	if !imgui.BeginTableV("##rules", 4, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
+	if !imgui.BeginTableV("##rules", 5, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
 		return
 	}
 	defer imgui.EndTable()
-	for _, h := range []string{"Month", "Day", "On", ""} {
+	for _, h := range []string{"Month", "Day", "On", "", "Next"} {
 		imgui.TableSetupColumnV(h, 0, 1, 0)
 	}
 	imgui.TableHeadersRow()
@@ -286,6 +300,8 @@ func (t *acctTab) ruleTable(d *calDraft) {
 		if imgui.Button("x") {
 			remove = i
 		}
+		imgui.TableSetColumnIndex(4)
+		disabledText(ruleHint(*r, t.a.rec.Today))
 		imgui.PopID()
 	}
 	if remove >= 0 {
@@ -293,45 +309,25 @@ func (t *acctTab) ruleTable(d *calDraft) {
 	}
 }
 
-// calendarDates draws the dates the draft's rules generate for the next years, each with a field to move it to another date.
-func (t *acctTab) calendarDates(d *calDraft) {
-	em := imgui.FontSize()
-	imgui.Spacing()
+// movedDates draws the dates the draft moves, each as "from -> to" with a button that restores the generated date once the calendar is saved.
+func (t *acctTab) movedDates(d *calDraft) {
 	c, err := d.calendar()
-	if err == nil && d.isNew && c.Name == "" {
-		c.Name = "new"
-	}
-	var dates []calDate
-	if err == nil {
-		dates, err = calendarDates(c, t.a.rec.Today, t.a.rec.Today.Add(calendarYears*366))
-	}
-	if err != nil {
-		if !d.isNew || !d.untouched() {
-			errorText("No dates yet: " + err.Error())
-		}
+	if err != nil || len(c.Overrides) == 0 {
 		return
 	}
-	if !imgui.BeginTableV("##caldates", 3, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
-		return
-	}
-	defer imgui.EndTable()
-	for _, h := range []string{"Generated", "Vests on", "Move to"} {
-		imgui.TableSetupColumnV(h, 0, 1, 0)
-	}
-	imgui.TableHeadersRow()
-	for i, cd := range dates {
-		imgui.PushIDInt(int32(i))
-		imgui.TableNextRowV(0, 0)
-		imgui.TableSetColumnIndex(0)
-		imgui.TextUnformatted(cd.Generated.String())
-		imgui.TableSetColumnIndex(1)
-		imgui.TextUnformatted(cd.Used.String())
-		imgui.TableSetColumnIndex(2)
-		text := d.over[cd.Generated]
-		imgui.SetNextItemWidth(em * 10)
-		if imgui.InputTextWithHint("##move", dateHint, &text, 0, nil) {
-			d.over[cd.Generated] = text
+	imgui.Spacing()
+	imgui.TextUnformatted("Moved dates")
+	remove := model.Date(0)
+	for _, o := range c.Overrides {
+		imgui.PushIDInt(int32(o.From))
+		imgui.TextUnformatted(o.From.String() + " -> " + o.To.String())
+		imgui.SameLine()
+		if imgui.Button("Remove") {
+			remove = o.From
 		}
 		imgui.PopID()
+	}
+	if remove != 0 {
+		d.overrides = removeOverride(d.overrides, remove)
 	}
 }

@@ -3,7 +3,11 @@
 
 package main
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/joeriedel/finplan/internal/model"
+)
 
 // allBlank reports whether none of the texts holds anything but spaces: the form they belong to is untouched.
 func allBlank(texts ...string) bool {
@@ -15,8 +19,13 @@ func allBlank(texts ...string) bool {
 	return true
 }
 
-// untouched reports whether nothing has been typed into the form.
-func (f newAcctForm) untouched() bool { return allBlank(f.name, f.rate) }
+// untouched reports whether nothing has been typed into the form. The rate is not shown for an equity account, so it does not count there.
+func (f newAcctForm) untouched() bool {
+	return allBlank(f.name) && (f.typ == model.TypeEquity || allBlank(f.rate))
+}
+
+// untouched reports whether the form still holds what the grant had: the draft is the grant's own and no note is typed.
+func (d grantDraft) untouched(g *model.Grant) bool { return d == draftOfGrant(g) }
 
 // untouched reports whether nothing has been typed into the draft.
 func (d entryDraft) untouched() bool { return allBlank(d.date, d.amount, d.memo) }
