@@ -201,7 +201,10 @@ func (b *OccurrenceBook) clone() *OccurrenceBook {
 	if b == nil {
 		return nil
 	}
-	c := &OccurrenceBook{by: make(map[occurrenceKey]Occurrence, len(b.by))}
+	c := &OccurrenceBook{}
+	if b.by != nil {
+		c.by = make(map[occurrenceKey]Occurrence, len(b.by))
+	}
 	for k, o := range b.by {
 		c.by[k] = o.Clone()
 	}

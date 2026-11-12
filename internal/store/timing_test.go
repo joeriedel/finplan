@@ -51,7 +51,7 @@ func TestTimingAndOccurrencesRoundTripAndFormat13ItemsLoadWithTheDefault(t *test
 	if !reflect.DeepEqual(loaded.Budget, want.Budget) {
 		t.Fatal("the format 13 budget loaded differently")
 	}
-	for id, timing := range map[string]model.Timing{"groceries": model.Spread, "transport": model.Spread, "insurance": model.Lump, "vacation": model.Lump, "salary-b": model.Lump, "save-roth": model.Lump} {
+	for id, timing := range map[string]model.Timing{"groceries": model.Spread, "transport": model.Spread, "insurance": model.Spread, "vacation": model.Lump, "salary-b": model.Lump, "save-roth": model.Lump} {
 		it, _ := loaded.Budget.Item(id)
 		if it.EffectiveTiming() != timing {
 			t.Errorf("%s reads as %q, want %q", id, it.EffectiveTiming(), timing)

@@ -1244,6 +1244,10 @@ func (c *call) itemJSON() (model.BudgetItem, error) {
 		}
 		it.Recurrence.Anchor = d
 	}
+	// budget list shows the effective timing, so an item fed back as listed is stored without one while it is the default.
+	if it.Timing == it.DefaultTiming() {
+		it.Timing = ""
+	}
 	return it, nil
 }
 

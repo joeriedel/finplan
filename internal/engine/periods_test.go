@@ -212,10 +212,10 @@ func TestOverrideOnAPeriodAfterTheCutoffReplacesItsOccurrence(t *testing.T) {
 		}
 	}
 
-	// A spread item's remainder is spread over the period's 31 days: 248 of 310 is 8 a day.
+	// A spread item's remainder is spread over the period's 31 days: 248 of 310 is 8 a day. The period before it, from December 20th, has 3 of its 31 days left after the cutoff: 30 are booked on the 17th to the 19th.
 	rec := periodRecord(t, periodItem("groceries", 310, 20, model.Spread))
 	occurrence(rec, "groceries", d(2026, time.January, 20), model.StatusAuto, model.Ptr(62.0), nil)
-	for date, want := range map[model.Date]float64{d(2026, time.January, 19): 5000, d(2026, time.January, 22): 5000 - 24, d(2026, time.February, 19): 5000 - 248} {
+	for date, want := range map[model.Date]float64{d(2026, time.January, 19): 5000 - 30, d(2026, time.January, 22): 5000 - 30 - 24, d(2026, time.February, 19): 5000 - 30 - 248} {
 		if got := chkOn(t, rec, date); !near(got, want) {
 			t.Errorf("spread: %v balance %v, want %v", date, got, want)
 		}
@@ -351,7 +351,7 @@ func TestTaxInputsDoNotDependOnTheQueryHorizon(t *testing.T) {
 }
 
 func TestSpreadRemainderCutShortByTheItemsEndIsNotCapped(t *testing.T) {
-	// The spread transfer ends on November 20: the 300 left of its period is booked over the 12 days to then, and the 401(k) limit refuses none of it.
+	// The spread transfer ends on November 20: the 300 left of its period is booked over the 12 days to then, and the 401(k) limit refuses none of it. The paycheck's match of 150 on November 1 is not in the account's balance either.
 	rec := matchRecord(t)
 	rec.Budget.Items[1].Timing = model.Spread
 	rec.Budget.Items[1].End = model.Ptr(d(2026, time.November, 20))
@@ -359,7 +359,7 @@ func TestSpreadRemainderCutShortByTheItemsEndIsNotCapped(t *testing.T) {
 	k := model.DefaultAssetID("k401")
 	got, err := Balances(rec, "", k, []model.Date{d(2026, time.November, 20)})
 	must(t, err)
-	if want := 3000 + 300.0*12/22; !near(got.Samples[0].Amount, want) {
+	if want := 3000 + 150 + 300.0*12/22; !near(got.Samples[0].Amount, want) {
 		t.Errorf("the 401(k) holds %v on November 20, want %v", got.Samples[0].Amount, want)
 	}
 	if len(got.Notes) > 0 {
@@ -368,7 +368,7 @@ func TestSpreadRemainderCutShortByTheItemsEndIsNotCapped(t *testing.T) {
 }
 
 func TestSpreadPeriodCutShortWithoutAFactBooksTaxAndMatchInTheShareOfWhatIsBooked(t *testing.T) {
-	// The salary ends on November 20: 3000 of its 5000 are in the balance on the 8th and 2000 are booked, the same as for a lump with 3000 posted, so withholding and match are 40% of the paycheck's.
+	// The salary ends on November 20 but its period is November's 30 days: 8 days, 1333.33 of its 5000 are in the balance on the 8th and 2000 are booked over the 12 days to the end, which leaves 1666.67 never booked. A lump expected to total 3333.33 with 1333.33 posted books the same 2000, so withholding and match are the same share of the paycheck's.
 	spread := matchRecord(t)
 	spread.Account("k401").AddSnapshot(d(2026, time.November, 8), 3000)
 	spread.Budget.Items[0].Timing = model.Spread
@@ -376,7 +376,7 @@ func TestSpreadPeriodCutShortWithoutAFactBooksTaxAndMatchInTheShareOfWhatIsBooke
 	lump := matchRecord(t)
 	lump.Account("k401").AddSnapshot(d(2026, time.November, 8), 3000)
 	lump.Budget.Items[0].End = model.Ptr(d(2026, time.November, 20))
-	occurrence(lump, "salary", d(2026, time.November, 1), model.StatusAuto, model.Ptr(3000.0), nil)
+	occurrence(lump, "salary", d(2026, time.November, 1), model.StatusAuto, model.Ptr(5000.0*8/30), model.Ptr(5000.0*20/30))
 	end := []model.Date{d(2026, time.November, 20)}
 	for _, id := range []model.AccountID{"chk", "k401"} {
 		got, err := Balances(spread, "", model.DefaultAssetID(id), end)
