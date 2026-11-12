@@ -11,8 +11,10 @@
 package engine
 
 import (
+	"math"
 	"slices"
 	"sort"
+	"time"
 
 	"github.com/joeriedel/finplan/internal/model"
 )
@@ -320,6 +322,52 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 		}
 	}
 
+	// Shocks hit every account holding the class; a rebalance names its account.
+	var shocks []model.Shock
+	rebalances := map[model.AccountID][]model.Rebalance{}
+	for _, p := range chain {
+		for i, sh := range p.Shocks {
+			skip := func(reason string) {
+				r.diag.Skipped = append(r.diag.Skipped, Skipped{Projection: p.Name, Index: i, Target: model.ObjectRef{Kind: model.KindClass, ID: sh.Class}, Property: propShock, Reason: reason})
+			}
+			switch {
+			case rec.Class(sh.Class) == nil:
+				skip("class not found")
+			case math.IsNaN(sh.Change) || sh.Change <= -1:
+				skip("a shock must be above -100%")
+			default:
+				shocks = append(shocks, sh)
+			}
+		}
+		for i, rb := range p.Rebalances {
+			skip := func(reason string) {
+				r.diag.Skipped = append(r.diag.Skipped, Skipped{Projection: p.Name, Index: i, Target: model.ObjectRef{Kind: model.KindAccount, ID: string(rb.Account)}, Property: propRebalance, Reason: reason})
+			}
+			acct := rec.Account(rb.Account)
+			sum, bad := 0.0, ""
+			for _, w := range rb.Allocation {
+				sum += w.Share
+				if rec.Class(w.Class) == nil {
+					bad = "class not found"
+				} else if math.IsNaN(w.Share) || w.Share < 0 {
+					bad = "a share must not be negative"
+				}
+			}
+			switch {
+			case acct == nil:
+				skip("account not found")
+			case equityMode(acct.ID) || len(acct.Allocation) == 0:
+				skip("account has no allocation")
+			case bad != "":
+				skip(bad)
+			case math.Abs(sum-1) > model.AllocationTolerance/100:
+				skip("the shares do not sum to 100%")
+			default:
+				rebalances[acct.ID] = append(rebalances[acct.ID], rb)
+			}
+		}
+	}
+
 	res.SetAssetDefaultMods(assetDefaults)
 
 	// Settings apply in order, the last applied winning: asset definitions (innermost asset first), then the projection chain root first, each projection's settings in list order.
@@ -359,13 +407,46 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 		_, rate := res.GrowthLayers(id)
 		layered, _, _ := model.Apply(rateLayer{s: rate}, growth, underTarget, rateLayer.over)
 		p.rate = layered.s
-		for _, h := range acct.Allocation {
+		legOf := func(class string, share float64) leg {
 			var base model.Schedule
-			if c := rec.Class(h.Class); c != nil {
+			if c := rec.Class(class); c != nil {
 				base = c.Return
 			}
-			cls, _, _ := model.Apply(rateLayer{s: base}, classSettings, func(id model.AssetID) bool { return string(id) == h.Class }, rateLayer.over)
-			p.legs = append(p.legs, leg{class: h.Class, share: h.Percent / 100, rate: cls.s})
+			cls, _, _ := model.Apply(rateLayer{s: base}, classSettings, func(id model.AssetID) bool { return string(id) == class }, rateLayer.over)
+			return leg{class: class, share: share, rate: cls.s}
+		}
+		for _, h := range acct.Allocation {
+			p.legs = append(p.legs, legOf(h.Class, h.Percent/100))
+		}
+		index := func(class string) int { return slices.IndexFunc(p.legs, func(l leg) bool { return l.class == class }) }
+		// A rebalance can trade into a class the allocation does not hold.
+		for _, rb := range rebalances[id] {
+			for _, w := range rb.Allocation {
+				if index(w.Class) < 0 {
+					p.legs = append(p.legs, legOf(w.Class, 0))
+				}
+			}
+		}
+		p.lots = !acct.Tax.Sheltered() && model.Investable(acct.Type) && !equityMode(id)
+		if p.lots && len(p.legs) == 0 {
+			p.legs = []leg{{share: 1, rate: p.rate}}
+		}
+		if len(acct.Allocation) > 0 && !equityMode(id) {
+			for _, sh := range shocks {
+				if index(sh.Class) >= 0 {
+					p.events = append(p.events, legEvent{date: sh.Date, kind: eventShock, class: sh.Class, change: sh.Change})
+				}
+			}
+			for _, rb := range rebalances[id] {
+				target := make([]float64, len(p.legs))
+				for _, w := range rb.Allocation {
+					target[index(w.Class)] = w.Share
+				}
+				p.events = append(p.events, legEvent{date: rb.Date, kind: eventRebalance, target: target})
+			}
+			if acct.RebalanceYearly {
+				p.yearly = true
+			}
 		}
 		return p
 	}
@@ -450,9 +531,18 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 			if a.Type == model.TypeSavings || a.Type == model.TypeChecking {
 				savers = append(savers, add(a.ID))
 			}
+			// The gains a taxable account realizes are taxed wherever the account sits.
+			if !a.Tax.Sheltered() && model.Investable(a.Type) && !equityMode(a.ID) {
+				add(a.ID)
+			}
 		}
 		if id := rec.Household.Checking; id != "" && rec.Account(id) != nil {
 			add(id)
+		}
+	}
+	for _, p := range all {
+		if p.lots {
+			ht.lots = append(ht.lots, p)
 		}
 	}
 	// An account whose data ends before a counterpart's receives the transfers the counterpart recorded with it in between, so a recorded transfer lands on both sides; the budget item takes over on both sides after the later end. Equity accounts are left out on either side, since their plans and recorded vests already book the vests and the deposits that pay for them.
@@ -555,6 +645,7 @@ type change struct {
 	amount  float64
 	counter model.AccountID // the other account of a transfer, withdrawal or contribution
 	rank    int             // order among changes on one date
+	class   string          // the class a shock changed
 }
 
 type point struct {
@@ -584,6 +675,14 @@ type path struct {
 	rate       model.Schedule
 	// legs is the account's allocation, one sub-balance per class in the allocation's order; the account's rate does not apply while there are legs.
 	legs []leg
+	// lots is set on a taxable investment account: its sales realize capital gains.
+	lots bool
+	// events are the shocks and rebalances that apply to the legs, ordered by date and kind once settled; yearly is set if the account rebalances every year, to the shares in force then.
+	events []legEvent
+	yearly bool
+	// shocked are the changes shocks made to the legs and gains the capital gains the sales realized, both made by settle.
+	shocked []change
+	gains   []gain
 	// plan is set on an equity account, whose value follows its shares' prices instead of growing at rate.
 	plan    *equityPlan
 	changes []change // flows after start, ordered by date then rank
@@ -733,6 +832,17 @@ func (p *path) collect(rec *model.Record, items []model.BudgetItem, cutoffs map[
 		}
 	}
 	p.changes = append(p.changes, p.mirrored...)
+	if p.yearly {
+		for y, _, _ := p.start.Add(1).YMD(); ; y++ {
+			d := model.D(y, time.January, 1)
+			if d > horizon {
+				break
+			}
+			if d > p.start {
+				p.events = append(p.events, legEvent{date: d, kind: eventYearly})
+			}
+		}
+	}
 	if p.plan != nil {
 		p.changes = append(p.changes, p.plan.changes()...)
 	}
@@ -743,6 +853,7 @@ func (p *path) collect(rec *model.Record, items []model.BudgetItem, cutoffs map[
 
 // settle orders the changes and works out the balance after each date with one.
 func (p *path) settle() {
+	p.shocked, p.gains = nil, nil
 	p.points = []point{{date: p.start, bal: p.startVal}}
 	if p.legs != nil {
 		p.points[0].subs, p.points[0].cumSubs = p.split(p.startVal), make([]float64, len(p.legs))
@@ -787,15 +898,51 @@ func (p *path) split(amount float64) []float64 {
 	return out
 }
 
-// settleLegs is settle for an allocated path: each leg compounds at its class's rate, money paid in is split by share and money paid out comes from the legs pro rata to their balances (by share if the account holds nothing or less).
+// settleLegs is settle for an allocated path: each leg compounds at its class's rate, money paid in is split by the current shares and money paid out comes from the legs pro rata to their balances (by share if the account holds nothing or less). On a date the changes come first, then shocks, then rebalances. A path with lots opens a lot for each purchase and realizes the gain of each sale.
 func (p *path) settleLegs() {
-	subs, cum, cur := slices.Clone(p.points[0].subs), make([]float64, len(p.legs)), p.start
-	for i := 0; i < len(p.changes); {
-		d := p.changes[i].date
+	n := len(p.legs)
+	subs, cum, cur := slices.Clone(p.points[0].subs), make([]float64, n), p.start
+	shares, price := make([]float64, n), make([]float64, n)
+	for j, l := range p.legs {
+		shares[j], price[j] = l.share, 1
+	}
+	var book *lotBook
+	if p.lots {
+		book = &lotBook{lots: make([][]lot, n)}
+		for j := range subs {
+			book.buy(j, p.start, subs[j], 1)
+		}
+	}
+	sell := func(j int, d model.Date, value float64) {
+		if book == nil {
+			return
+		}
+		if short, long := book.sell(j, d, value, price[j]); short != 0 || long != 0 {
+			p.gains = append(p.gains, gain{date: d, short: short, long: long})
+		}
+	}
+	events := slices.DeleteFunc(slices.Clone(p.events), func(e legEvent) bool { return e.date <= p.start })
+	sort.SliceStable(events, func(i, j int) bool {
+		a, b := events[i], events[j]
+		if a.date != b.date {
+			return a.date < b.date
+		}
+		return a.kind < b.kind
+	})
+	for i, k := 0, 0; i < len(p.changes) || k < len(events); {
+		d := model.MaxDate
+		if i < len(p.changes) {
+			d = p.changes[i].date
+		}
+		if k < len(events) {
+			d = min(d, events[k].date)
+		}
 		for j, l := range p.legs {
-			g := subs[j] * (l.rate.Compound(cur, d) - 1)
+			f := l.rate.Compound(cur, d)
+			g := subs[j] * (f - 1)
 			subs[j] += g
 			cum[j] += g
+			price[j] *= f
 		}
 		cur = d
 		for ; i < len(p.changes) && p.changes[i].date == d; i++ {
@@ -804,12 +951,54 @@ func (p *path) settleLegs() {
 			for _, v := range subs {
 				total += v
 			}
-			for j, l := range p.legs {
+			for j := range p.legs {
 				if amt >= 0 || total <= 0 {
-					subs[j] += amt * l.share
+					x := amt * shares[j]
+					subs[j] += x
+					if book != nil {
+						book.buy(j, d, x, price[j])
+					}
 				} else {
-					subs[j] += amt * subs[j] / total
+					x := amt * subs[j] / total
+					subs[j] += x
+					sell(j, d, -x)
 				}
+			}
+		}
+		for ; k < len(events) && events[k].date == d; k++ {
+			e := events[k]
+			if e.kind == eventShock {
+				for j, l := range p.legs {
+					if l.class != e.class {
+						continue
+					}
+					if delta := subs[j] * e.change; delta != 0 {
+						p.shocked = append(p.shocked, change{date: d, cause: CauseShock, amount: delta, class: e.class})
+					}
+					subs[j] *= 1 + e.change
+					price[j] *= 1 + e.change
+				}
+				continue
+			}
+			target := e.target
+			if e.kind == eventYearly {
+				target = slices.Clone(shares)
+			}
+			total := 0.0
+			for _, v := range subs {
+				total += v
+			}
+			for j := range subs {
+				if total > 0 {
+					want := total * target[j]
+					if want < subs[j] {
+						sell(j, d, subs[j]-want)
+					} else if book != nil {
+						book.buy(j, d, want-subs[j], price[j])
+					}
+					subs[j] = want
+				}
+				shares[j] = target[j]
 			}
 		}
 		bal, growth := 0.0, 0.0

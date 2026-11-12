@@ -61,6 +61,9 @@ type FedStatus struct {
 	// AdditionalMedicareThreshold and NIITThreshold are the wages and the income above which the additional Medicare tax and the net investment income tax apply. Both are set by statute and not indexed.
 	AdditionalMedicareThreshold float64 `json:"additional_medicare_threshold"`
 	NIITThreshold               float64 `json:"niit_threshold"`
+	// LongTermGains15Over and LongTermGains20Over are the taxable income above which long-term capital gains are taxed at 15% and at 20%; below the first they are taxed at 0%. They are indexed like the brackets. A table that sets neither borrows the shipped values.
+	LongTermGains15Over float64 `json:"long_term_gains_15_over"`
+	LongTermGains20Over float64 `json:"long_term_gains_20_over"`
 }
 
 // Federal is one year of federal income tax and payroll tax rules.
@@ -263,11 +266,15 @@ func (f Federal) Validate() error {
 		if err := checkBrackets(s.Brackets); err != nil {
 			return fmt.Errorf("%s: %w", k, err)
 		}
+		if s.LongTermGains20Over < s.LongTermGains15Over {
+			return fmt.Errorf("%s: the 20%% long-term gains threshold %v must not be below the 15%% threshold %v", k, s.LongTermGains20Over, s.LongTermGains15Over)
+		}
 		for _, v := range []struct {
 			name string
 			v    float64
 		}{{"standard deduction", s.StandardDeduction}, {"child credit phase-out", s.ChildCreditPhaseOut},
-			{"additional Medicare threshold", s.AdditionalMedicareThreshold}, {"NIIT threshold", s.NIITThreshold}} {
+			{"additional Medicare threshold", s.AdditionalMedicareThreshold}, {"NIIT threshold", s.NIITThreshold},
+			{"long-term gains 15% threshold", s.LongTermGains15Over}, {"long-term gains 20% threshold", s.LongTermGains20Over}} {
 			if err := checkMoney(v.name, v.v); err != nil {
 				return fmt.Errorf("%s: %w", k, err)
 			}

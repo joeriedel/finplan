@@ -17,6 +17,7 @@ const (
 	AffectedAssetSetting = "asset setting"
 	AffectedModification = "modification"
 	AffectedBudgetItem   = "budget item"
+	AffectedRebalance    = "rebalance"
 	AffectedOrphan       = "orphaned modification"
 	AffectedPreset       = "view preset"
 	AffectedHousehold    = "household"
@@ -202,6 +203,15 @@ func unlinkAccount(next *model.Record, id model.AccountID) []Affected {
 			}
 			return ""
 		})...)
+	}
+	for _, p := range next.Projections {
+		p.Rebalances = slices.DeleteFunc(p.Rebalances, func(r model.Rebalance) bool {
+			if r.Account != id {
+				return false
+			}
+			out = append(out, Affected{AffectedRebalance, p.Name, fmt.Sprintf("rebalance of account %q on %s", id, r.Date), EffectRemoved})
+			return true
+		})
 	}
 	if next.Household.Checking == id {
 		next.Household.Checking = ""

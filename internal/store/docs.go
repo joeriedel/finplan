@@ -17,8 +17,8 @@ import (
 // converts it. Format 2 added the modification mode and the budget item growth to format 1's shape; a
 // format 1 document has neither and reads as set and zero, and the bump makes an older build refuse a
 // document whose scale modifications it would otherwise silently ignore. Format 3 added the accounts a
-// projection defines; a format 1 or 2 document has none and reads as an empty list. Format 4 added the close date of an account; an older document has none and reads as an open account, and the bump makes an older build refuse a document whose closed accounts it would otherwise show as open. Format 5 stores a budget item's amount and growth as segment arrays and adds the count and unit of a custom recurrence; an older document has numbers there, which read as a one-segment schedule (a zero growth as none), and the bump makes an older build refuse a document whose schedules it would otherwise misread. Format 6 adds the income type of a budget item, the household and the tax tables; a budget item of an older document has no income type, which an income item reads as wages, and a record with no tax tables is given the shipped ones when it is loaded. Format 7 stores a market class's return as a segment array with its volatility, the correlations of the classes and the allocation of an account; an older class document has a number as its return, which reads as a one-segment schedule, and the bump makes an older build refuse a document whose allocations it would otherwise ignore.
-const formatCurrent = 7
+// projection defines; a format 1 or 2 document has none and reads as an empty list. Format 4 added the close date of an account; an older document has none and reads as an open account, and the bump makes an older build refuse a document whose closed accounts it would otherwise show as open. Format 5 stores a budget item's amount and growth as segment arrays and adds the count and unit of a custom recurrence; an older document has numbers there, which read as a one-segment schedule (a zero growth as none), and the bump makes an older build refuse a document whose schedules it would otherwise misread. Format 6 adds the income type of a budget item, the household and the tax tables; a budget item of an older document has no income type, which an income item reads as wages, and a record with no tax tables is given the shipped ones when it is loaded. Format 7 stores a market class's return as a segment array with its volatility, the correlations of the classes and the allocation of an account; an older class document has a number as its return, which reads as a one-segment schedule, and the bump makes an older build refuse a document whose allocations it would otherwise ignore. Format 8 adds the yearly rebalance setting of an account; an older document has none and reads as off, and the bump makes an older build refuse a document whose setting it would otherwise drop.
+const formatCurrent = 8
 
 // Document kinds.
 const (
@@ -65,6 +65,8 @@ type accountDoc struct {
 	Default    []intervalDoc      `json:"default"`
 	Closed     *model.Date        `json:"closed,omitempty"`
 	Allocation []holdingDoc       `json:"allocation,omitempty"`
+	// RebalanceYearly is the account's yearly rebalance setting.
+	RebalanceYearly bool `json:"rebalance_yearly,omitempty"`
 }
 
 type holdingDoc struct {
@@ -309,7 +311,7 @@ type docRow struct {
 // decodeDoc decodes a document body of the given format version into v, the current shape.
 func decodeDoc(row docRow, v any) error {
 	switch row.format {
-	case 1, 2, 3, 4, 5, 6, 7:
+	case 1, 2, 3, 4, 5, 6, 7, 8:
 		if err := json.Unmarshal(row.body, v); err != nil {
 			return fmt.Errorf("store: %s %q: %w", row.kind, row.key, err)
 		}

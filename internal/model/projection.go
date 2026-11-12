@@ -73,7 +73,7 @@ type Projection struct {
 	Mods            []Modification
 	// Accounts are hypothetical accounts that exist only under this projection and the projections built on it.
 	Accounts []ProjAccount
-	// Shocks and Rebalances are stored but the engine does not execute them yet.
+	// Shocks and Rebalances are executed by the engine on their dates, those of the parent chain first.
 	Shocks     []Shock
 	Rebalances []Rebalance
 }

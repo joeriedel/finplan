@@ -75,6 +75,9 @@ type projTab struct {
 	addItem itemForm
 	// addGrant is the form of a focal grant, which the Add form offers as a kind of its own.
 	addGrant focalForm
+	// addShock and addRebalance are the forms of a shock and a rebalance, which the Add form offers as kinds of their own.
+	addShock     shockForm
+	addRebalance rebalanceForm
 	// addAcct is the Add account form.
 	addAcct acctForm
 	// addSetting is the Add start setting form.
@@ -598,6 +601,7 @@ func (t *projTab) mods(p *model.Projection) {
 	if len(p.Mods) == 0 {
 		disabledText("No modifications yet.")
 	}
+	t.marketRows(p)
 	t.timelineEditor(p)
 	t.itemTimelineEditor(p)
 	t.addForm(p)
@@ -1262,8 +1266,15 @@ func (t *projTab) addForm(p *model.Projection) {
 	if k, changed := kindCombo("addkind", t.addKind, imgui.FontSize()*16, addKinds); changed {
 		t.addKind, t.addObj, t.addProp = k, "", ""
 	}
-	if t.addKind == kindFocalGrant {
+	switch t.addKind {
+	case kindFocalGrant:
 		t.focalFields(p)
+		return
+	case kindShock:
+		t.shockFields(p)
+		return
+	case kindRebalance:
+		t.rebalanceFields(p)
 		return
 	}
 	if t.addKind != model.KindGlobal {

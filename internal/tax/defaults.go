@@ -33,6 +33,12 @@ func fedStatuses(mfj, single, hoh, mfs FedStatus) map[FilingStatus]FedStatus {
 	}
 }
 
+// longTerm sets the taxable income above which long-term gains are taxed at 15% and at 20%.
+func longTerm(s FedStatus, over15, over20 float64) FedStatus {
+	s.LongTermGains15Over, s.LongTermGains20Over = over15, over20
+	return s
+}
+
 func fedBase(year int, status map[FilingStatus]FedStatus, child, ssBase, k401, ira, hsa float64) Federal {
 	return Federal{Year: year, Status: status, ChildCredit: child, OtherDependentCredit: 500, PenaltyRate: 0.10,
 		SocialSecurityRate: 0.062, SocialSecurityWageBase: ssBase, MedicareRate: 0.0145, AdditionalMedicareRate: 0.009, NIITRate: 0.038,
@@ -54,26 +60,26 @@ func virginia(year int, stdSingle, stdJoint float64) State {
 func Defaults() Tables {
 	return Tables{
 		Federal: []Federal{
-			// IRS Rev. Proc. 2023-34 (brackets, standard deduction, child tax credit 2,000 under 26 U.S.C. 24); SSA 2024 wage base announcement (168,600); IRS Notice 2023-75 (401(k) 23,000, IRA 7,000); IRS Rev. Proc. 2023-23 (HSA family 8,300).
+			// IRS Rev. Proc. 2023-34 (brackets, long-term gains thresholds, standard deduction, child tax credit 2,000 under 26 U.S.C. 24); SSA 2024 wage base announcement (168,600); IRS Notice 2023-75 (401(k) 23,000, IRA 7,000); IRS Rev. Proc. 2023-23 (HSA family 8,300).
 			fedBase(2024, fedStatuses(
-				FedStatus{Brackets: brackets(23200, 94300, 201050, 383900, 487450, 731200), StandardDeduction: 29200},
-				FedStatus{Brackets: brackets(11600, 47150, 100525, 191950, 243725, 609350), StandardDeduction: 14600},
-				FedStatus{Brackets: brackets(16550, 63100, 100500, 191950, 243700, 609350), StandardDeduction: 21900},
-				FedStatus{Brackets: brackets(11600, 47150, 100525, 191950, 243725, 365600), StandardDeduction: 14600},
+				longTerm(FedStatus{Brackets: brackets(23200, 94300, 201050, 383900, 487450, 731200), StandardDeduction: 29200}, 94050, 583750),
+				longTerm(FedStatus{Brackets: brackets(11600, 47150, 100525, 191950, 243725, 609350), StandardDeduction: 14600}, 47025, 518900),
+				longTerm(FedStatus{Brackets: brackets(16550, 63100, 100500, 191950, 243700, 609350), StandardDeduction: 21900}, 63000, 551350),
+				longTerm(FedStatus{Brackets: brackets(11600, 47150, 100525, 191950, 243725, 365600), StandardDeduction: 14600}, 47025, 291850),
 			), 2000, 168600, 23000, 7000, 8300),
-			// IRS Rev. Proc. 2024-40 with the standard deduction and child tax credit (2,200, indexed from 2026) of the One Big Beautiful Bill Act (Pub. L. 119-21); SSA 2025 wage base announcement (176,100); IRS Notice 2024-80 (401(k) 23,500, IRA 7,000); IRS Rev. Proc. 2024-25 (HSA family 8,550).
+			// IRS Rev. Proc. 2024-40 (long-term gains thresholds too) with the standard deduction and child tax credit (2,200, indexed from 2026) of the One Big Beautiful Bill Act (Pub. L. 119-21); SSA 2025 wage base announcement (176,100); IRS Notice 2024-80 (401(k) 23,500, IRA 7,000); IRS Rev. Proc. 2024-25 (HSA family 8,550).
 			fedBase(2025, fedStatuses(
-				FedStatus{Brackets: brackets(23850, 96950, 206700, 394600, 501050, 751600), StandardDeduction: 31500},
-				FedStatus{Brackets: brackets(11925, 48475, 103350, 197300, 250525, 626350), StandardDeduction: 15750},
-				FedStatus{Brackets: brackets(17000, 64850, 103350, 197300, 250500, 626350), StandardDeduction: 23625},
-				FedStatus{Brackets: brackets(11925, 48475, 103350, 197300, 250525, 375800), StandardDeduction: 15750},
+				longTerm(FedStatus{Brackets: brackets(23850, 96950, 206700, 394600, 501050, 751600), StandardDeduction: 31500}, 96700, 600050),
+				longTerm(FedStatus{Brackets: brackets(11925, 48475, 103350, 197300, 250525, 626350), StandardDeduction: 15750}, 48350, 533400),
+				longTerm(FedStatus{Brackets: brackets(17000, 64850, 103350, 197300, 250500, 626350), StandardDeduction: 23625}, 64750, 566700),
+				longTerm(FedStatus{Brackets: brackets(11925, 48475, 103350, 197300, 250525, 375800), StandardDeduction: 15750}, 48350, 300000),
 			), 2200, 176100, 23500, 7000, 8550),
-			// IRS Rev. Proc. 2025-32 (brackets, standard deduction, child tax credit 2,200); SSA 2026 wage base announcement (184,500); IRS Notice 2025-67 (401(k) 24,500, IRA 7,500); IRS Rev. Proc. 2025-19 (HSA family 8,750).
+			// IRS Rev. Proc. 2025-32 (brackets, long-term gains thresholds, standard deduction, child tax credit 2,200); SSA 2026 wage base announcement (184,500); IRS Notice 2025-67 (401(k) 24,500, IRA 7,500); IRS Rev. Proc. 2025-19 (HSA family 8,750).
 			fedBase(2026, fedStatuses(
-				FedStatus{Brackets: brackets(24800, 100800, 211400, 403550, 512450, 768700), StandardDeduction: 32200},
-				FedStatus{Brackets: brackets(12400, 50400, 105700, 201775, 256225, 640600), StandardDeduction: 16100},
-				FedStatus{Brackets: brackets(17700, 67450, 105700, 201750, 256200, 640600), StandardDeduction: 24150},
-				FedStatus{Brackets: brackets(12400, 50400, 105700, 201775, 256225, 384350), StandardDeduction: 16100},
+				longTerm(FedStatus{Brackets: brackets(24800, 100800, 211400, 403550, 512450, 768700), StandardDeduction: 32200}, 98900, 613700),
+				longTerm(FedStatus{Brackets: brackets(12400, 50400, 105700, 201775, 256225, 640600), StandardDeduction: 16100}, 49450, 545500),
+				longTerm(FedStatus{Brackets: brackets(17700, 67450, 105700, 201750, 256200, 640600), StandardDeduction: 24150}, 66200, 579600),
+				longTerm(FedStatus{Brackets: brackets(12400, 50400, 105700, 201775, 256225, 384350), StandardDeduction: 16100}, 49450, 306850),
 			), 2200, 184500, 24500, 7500, 8750),
 		},
 		State: []State{

@@ -91,6 +91,8 @@ type Account struct {
 	StatedRate float64
 	// Allocation is how the account's balance is split among market classes; empty means none, and the account then grows at StatedRate. Only investment accounts have one.
 	Allocation []Holding
+	// RebalanceYearly rebalances the account to its Allocation every 1 January after the projection starts. It does nothing for an account without an allocation.
+	RebalanceYearly bool
 	// Default is the fallback balance for dates with no actual data.
 	Default DefaultBalance
 	// Opens is set only on a projection's own accounts (see ProjAccount): the account has no value before that date and projects from it.

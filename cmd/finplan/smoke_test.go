@@ -68,7 +68,10 @@ func TestScreenshotSmoke(t *testing.T) {
 		{"graph-acme-up", "Graph", "Acme +15%", ""},
 		{"graph-acme-crash", "Graph", "Acme crash", ""},
 		{"graph-acme-grants", "Graph", "Acme yearly grants", ""},
+		{"graph-crash", "Graph", "Crash and rebalance", ""},
 		{"projections-focal-grant", "Projections", "Acme yearly grants", "focal-grant"},
+		{"projections-shock", "Projections", "Crash and rebalance", "shock"},
+		{"projections-rebalance", "Projections", "Crash and rebalance", "rebalance"},
 		{"target", "Projections", "Base", "target"},
 		{"member", "Assets", "Net worth", "member"},
 		// An open picker blocks hover in the windows behind it, so these states draw its form with the picker closed.

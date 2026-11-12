@@ -48,6 +48,8 @@ type TaxYear struct {
 	Interest float64
 	// EarlyWithdrawal is the withdrawals from tax-deferred accounts before 59 and a half.
 	EarlyWithdrawal float64
+	// ShortTermGains and LongTermGains are the capital gains the year's sales in taxable accounts realized, on lots held a year or less and longer; a loss is negative. GainsTax is the part of Result.Total they add.
+	ShortTermGains, LongTermGains, GainsTax float64
 	// WithheldPaychecks and WithheldVests are the tax withheld from the year's paychecks and vests, those before the projection's start included.
 	WithheldPaychecks, WithheldVests float64
 	// Due is the year's total tax less everything withheld; positive is paid on the reconciliation date and negative refunded.
@@ -134,6 +136,8 @@ type householdTax struct {
 	reported     map[string]bool
 	// savers are the savings and checking paths whose interest is taxed.
 	savers []*path
+	// lots are the paths of taxable investment accounts, whose sales realize gains.
+	lots []*path
 }
 
 func newHouseholdTax(rec *model.Record, items []model.BudgetItem, amounts, growths map[string]model.Schedule, infl model.Schedule, plans []*equityPlan, hypothetical map[string]model.Date, diag *Diagnostics) *householdTax {
@@ -371,10 +375,16 @@ func (h *householdTax) compute(y int, interest []*path) *TaxYear {
 	}
 	t.Interest = h.interest(y, interest)
 	t.Ordinary = in.ordinary + t.Interest
+	for _, p := range h.lots {
+		st, lt := p.gainsIn(y)
+		t.ShortTermGains += st
+		t.LongTermGains += lt
+	}
 	t.Input = tax.Input{
 		Year: y, Status: hh.Filing, State: hh.State, DependentAges: hh.DependentAges(y), Inflation: h.inflation(y),
 		Earners:     []tax.Earner{{Wages: in.wages + in.vests, K401: in.k401, IRA: in.ira, HSA: in.hsa}},
 		OtherIncome: t.Ordinary, NetInvestmentIncome: t.Interest, EarlyWithdrawal: in.early,
+		ShortTermGains: t.ShortTermGains, LongTermGains: t.LongTermGains,
 	}
 	for _, a := range h.rec.Accounts {
 		if v, ok := in.contrib529[a.ID]; ok {
@@ -386,6 +396,13 @@ func (h *householdTax) compute(y int, interest []*path) *TaxYear {
 		h.note("tax %d: %v", y, err)
 	}
 	t.Result = res
+	if t.ShortTermGains != 0 || t.LongTermGains != 0 {
+		without := t.Input
+		without.ShortTermGains, without.LongTermGains = 0, 0
+		if base, err := tax.Compute(h.rec.Tax, without); err == nil {
+			t.GainsTax = res.Total - base.Total
+		}
+	}
 	t.Due = res.Total - t.Withheld()
 	return t
 }
@@ -419,7 +436,10 @@ func (h *householdTax) reconcile(paths, interest []*path, horizon model.Date) {
 			continue
 		}
 		if date > recon.start {
-			recon.changes = append(recon.changes, change{date: date, cause: CauseTax, amount: -t.Due, rank: rankTax})
+			recon.changes = append(recon.changes, change{date: date, cause: CauseTax, amount: -(t.Due - t.GainsTax), rank: rankTax})
+			if t.GainsTax != 0 {
+				recon.changes = append(recon.changes, change{date: date, cause: CauseGainsTax, amount: -t.GainsTax, rank: rankTax})
+			}
 			recon.settle()
 		}
 	}

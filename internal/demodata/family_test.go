@@ -328,3 +328,39 @@ func TestAcmeScenarios(t *testing.T) {
 		t.Errorf("equity with yearly grants: %v, base %v", g, baseEquity)
 	}
 }
+
+func TestCrashProjectionShocksAndRebalances(t *testing.T) {
+	rec := Family()
+	p := rec.Projection(ProjCrash)
+	if p == nil || len(p.Shocks) != 1 || len(p.Rebalances) != 1 || p.Shocks[0].Change != -0.40 || p.Rebalances[0].Account != Brokerage {
+		t.Fatalf("projection %+v", p)
+	}
+	res, err := engine.Balances(rec, ProjCrash, model.DefaultAssetID(Brokerage), []model.Date{d(2027, time.March, 1), d(2027, time.March, 2), d(2028, time.January, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Skipped) != 0 {
+		t.Fatalf("skipped %+v", res.Skipped)
+	}
+	if before, after := res.Samples[0].Amount, res.Samples[1].Amount; !(after < 0.9*before) {
+		t.Errorf("brokerage %v before the shock and %v after", before, after)
+	}
+	ty, err := engine.TaxYearOf(rec, ProjCrash, 2027)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ty.ShortTermGains+ty.LongTermGains <= 0 || ty.GainsTax <= 0 {
+		t.Errorf("the rebalance realized %v short and %v long, gains tax %v", ty.ShortTermGains, ty.LongTermGains, ty.GainsTax)
+	}
+	// The shock alone sells nothing, in the 401k and the other sheltered accounts as everywhere.
+	if err := rec.AddProjection(&model.Projection{Name: "shock only", Parent: ProjBase, Shocks: p.Shocks}); err != nil {
+		t.Fatal(err)
+	}
+	shock, err := engine.TaxYearOf(rec, "shock only", 2027)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shock.ShortTermGains != 0 || shock.LongTermGains != 0 {
+		t.Errorf("the shock alone realized %v short and %v long", shock.ShortTermGains, shock.LongTermGains)
+	}
+}

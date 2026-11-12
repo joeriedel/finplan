@@ -110,7 +110,7 @@ func TestRemoveClassRefusedWhileInUse(t *testing.T) {
 	if _, err := RemoveClass(st, rec, model.ClassLargeCap, Options{}); !errors.Is(err, ErrInUse) {
 		t.Errorf("modified by a projection: %v", err)
 	}
-	if _, err := RemoveClass(st, rec, model.ClassBonds, Options{}); err != nil {
+	if _, err := RemoveClass(st, rec, model.ClassTreasuries, Options{}); err != nil {
 		t.Errorf("unused: %v", err)
 	}
 }

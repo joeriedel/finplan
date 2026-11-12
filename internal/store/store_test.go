@@ -121,7 +121,7 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	want := demodata.Family()
 	mustSave(t, s, want)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 7 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 8 {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
 	// Format 1 documents have no mode and no growth; a schedule of no growth is not stored.
@@ -1280,6 +1280,17 @@ func TestFormat4BudgetDocumentsLoadUnchanged(t *testing.T) {
 	}
 	if again := mustLoad(t, s); !reflect.DeepEqual(again.Budget.Items, want) {
 		t.Fatal("resaved items differ")
+	}
+}
+
+func TestYearlyRebalanceRoundTrips(t *testing.T) {
+	s, _ := openTemp(t)
+	rec := demodata.Family()
+	rec.Account(demodata.Brokerage).RebalanceYearly = true
+	mustSave(t, s, rec)
+	got := mustLoad(t, s)
+	if !got.Account(demodata.Brokerage).RebalanceYearly || got.Account(demodata.K401).RebalanceYearly {
+		t.Error("the yearly rebalance setting did not round-trip")
 	}
 }
 

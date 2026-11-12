@@ -11,6 +11,7 @@ import (
 
 	"github.com/joeriedel/finplan/internal/engine"
 	"github.com/joeriedel/finplan/internal/model"
+	"github.com/joeriedel/finplan/internal/tax"
 )
 
 // realityLabel is the projection picker's entry for the record as it is, without a projection.
@@ -93,7 +94,7 @@ func (s *taxState) renameProjection(from, to string) {
 // taxRows lists the year's figures in the order the CLI's tax year command reports them. Pre-tax deductions are what the tax rules deducted after the contribution limits, so they can be less than the contributions.
 func taxRows(rec *model.Record, ty *engine.TaxYear) []taxRow {
 	r := ty.Result
-	income := ty.Wages + ty.VestWages + ty.Ordinary + ty.EarlyWithdrawal
+	income := ty.Wages + ty.VestWages + ty.Ordinary + ty.EarlyWithdrawal + tax.GainsInAGI(ty.ShortTermGains, ty.LongTermGains, ty.Input.Status)
 	deducted := income - r.AGI
 	state := "State tax"
 	if ty.Input.State != "" {
@@ -107,6 +108,9 @@ func taxRows(rec *model.Record, ty *engine.TaxYear) []taxRow {
 	}
 	if ty.EarlyWithdrawal != 0 {
 		rows = append(rows, taxRow{"Early withdrawals", formatDollars(ty.EarlyWithdrawal), ""})
+	}
+	if ty.ShortTermGains != 0 || ty.LongTermGains != 0 {
+		rows = append(rows, taxRow{"Realized gains", formatDollars(ty.ShortTermGains + ty.LongTermGains), "short-term " + formatDollars(ty.ShortTermGains) + ", long-term " + formatDollars(ty.LongTermGains)})
 	}
 	rows = append(rows,
 		taxRow{"Pre-tax deductions", formatDollars(deducted), "401k " + formatDollars(ty.K401) + ", IRA " + formatDollars(ty.IRA) + ", HSA " + formatDollars(ty.HSA) + " contributed"},
@@ -122,6 +126,9 @@ func taxRows(rec *model.Record, ty *engine.TaxYear) []taxRow {
 	)
 	if r.NIIT != 0 {
 		rows = append(rows, taxRow{"Net investment income tax", formatDollars(r.NIIT), ""})
+	}
+	if ty.GainsTax != 0 {
+		rows = append(rows, taxRow{"Tax on realized gains", formatDollars(ty.GainsTax), "included above"})
 	}
 	if r.Penalty != 0 {
 		rows = append(rows, taxRow{"Early withdrawal penalty", formatDollars(r.Penalty), ""})

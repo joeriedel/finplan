@@ -46,7 +46,7 @@ func encodeRecord(r *model.Record) ([]docRow, error) {
 		}
 	}
 	for i, a := range r.Accounts {
-		d := accountDoc{a.ID, a.Name, a.Type, a.Tax, a.StatedRate, defaultDoc(a.Default), a.Closed, mapSlice(a.Allocation, func(h model.Holding) holdingDoc { return holdingDoc{h.Class, h.Percent} })}
+		d := accountDoc{a.ID, a.Name, a.Type, a.Tax, a.StatedRate, defaultDoc(a.Default), a.Closed, mapSlice(a.Allocation, func(h model.Holding) holdingDoc { return holdingDoc{h.Class, h.Percent} }), a.RebalanceYearly}
 		if err := add(kindAccount, string(a.ID), i, d); err != nil {
 			return nil, err
 		}
@@ -365,7 +365,8 @@ func restoreAccountsAndAssets(rec *model.Record, accts []accountDoc, assets []as
 func buildAccount(d accountDoc, entries []Entry) (*model.Account, error) {
 	a := &model.Account{ID: d.ID, Name: d.Name, Type: d.Type, Tax: d.Tax,
 		StatedRate: d.StatedRate, Default: docDefault(d.Default), Closed: d.Closed,
-		Allocation: mapSlice(d.Allocation, func(h holdingDoc) model.Holding { return model.Holding{Class: h.Class, Percent: h.Percent} })}
+		Allocation:      mapSlice(d.Allocation, func(h holdingDoc) model.Holding { return model.Holding{Class: h.Class, Percent: h.Percent} }),
+		RebalanceYearly: d.RebalanceYearly}
 	for _, e := range entries {
 		switch e.Kind {
 		case KindSnapshot:

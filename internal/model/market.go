@@ -179,7 +179,6 @@ func (r *Record) CheckAllocation(t AccountType, alloc []Holding) error {
 }
 
 // Shock is a one-off change to a class on a date: Change is a fraction, -0.3 for a 30% drop.
-// The engine does not execute shocks yet.
 type Shock struct {
 	Class  string
 	Date   Date
@@ -192,7 +191,7 @@ type Weight struct {
 	Share float64
 }
 
-// Rebalance is a dated change of an account's allocation. The engine does not execute rebalances yet.
+// Rebalance is a dated change of an account's allocation: on the date its holdings are traded to the Shares of Allocation, which sum to 1, and money paid in after it is split that way.
 type Rebalance struct {
 	Account    AccountID
 	Date       Date

@@ -36,7 +36,7 @@ var commands = []*command{
 	},
 	{
 		Name: "account list", Summary: "list the accounts",
-		Output: "[{id, name, type, tax, stated_rate (a fraction per year), default: [{from, to, value}], closed, allocation: [{class, percent}], balance, last_data, stale}]; allocation is the account's split among market classes in percent, empty for an account with none, which grows at its stated_rate; default is the default balance intervals in the order added, the last added winning where they overlap; closed is the date the account was closed, null while it is open, and it reads 0 after that date; balance is the balance on the record's today (0 once today is after the account's close date); last_data is the date of the latest record entry, null without a snapshot; stale is true for an open account whose last_data is more than 45 days before the record's today, as the Graph labels it",
+		Output: "[{id, name, type, tax, stated_rate (a fraction per year), default: [{from, to, value}], closed, allocation: [{class, percent}], rebalance_yearly, balance, last_data, stale}]; allocation is the account's split among market classes in percent, empty for an account with none, which grows at its stated_rate; rebalance_yearly is true if projections rebalance the account to its allocation every 1 January; default is the default balance intervals in the order added, the last added winning where they overlap; closed is the date the account was closed, null while it is open, and it reads 0 after that date; balance is the balance on the record's today (0 once today is after the account's close date); last_data is the date of the latest record entry, null without a snapshot; stale is true for an open account whose last_data is more than 45 days before the record's today, as the Graph labels it",
 		run:    cmdAccountList,
 	},
 	{
@@ -81,7 +81,7 @@ var commands = []*command{
 	{
 		Name: "projection show", Summary: "show a projection's settings, its own hypothetical accounts and its modifications",
 		Args:   []argDef{{Name: "name", Description: "projection name", Required: true}},
-		Output: "{name, parent, start, override_history, asset_settings: [{asset, start, override_history}], accounts: [{id, name, type, tax, stated_rate, opening, from}] (the hypothetical accounts the projection defines itself, not those it inherits), modifications: [{index, target: {kind, id}, property, mode (set or scale), schedule: [{from, end, value}], item}]}; modifications are in the order they apply",
+		Output: "{name, parent, start, override_history, asset_settings: [{asset, start, override_history}], accounts: [{id, name, type, tax, stated_rate, opening, from}] (the hypothetical accounts the projection defines itself, not those it inherits), modifications: [{index, target: {kind, id}, property, mode (set or scale), schedule: [{from, end, value}], item}], shocks: [{index, class, date, percent (-40 for a 40% drop)}], rebalances: [{index, account, date, allocation: [{class, percent}]}]}; modifications are in the order they apply; shocks and rebalances are in the order they were added, each numbered from 0",
 		run:    cmdProjectionShow,
 	},
 	{
@@ -104,7 +104,7 @@ var commands = []*command{
 			{Name: "to", Type: typeDate, Required: true, EndOfMonth: true, Description: "end of the period, inclusive: " + endNote},
 			{Name: "projection", Type: typeString, Description: projDesc},
 		},
-		Output: "{target (asset id), projection, from, to, start, end, total, lines: [{cause, class, actual, projected}], " + diagShape + "}. class is null except on the growth lines of an account with an allocation, which has one growth line per market class, in the order of the classes, instead of a single one. " + jsonNote,
+		Output: "{target (asset id), projection, from, to, start, end, total, lines: [{cause, class, actual, projected}], " + diagShape + "}. class is null except on the growth lines of an account with an allocation, which has one growth line per market class, in the order of the classes, instead of a single one, and on shock lines, the change a market shock made to the holdings of a class (cause shock; cause gains tax is the part of a year's tax that realized capital gains add, and tax the rest). " + jsonNote,
 		run:    cmdBreakdown,
 	},
 	{
@@ -285,6 +285,8 @@ type jaccount struct {
 	Closed     *jdate      `json:"closed"`
 	// Allocation is the account's split among market classes; empty for none.
 	Allocation []jholding `json:"allocation"`
+	// RebalanceYearly is whether the account rebalances to its allocation every 1 January in a projection.
+	RebalanceYearly bool `json:"rebalance_yearly"`
 }
 
 // jaccountRow is an account with what account list adds to it.
@@ -297,7 +299,7 @@ type jaccountRow struct {
 
 // accountJSON is the JSON shape of an account, as account list prints it and the write commands print the account they changed.
 func accountJSON(a *model.Account) jaccount {
-	return jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.StatedRate, defaultJSON(a.Default), jdp(a.Closed), allocationJSON(a.Allocation)}
+	return jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.StatedRate, defaultJSON(a.Default), jdp(a.Closed), allocationJSON(a.Allocation), a.RebalanceYearly}
 }
 
 func cmdAccountList(c *call) (any, error) {
@@ -666,7 +668,9 @@ func projectionJSON(rec *model.Record, p *model.Projection) any {
 		AssetSettings   []jsetting `json:"asset_settings"`
 		Accounts        []jaccount `json:"accounts"`
 		Modifications   []jmod     `json:"modifications"`
-	}{p.Name, nullable(p.Parent), jdp(p.Start), p.OverrideHistory, []jsetting{}, []jaccount{}, []jmod{}}
+		Shocks          []jshock   `json:"shocks"`
+		Rebalances      []jrebal   `json:"rebalances"`
+	}{p.Name, nullable(p.Parent), jdp(p.Start), p.OverrideHistory, []jsetting{}, []jaccount{}, []jmod{}, []jshock{}, []jrebal{}}
 	for _, a := range p.Accounts {
 		out.Accounts = append(out.Accounts, jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.StatedRate, a.Opening, jd(a.From)})
 	}
@@ -685,6 +689,16 @@ func projectionJSON(rec *model.Record, p *model.Projection) any {
 			jm.Missing, jm.MissingTarget = true, missing[i]
 		}
 		out.Modifications = append(out.Modifications, jm)
+	}
+	for i, sh := range p.Shocks {
+		out.Shocks = append(out.Shocks, jshock{i, sh.Class, jd(sh.Date), percentOf(sh.Change)})
+	}
+	for i, r := range p.Rebalances {
+		jr := jrebal{i, string(r.Account), jd(r.Date), []jholding{}}
+		for _, w := range r.Allocation {
+			jr.Allocation = append(jr.Allocation, jholding{w.Class, percentOf(w.Share)})
+		}
+		out.Rebalances = append(out.Rebalances, jr)
 	}
 	return out
 }

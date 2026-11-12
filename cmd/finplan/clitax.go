@@ -21,7 +21,7 @@ import (
 const (
 	householdOut = "{dry_run, changed, household: as household show prints it, after the edit}"
 	memberOut    = "{dry_run, changed, member: {name, birth, role}, household: as household show prints it, after the edit}"
-	taxTableNote = "a federal table is {year, status: {mfj|single|hoh|mfs: {brackets: [{over, rate}], standard_deduction, child_credit_phase_out, additional_medicare_threshold, niit_threshold}}, child_credit, other_dependent_credit, early_withdrawal_penalty_rate, social_security_rate, social_security_wage_base, medicare_rate, additional_medicare_rate, niit_rate, limit_401k, limit_ira, limit_hsa}; a state table is {name, year, brackets: [{over, rate}], standard_deduction: {mfj|single|hoh|mfs: amount}, exemption, dependent_exemption, cap_529}; the first bracket starts at over 0 and the rest ascend, each rate applying to the income above its over; tax table show prints both shapes"
+	taxTableNote = "a federal table is {year, status: {mfj|single|hoh|mfs: {brackets: [{over, rate}], standard_deduction, child_credit_phase_out, additional_medicare_threshold, niit_threshold, long_term_gains_15_over, long_term_gains_20_over (the taxable income above which long-term gains are taxed at 15% and at 20%)}}, child_credit, other_dependent_credit, early_withdrawal_penalty_rate, social_security_rate, social_security_wage_base, medicare_rate, additional_medicare_rate, niit_rate, limit_401k, limit_ira, limit_hsa}; a state table is {name, year, brackets: [{over, rate}], standard_deduction: {mfj|single|hoh|mfs: amount}, exemption, dependent_exemption, cap_529}; the first bracket starts at over 0 and the rest ascend, each rate applying to the income above its over; tax table show prints both shapes"
 )
 
 var filingStatuses = func() []string {
@@ -59,7 +59,7 @@ var taxReadCommands = []*command{
 		Name: "tax year", Summary: "the household's tax for a calendar year under a projection, as the engine books it: the year's income, contributions and withdrawals, the tax by kind, what paychecks and vests withheld and the reconciliation on 15 April of the next year",
 		Args:   []argDef{{Name: "year", Description: "the calendar year", Required: true}},
 		Flags:  []flagDef{{Name: "projection", Type: typeString, Description: projDesc}},
-		Output: "{year, projection, filing_status, state, inputs: {wages (paychecks), vest_wages, pre_tax: {k401, ira, hsa} (before the limits), ordinary_income (other-ordinary items, interest and taxable withdrawals that are not early), interest (included in ordinary_income), early_withdrawal, dependent_ages, contrib_529: [one per 529 account]}, tax: {agi, federal_taxable, federal_tax (before credits), credits, niit, early_withdrawal_penalty, state_taxable, state_tax, social_security, medicare, additional_medicare, total}, withheld: {paychecks, vests, total} (those before the projection's start included), due_minus_withheld, reconciliation: {date, account (null without a checking account), amount (positive paid, negative refunded)}, " + diagShape + "}; dollars rounded to cents",
+		Output: "{year, projection, filing_status, state, inputs: {wages (paychecks), vest_wages, pre_tax: {k401, ira, hsa} (before the limits), ordinary_income (other-ordinary items, interest and taxable withdrawals that are not early), interest (included in ordinary_income), early_withdrawal, short_term_gains and long_term_gains (realized by sales in taxable accounts, a loss negative; not in ordinary_income), dependent_ages, contrib_529: [one per 529 account]}, tax: {agi, federal_taxable, federal_tax (before credits), credits, niit, early_withdrawal_penalty, state_taxable, state_tax, social_security, medicare, additional_medicare, total, gains_tax (the part of total the gains add)}, withheld: {paychecks, vests, total} (those before the projection's start included), due_minus_withheld, reconciliation: {date, account (null without a checking account), amount (positive paid, negative refunded)}, " + diagShape + "}; dollars rounded to cents",
 		run:    cmdTaxYear,
 	},
 	{
@@ -72,6 +72,8 @@ var taxReadCommands = []*command{
 			{Name: "ira", Type: typeString, Description: "traditional IRA contributions of each earner in the order of --wages, comma separated; each is limited to the year's limit and deducted in full"},
 			{Name: "hsa", Type: typeString, Description: "HSA contributions through payroll of each earner in the order of --wages, comma separated; the household's total is limited to the year's family limit; they reduce income and FICA wages"},
 			{Name: "net-investment-income", Type: typeNumber, Description: "net investment income, which the net investment income tax applies to"},
+			{Name: "short-term-gains", Type: typeNumber, Description: "net realized capital gains on assets held a year or less (a loss is negative): ordinary income, and net investment income; 0 when omitted"},
+			{Name: "long-term-gains", Type: typeNumber, Description: "net realized capital gains on assets held more than a year (a loss is negative): taxed at the long-term rates on top of ordinary taxable income, and net investment income; a net loss deducts up to 3,000 from ordinary income; 0 when omitted"},
 			{Name: "early-withdrawal", Type: typeNumber, Description: "a taxable withdrawal before age 59 and a half: ordinary income with the early withdrawal penalty"},
 			{Name: "contrib-529", Type: typeString, Description: "the year's contributions to each 529 account, comma separated, e.g. 4000,2500; each deducted from state income up to the state's cap"},
 			{Name: "inflation", Type: typeNumber, Description: "annual inflation as a fraction, indexing a year past the last federal table; the record's inflation today when omitted"},
@@ -440,7 +442,7 @@ func cmdTaxCompute(c *call) (any, error) {
 		out  *float64
 	}{
 		{"other-income", &in.OtherIncome},
-		{"net-investment-income", &in.NetInvestmentIncome}, {"early-withdrawal", &in.EarlyWithdrawal}, {"inflation", &in.Inflation},
+		{"net-investment-income", &in.NetInvestmentIncome}, {"short-term-gains", &in.ShortTermGains}, {"long-term-gains", &in.LongTermGains}, {"early-withdrawal", &in.EarlyWithdrawal}, {"inflation", &in.Inflation},
 	} {
 		if v, ok, err := c.number(f.name); err != nil {
 			return nil, err
@@ -526,6 +528,7 @@ type jtax struct {
 	Medicare       float64 `json:"medicare"`
 	AddlMedicare   float64 `json:"additional_medicare"`
 	Total          float64 `json:"total"`
+	GainsTax       float64 `json:"gains_tax"`
 }
 
 type jtaxYear struct {
@@ -544,6 +547,8 @@ type jtaxYear struct {
 		Ordinary        float64   `json:"ordinary_income"`
 		Interest        float64   `json:"interest"`
 		EarlyWithdrawal float64   `json:"early_withdrawal"`
+		ShortTermGains  float64   `json:"short_term_gains"`
+		LongTermGains   float64   `json:"long_term_gains"`
 		DependentAges   []int     `json:"dependent_ages"`
 		Contrib529      []float64 `json:"contrib_529"`
 	} `json:"inputs"`
@@ -596,9 +601,10 @@ func cmdTaxYear(c *call) (any, error) {
 	in.Wages, in.VestWages = cents(ty.Wages), cents(ty.VestWages)
 	in.PreTax.K401, in.PreTax.IRA, in.PreTax.HSA = cents(ty.K401), cents(ty.IRA), cents(ty.HSA)
 	in.Ordinary, in.Interest, in.EarlyWithdrawal = cents(ty.Ordinary), cents(ty.Interest), cents(ty.EarlyWithdrawal)
+	in.ShortTermGains, in.LongTermGains = cents(ty.ShortTermGains), cents(ty.LongTermGains)
 	in.DependentAges, in.Contrib529 = ages, contrib
 	out.Tax = jtax{cents(res.AGI), cents(res.FederalTaxable), cents(res.FederalTax), cents(res.Credits), cents(res.NIIT), cents(res.Penalty),
-		cents(res.StateTaxable), cents(res.StateTax), cents(res.SocialSecurity), cents(res.Medicare), cents(res.AdditionalMedicare), cents(res.Total)}
+		cents(res.StateTaxable), cents(res.StateTax), cents(res.SocialSecurity), cents(res.Medicare), cents(res.AdditionalMedicare), cents(res.Total), cents(ty.GainsTax)}
 	out.Withheld.Paychecks, out.Withheld.Vests, out.Withheld.Total = cents(ty.WithheldPaychecks), cents(ty.WithheldVests), cents(ty.Withheld())
 	out.Due = cents(ty.Due)
 	out.Reconciliation.Date, out.Reconciliation.Account, out.Reconciliation.Amount = jd(ty.ReconciliationDate), nullable(string(ty.ReconciliationAccount)), cents(ty.Due)

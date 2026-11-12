@@ -19,7 +19,7 @@ import (
 const kindFocalGrant model.ObjectKind = "focal grant"
 
 // addKinds are the kinds the Add form offers.
-var addKinds = append(slices.Clone(objectKinds), kindFocalGrant)
+var addKinds = append(slices.Clone(objectKinds), kindFocalGrant, kindShock, kindRebalance)
 
 // focalForm is a focal grant as the user enters it: the picks are ids, the rest text as entered. Blank rates mean the default withholding.
 type focalForm struct {

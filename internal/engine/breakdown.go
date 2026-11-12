@@ -14,7 +14,7 @@ import (
 // Cause names why a balance changed.
 type Cause string
 
-// Causes. Grant is the value of new RSU grants added to an equity account and Vest the net proceeds of its vests, which leave it for the deposit account; the withholding of a vest is Tax. Unexplained is the part of an actual change that snapshots show and transactions do not.
+// Causes. GainsTax is the part of a year's tax that the capital gains realized in taxable accounts add, and Shock the change a market shock made to the holdings of a class (a line with a Class). Grant is the value of new RSU grants added to an equity account and Vest the net proceeds of its vests, which leave it for the deposit account; the withholding of a vest is Tax. Unexplained is the part of an actual change that snapshots show and transactions do not.
 // Default is a change that comes from default balances, including a hand-off between defaults and
 // actual data.
 const (
@@ -24,6 +24,8 @@ const (
 	CauseContribution Cause = "contribution"
 	CauseWithdrawal   Cause = "withdrawal"
 	CauseTax          Cause = "tax"
+	CauseGainsTax     Cause = "gains tax"
+	CauseShock        Cause = "shock"
 	CauseGrant        Cause = "grant"
 	CauseVest         Cause = "vest"
 	CauseGrowth       Cause = "growth"
@@ -37,11 +39,11 @@ const residualTolerance = 1e-6
 
 var causeOrder = []Cause{
 	CauseIncome, CauseExpense, CauseTransfer, CauseContribution, CauseWithdrawal,
-	CauseGrant, CauseVest, CauseTax, CauseGrowth, CauseOpening, CauseUnexplained, CauseDefault,
+	CauseGrant, CauseVest, CauseTax, CauseGainsTax, CauseGrowth, CauseShock, CauseOpening, CauseUnexplained, CauseDefault,
 }
 
 // Line is the change attributed to one cause, split by where it came from: Actual is read back from
-// the record (and defaults), Projected is extrapolated. Class names the market class of a growth line of an account with an allocation, and is empty on every other line.
+// the record (and defaults), Projected is extrapolated. Class names the market class of a growth or shock line of an account with an allocation, and is empty on every other line.
 type Line struct {
 	Cause     Cause
 	Class     string
@@ -55,7 +57,7 @@ type BreakdownResult struct {
 	From, To model.Date
 	Start    float64
 	End      float64
-	Lines    []Line // in a fixed cause order, causes with no change omitted; growth by class follows the other growth line in class order
+	Lines    []Line // in a fixed cause order, causes with no change omitted; growth by class follows the other growth line in class order, shocks by class the shock cause's place
 	Diagnostics
 }
 
@@ -79,7 +81,7 @@ func Breakdown(rec *model.Record, projection string, target model.AssetID, from,
 	if err != nil {
 		return nil, err
 	}
-	acc := &accum{inside: map[model.AccountID]bool{}, lines: map[Cause]*Line{}, classes: map[string]*Line{}}
+	acc := &accum{inside: map[model.AccountID]bool{}, lines: map[Cause]*Line{}, classes: map[string]*Line{}, shocks: map[string]*Line{}}
 	for _, id := range r.res.Accounts {
 		acc.inside[id] = true
 	}
@@ -95,16 +97,19 @@ func Breakdown(rec *model.Record, projection string, target model.AssetID, from,
 	}
 	// Summed in cause order: float addition order must not depend on map iteration.
 	classIDs := make([]string, 0, len(acc.classes))
+	known := func(id string) bool { return acc.classes[id] != nil || acc.shocks[id] != nil }
 	for _, c := range rec.Classes {
-		if acc.classes[c.ID] != nil {
+		if known(c.ID) {
 			classIDs = append(classIDs, c.ID)
 		}
 	}
 	// Classes the record no longer has, for an allocation that names one, follow in ID order.
 	var orphans []string
-	for id := range acc.classes {
-		if rec.Class(id) == nil {
-			orphans = append(orphans, id)
+	for _, m := range []map[string]*Line{acc.classes, acc.shocks} {
+		for id := range m {
+			if rec.Class(id) == nil && !slices.Contains(orphans, id) {
+				orphans = append(orphans, id)
+			}
 		}
 	}
 	slices.Sort(orphans)
@@ -114,9 +119,9 @@ func Breakdown(rec *model.Record, projection string, target model.AssetID, from,
 		if l, ok := acc.lines[c]; ok {
 			sum += l.Actual + l.Projected
 		}
-		if c == CauseGrowth {
-			for _, id := range classIDs {
-				sum += acc.classes[id].Projected
+		for _, id := range classIDs {
+			if l := acc.byCause(c, id); l != nil {
+				sum += l.Projected
 			}
 		}
 	}
@@ -128,11 +133,9 @@ func Breakdown(rec *model.Record, projection string, target model.AssetID, from,
 		if l, ok := acc.lines[c]; ok && (l.Actual != 0 || l.Projected != 0) {
 			out.Lines = append(out.Lines, *l)
 		}
-		if c == CauseGrowth {
-			for _, id := range classIDs {
-				if l := acc.classes[id]; l.Projected != 0 {
-					out.Lines = append(out.Lines, *l)
-				}
+		for _, id := range classIDs {
+			if l := acc.byCause(c, id); l != nil && l.Projected != 0 {
+				out.Lines = append(out.Lines, *l)
 			}
 		}
 	}
@@ -142,8 +145,20 @@ func Breakdown(rec *model.Record, projection string, target model.AssetID, from,
 type accum struct {
 	inside    map[model.AccountID]bool
 	lines     map[Cause]*Line
-	classes   map[string]*Line
-	cancelled float64 // signed sum of transfers between accounts under the asset
+	classes   map[string]*Line // growth by class
+	shocks    map[string]*Line // shocks by class
+	cancelled float64          // signed sum of transfers between accounts under the asset
+}
+
+// byCause is the line of the class under a cause that is split by class, nil for any other cause or a class with no line.
+func (a *accum) byCause(c Cause, class string) *Line {
+	switch c {
+	case CauseGrowth:
+		return a.classes[class]
+	case CauseShock:
+		return a.shocks[class]
+	}
+	return nil
 }
 
 func (a *accum) add(c Cause, amount float64, projected bool) {
@@ -180,10 +195,24 @@ func (p *path) breakdown(rec *model.Record, from, to model.Date, acc *accum) {
 				acc.addFlow(c.cause, c.amount, c.counter, true)
 			}
 		}
+		for _, c := range p.shocked {
+			if c.date > lo && c.date <= to {
+				line := acc.shocks[c.class]
+				if line == nil {
+					line = &Line{Cause: CauseShock, Class: c.class}
+					acc.shocks[c.class] = line
+				}
+				line.Projected += c.amount
+			}
+		}
 		if p.legs == nil {
 			acc.add(CauseGrowth, p.growthAt(to)-p.growthAt(lo), true)
 		}
 		for i, l := range p.legs {
+			if l.class == "" {
+				acc.add(CauseGrowth, p.legGrowthAt(i, to)-p.legGrowthAt(i, lo), true)
+				continue
+			}
 			line := acc.classes[l.class]
 			if line == nil {
 				line = &Line{Cause: CauseGrowth, Class: l.class}

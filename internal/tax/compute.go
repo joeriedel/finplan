@@ -36,13 +36,23 @@ type Input struct {
 	Contrib529 []float64
 	// EarlyWithdrawal is a taxable withdrawal before age 59 and a half: ordinary income and subject to the penalty.
 	EarlyWithdrawal float64
+	// ShortTermGains and LongTermGains are the year's net realized capital gains on assets held a year or less and more than a year; a loss is negative. Short-term gains are ordinary income and long-term gains are taxed at the preferential rates on top of the ordinary taxable income. A net loss deducts up to 3,000 (1,500 married filing separately) from ordinary income, and what is left is not carried forward. Both kinds of gains count in the adjusted gross income and the net investment income.
+	ShortTermGains, LongTermGains float64
 	// Inflation is the annual rate that indexes a year past the last federal table.
 	Inflation float64
 }
 
+// Capital gains rates and the most a net capital loss deducts a year, set by statute (26 U.S.C. 1(h), 1211(b)).
+const (
+	longTermRate15     = 0.15
+	longTermRate20     = 0.20
+	capitalLossLimit   = 3000
+	capitalLossLimitMS = 1500
+)
+
 // Result is the tax of a year.
 type Result struct {
-	// AGI is the adjusted gross income: wages, other income and the early withdrawal, less the pre-tax deductions.
+	// AGI is the adjusted gross income: wages, other income, the early withdrawal and the net capital gains, less the net capital loss deduction and the pre-tax deductions.
 	AGI                float64
 	FederalTaxable     float64
 	FederalTax         float64 // on the taxable income, before credits
@@ -58,7 +68,7 @@ type Result struct {
 	Total float64
 }
 
-// index scales the table's indexed amounts from its own year to year by (1+inflation) a year. Brackets and the standard deduction round to 50, the Social Security wage base to 300, the 401(k) and IRA limits to 500, the HSA limit to 50 and the child credit to 100. The credit for other dependents and the statutory thresholds are not indexed. A year at or before the table's is left as it is.
+// index scales the table's indexed amounts from its own year to year by (1+inflation) a year. Brackets, the long-term gains thresholds and the standard deduction round to 50, the Social Security wage base to 300, the 401(k) and IRA limits to 500, the HSA limit to 50 and the child credit to 100. The credit for other dependents and the statutory thresholds are not indexed. A year at or before the table's is left as it is.
 func (f Federal) index(year int, inflation float64) Federal {
 	if year <= f.Year {
 		return f
@@ -72,6 +82,8 @@ func (f Federal) index(year int, inflation float64) Federal {
 			s.Brackets[i].Over = scale(s.Brackets[i].Over, 50)
 		}
 		s.StandardDeduction = scale(s.StandardDeduction, 50)
+		s.LongTermGains15Over = scale(s.LongTermGains15Over, 50)
+		s.LongTermGains20Over = scale(s.LongTermGains20Over, 50)
 		f.Status[k] = s
 	}
 	f.ChildCredit = scale(f.ChildCredit, 100)
@@ -140,10 +152,41 @@ func bracketTax(bs []Bracket, income float64) float64 {
 	return tax
 }
 
+// netGains nets the year's short-term and long-term gains against each other. It returns the part taxed as ordinary income, the part taxed at the long-term rates and the deduction a net loss takes against other income.
+func netGains(short, long float64, status FilingStatus) (ordinary, preferred, deduction float64) {
+	switch net := short + long; {
+	case net < 0:
+		limit := float64(capitalLossLimit)
+		if status == MarriedSeparate {
+			limit = capitalLossLimitMS
+		}
+		return 0, 0, math.Min(-net, limit)
+	case short < 0:
+		return 0, net, 0
+	case long < 0:
+		return net, 0, 0
+	}
+	return short, long, 0
+}
+
+// GainsInAGI is what the year's short-term and long-term gains add to the adjusted gross income: their net, or for a net loss the part that deducts.
+func GainsInAGI(short, long float64, status FilingStatus) float64 {
+	ordinary, preferred, deduction := netGains(short, long, status)
+	return ordinary + preferred - deduction
+}
+
+// longTermTax is the tax on gains stacked on top of the ordinary taxable income base: 0% below over15, 15% up to over20 and 20% above.
+func longTermTax(base, gains, over15, over20 float64) float64 {
+	top := base + gains
+	at15 := math.Max(0, math.Min(top, over20)-math.Max(base, over15))
+	at20 := math.Max(0, top-math.Max(base, over20))
+	return longTermRate15*at15 + longTermRate20*at20
+}
+
 // capped returns v limited to 0..limit.
 func capped(v, limit float64) float64 { return math.Max(0, math.Min(v, limit)) }
 
-// Compute returns the tax of the household's year under the tables. Pre-tax 401(k) and TSP deferrals and IRA contributions reduce income but not the wages FICA is computed on; HSA contributions through payroll reduce both. Social Security tax and the 401(k) and IRA limits are applied to each earner; the additional Medicare threshold applies to the household's Medicare wages and the HSA limit to its total contribution. An IRA contribution is deducted in full: the income phase-out of the deduction for a person covered at work is not modelled. Credits are nonrefundable. A state table's brackets, standard deduction and exemptions apply to the federal adjusted gross income; the early withdrawal penalty is federal only.
+// Compute returns the tax of the household's year under the tables. Pre-tax 401(k) and TSP deferrals and IRA contributions reduce income but not the wages FICA is computed on; HSA contributions through payroll reduce both. Social Security tax and the 401(k) and IRA limits are applied to each earner; the additional Medicare threshold applies to the household's Medicare wages and the HSA limit to its total contribution. An IRA contribution is deducted in full: the income phase-out of the deduction for a person covered at work is not modelled. Credits are nonrefundable. A state table's brackets, standard deduction and exemptions apply to the federal adjusted gross income; the early withdrawal penalty is federal only. Capital gains are in the adjusted gross income, so the state taxes them as ordinary income.
 func Compute(t Tables, in Input) (Result, error) {
 	var r Result
 	if !in.Status.Valid() {
@@ -179,9 +222,21 @@ func Compute(t Tables, in Input) (Result, error) {
 	r.Medicare = f.MedicareRate * medicareWages
 	r.AdditionalMedicare = f.AdditionalMedicareRate * math.Max(0, medicareWages-rules.AdditionalMedicareThreshold)
 
-	r.AGI = wages + in.OtherIncome + in.EarlyWithdrawal - deductions
+	ordinaryGains, preferred, lossDeduction := netGains(in.ShortTermGains, in.LongTermGains, in.Status)
+	r.AGI = wages + in.OtherIncome + in.EarlyWithdrawal + ordinaryGains + preferred - lossDeduction - deductions
 	r.FederalTaxable = math.Max(0, r.AGI-rules.StandardDeduction)
-	r.FederalTax = bracketTax(rules.Brackets, r.FederalTaxable)
+	preferredTaxable := math.Min(preferred, r.FederalTaxable)
+	r.FederalTax = bracketTax(rules.Brackets, r.FederalTaxable-preferredTaxable)
+	if preferredTaxable > 0 {
+		over15, over20 := rules.LongTermGains15Over, rules.LongTermGains20Over
+		if over15 == 0 && over20 == 0 {
+			// A stored table from before these thresholds existed has none: use the shipped ones for the year.
+			if d, err := Defaults().federalFor(in.Year, in.Inflation); err == nil {
+				over15, over20 = d.Status[in.Status].LongTermGains15Over, d.Status[in.Status].LongTermGains20Over
+			}
+		}
+		r.FederalTax += longTermTax(r.FederalTaxable-preferredTaxable, preferredTaxable, over15, over20)
+	}
 
 	var credit float64
 	for _, age := range in.DependentAges {
@@ -196,7 +251,7 @@ func Compute(t Tables, in Input) (Result, error) {
 	}
 	r.Credits = capped(credit, r.FederalTax)
 
-	r.NIIT = f.NIITRate * math.Max(0, math.Min(in.NetInvestmentIncome, r.AGI-rules.NIITThreshold))
+	r.NIIT = f.NIITRate * math.Max(0, math.Min(in.NetInvestmentIncome+ordinaryGains+preferred, r.AGI-rules.NIITThreshold))
 	r.Penalty = f.PenaltyRate * math.Max(0, in.EarlyWithdrawal)
 
 	if in.State != "" {

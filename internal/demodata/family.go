@@ -60,6 +60,8 @@ const (
 	ProjAcmeUp     = "Acme +15%"
 	ProjAcmeCrash  = "Acme crash"
 	ProjAcmeGrants = "Acme yearly grants"
+	// ProjCrash rebalances the brokerage, held all in large cap shares, to 60/40 in February 2027, which sells shares at a gain taxed that year, and then drops large cap shares 40% in March.
+	ProjCrash = "Crash and rebalance"
 	// ProjMax401k raises the 401k contribution from 2027 to nearly the yearly limit.
 	ProjMax401k = "Max 401k"
 )
@@ -243,6 +245,11 @@ func Family() *model.Record {
 			Values:   model.MustSchedule(model.Segment{From: model.D(2027, time.January, 1), Value: 2000}),
 		},
 	}}))
+	must(rec.AddProjection(&model.Projection{Name: ProjCrash, Parent: ProjBase,
+		Shocks: []model.Shock{{Class: model.ClassLargeCap, Date: model.D(2027, time.March, 2), Change: -0.40}},
+		Rebalances: []model.Rebalance{{Account: Brokerage, Date: model.D(2027, time.February, 1),
+			Allocation: []model.Weight{{Class: model.ClassLargeCap, Share: 0.6}, {Class: model.ClassBonds, Share: 0.4}}}},
+	}))
 	return rec
 }
 
