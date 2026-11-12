@@ -36,7 +36,7 @@ var commands = []*command{
 	},
 	{
 		Name: "account list", Summary: "list the accounts",
-		Output: "[{id, name, type, tax, stated_rate (a fraction per year), default: [{from, to, value}], closed, balance, last_data, stale}]; default is the default balance intervals in the order added, the last added winning where they overlap; closed is the date the account was closed, null while it is open, and it reads 0 after that date; balance is the balance on the record's today (0 once today is after the account's close date); last_data is the date of the latest record entry, null without a snapshot; stale is true for an open account whose last_data is more than 45 days before the record's today, as the Graph labels it",
+		Output: "[{id, name, type, tax, stated_rate (a fraction per year), default: [{from, to, value}], closed, allocation: [{class, percent}], balance, last_data, stale}]; allocation is the account's split among market classes in percent, empty for an account with none, which grows at its stated_rate; default is the default balance intervals in the order added, the last added winning where they overlap; closed is the date the account was closed, null while it is open, and it reads 0 after that date; balance is the balance on the record's today (0 once today is after the account's close date); last_data is the date of the latest record entry, null without a snapshot; stale is true for an open account whose last_data is more than 45 days before the record's today, as the Graph labels it",
 		run:    cmdAccountList,
 	},
 	{
@@ -104,7 +104,7 @@ var commands = []*command{
 			{Name: "to", Type: typeDate, Required: true, EndOfMonth: true, Description: "end of the period, inclusive: " + endNote},
 			{Name: "projection", Type: typeString, Description: projDesc},
 		},
-		Output: "{target (asset id), projection, from, to, start, end, total, lines: [{cause, actual, projected}], " + diagShape + "}. " + jsonNote,
+		Output: "{target (asset id), projection, from, to, start, end, total, lines: [{cause, class, actual, projected}], " + diagShape + "}. class is null except on the growth lines of an account with an allocation, which has one growth line per market class, in the order of the classes, instead of a single one. " + jsonNote,
 		run:    cmdBreakdown,
 	},
 	{
@@ -283,6 +283,8 @@ type jaccount struct {
 	StatedRate float64     `json:"stated_rate"`
 	Default    []jinterval `json:"default"`
 	Closed     *jdate      `json:"closed"`
+	// Allocation is the account's split among market classes; empty for none.
+	Allocation []jholding `json:"allocation"`
 }
 
 // jaccountRow is an account with what account list adds to it.
@@ -295,7 +297,7 @@ type jaccountRow struct {
 
 // accountJSON is the JSON shape of an account, as account list prints it and the write commands print the account they changed.
 func accountJSON(a *model.Account) jaccount {
-	return jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.StatedRate, defaultJSON(a.Default), jdp(a.Closed)}
+	return jaccount{string(a.ID), a.Name, string(a.Type), string(a.Tax), a.StatedRate, defaultJSON(a.Default), jdp(a.Closed), allocationJSON(a.Allocation)}
 }
 
 func cmdAccountList(c *call) (any, error) {
@@ -827,6 +829,7 @@ func cmdBreakdown(c *call) (any, error) {
 	}
 	type jline struct {
 		Cause     string  `json:"cause"`
+		Class     *string `json:"class"`
 		Actual    float64 `json:"actual"`
 		Projected float64 `json:"projected"`
 	}
@@ -842,7 +845,7 @@ func cmdBreakdown(c *call) (any, error) {
 		Diag       jdiagnostics `json:"diagnostics"`
 	}{string(target), nullable(projection), jd(from), jd(to), res.Start, res.End, res.Total(), []jline{}, diagnosticsJSON(res.Diagnostics)}
 	for _, l := range res.Lines {
-		out.Lines = append(out.Lines, jline{string(l.Cause), l.Actual, l.Projected})
+		out.Lines = append(out.Lines, jline{string(l.Cause), nullable(l.Class), l.Actual, l.Projected})
 	}
 	return out, nil
 }

@@ -46,7 +46,7 @@ func encodeRecord(r *model.Record) ([]docRow, error) {
 		}
 	}
 	for i, a := range r.Accounts {
-		d := accountDoc{a.ID, a.Name, a.Type, a.Tax, a.StatedRate, defaultDoc(a.Default), a.Closed}
+		d := accountDoc{a.ID, a.Name, a.Type, a.Tax, a.StatedRate, defaultDoc(a.Default), a.Closed, mapSlice(a.Allocation, func(h model.Holding) holdingDoc { return holdingDoc{h.Class, h.Percent} })}
 		if err := add(kindAccount, string(a.ID), i, d); err != nil {
 			return nil, err
 		}
@@ -58,7 +58,12 @@ func encodeRecord(r *model.Record) ([]docRow, error) {
 		}
 	}
 	for i, c := range r.Classes {
-		if err := add(kindClass, c.ID, i, classDoc{c.ID, c.Name, c.Return}); err != nil {
+		if err := add(kindClass, c.ID, i, classDoc{c.ID, c.Name, numOrSegs(scheduleDoc(c.Return)), c.Volatility}); err != nil {
+			return nil, err
+		}
+	}
+	if len(r.Correlations) > 0 {
+		if err := add(kindCorrelations, "", 0, mapSlice(r.Correlations, func(c model.Correlation) correlationDoc { return correlationDoc{c.A, c.B, c.Value} })); err != nil {
 			return nil, err
 		}
 	}
@@ -100,6 +105,7 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 		assets  []assetDoc
 		budget  budgetDoc
 		classes []classDoc
+		corrs   []correlationDoc
 		globals = map[string][]segDoc{}
 		projs   []projectionDoc
 		cals    []calendarDoc
@@ -134,6 +140,8 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 			var d classDoc
 			err = decodeDoc(row, &d)
 			classes = append(classes, d)
+		case kindCorrelations:
+			err = decodeDoc(row, &corrs)
 		case kindGlobal:
 			var d []segDoc
 			err = decodeDoc(row, &d)
@@ -207,8 +215,13 @@ func decodeRecord(rows []docRow, entries map[model.AccountID][]Entry) (*model.Re
 		rec.Budget.Items = append(rec.Budget.Items, it)
 	}
 	for _, c := range classes {
-		rec.Classes = append(rec.Classes, model.MarketClass{ID: c.ID, Name: c.Name, Return: c.Return})
+		ret, err := docSchedule(c.Return)
+		if err != nil {
+			return nil, fmt.Errorf("store: class %q: %w", c.ID, err)
+		}
+		rec.Classes = append(rec.Classes, model.MarketClass{ID: c.ID, Name: c.Name, Return: ret, Volatility: c.Volatility})
 	}
+	rec.Correlations = mapSlice(corrs, func(c correlationDoc) model.Correlation { return model.Correlation{A: c.A, B: c.B, Value: c.Value} })
 	for name, segs := range globals {
 		s, err := docSchedule(segs)
 		if err != nil {
@@ -351,7 +364,8 @@ func restoreAccountsAndAssets(rec *model.Record, accts []accountDoc, assets []as
 
 func buildAccount(d accountDoc, entries []Entry) (*model.Account, error) {
 	a := &model.Account{ID: d.ID, Name: d.Name, Type: d.Type, Tax: d.Tax,
-		StatedRate: d.StatedRate, Default: docDefault(d.Default), Closed: d.Closed}
+		StatedRate: d.StatedRate, Default: docDefault(d.Default), Closed: d.Closed,
+		Allocation: mapSlice(d.Allocation, func(h holdingDoc) model.Holding { return model.Holding{Class: h.Class, Percent: h.Percent} })}
 	for _, e := range entries {
 		switch e.Kind {
 		case KindSnapshot:

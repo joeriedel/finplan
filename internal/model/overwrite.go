@@ -108,7 +108,7 @@ func (r *Record) OverwrittenMods(name string) ([]*Overwrite, error) {
 			continue
 		}
 		switch early.mod.Target.Kind {
-		case KindBudgetItem, KindGlobal, KindStock:
+		case KindBudgetItem, KindGlobal, KindStock, KindClass:
 			if early.mod.Property == PropAddItem {
 				continue
 			}
@@ -124,7 +124,7 @@ func (r *Record) OverwrittenMods(name string) ([]*Overwrite, error) {
 				var by *modRef
 				for j := k + 1; j < len(order); j++ {
 					late := order[j]
-					if late.mod.IsScale() || late.mod.Property != early.mod.Property || late.mod.Target.Kind == KindBudgetItem || late.mod.Target.Kind == KindGlobal || late.mod.Target.Kind == KindStock || !late.mod.Values.Covers(early.mod.Values) {
+					if late.mod.IsScale() || late.mod.Property != early.mod.Property || late.mod.Target.Kind == KindBudgetItem || late.mod.Target.Kind == KindGlobal || late.mod.Target.Kind == KindStock || late.mod.Target.Kind == KindClass || !late.mod.Values.Covers(early.mod.Values) {
 						continue
 					}
 					for _, a := range accounts(late.mod) {

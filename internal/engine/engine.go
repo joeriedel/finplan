@@ -7,8 +7,7 @@
 //
 // Each account is read back from real data up to its own start and extrapolated from there by
 // applying budget flows on their calendar dates and compounding growth over the exact time elapsed.
-// An asset's value is the sum of its accounts, resolved by the model's asset rules. Growth and the lack
-// of market classes are placeholders; taxes follow the rules package (see taxes.go).
+// An asset's value is the sum of its accounts, resolved by the model's asset rules. Growth is a placeholder: an account with an allocation grows by market class, any other at its own rate; taxes follow the rules package (see taxes.go).
 package engine
 
 import (
@@ -170,7 +169,7 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 		return nil
 	}
 	infl := rec.Globals[model.PropInflation]
-	var stockSettings []model.Setting[rateLayer]
+	var stockSettings, classSettings []model.Setting[rateLayer]
 	focal := map[model.AccountID][]model.FocalGrant{}
 	// An equity account's value is its shares at the stock's price, whatever else is said of its growth.
 	focalAccts := map[model.AccountID]bool{}
@@ -300,6 +299,15 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 				default:
 					skip("unsupported property")
 				}
+			case model.KindClass:
+				switch {
+				case rec.Class(m.Target.ID) == nil:
+					skip("class not found")
+				case m.Property == model.PropGrowth:
+					classSettings = append(classSettings, model.Setting[rateLayer]{Asset: model.AssetID(m.Target.ID), Value: rateLayer{m.Values, m.IsScale()}})
+				default:
+					skip("unsupported property")
+				}
 			case model.KindGlobal:
 				if m.Property == model.PropInflation {
 					infl = m.Over(infl)
@@ -351,6 +359,14 @@ func prepare(base *model.Record, projection string, target model.AssetID, horizo
 		_, rate := res.GrowthLayers(id)
 		layered, _, _ := model.Apply(rateLayer{s: rate}, growth, underTarget, rateLayer.over)
 		p.rate = layered.s
+		for _, h := range acct.Allocation {
+			var base model.Schedule
+			if c := rec.Class(h.Class); c != nil {
+				base = c.Return
+			}
+			cls, _, _ := model.Apply(rateLayer{s: base}, classSettings, func(id model.AssetID) bool { return string(id) == h.Class }, rateLayer.over)
+			p.legs = append(p.legs, leg{class: h.Class, share: h.Percent / 100, rate: cls.s})
+		}
 		return p
 	}
 	for _, id := range res.Accounts {
@@ -545,6 +561,15 @@ type point struct {
 	date      model.Date
 	bal       float64
 	cumGrowth float64
+	// subs and cumSubs are the balance and the growth accumulated in each leg of an allocated path, in leg order; nil on a path without legs.
+	subs, cumSubs []float64
+}
+
+// leg is the part of an allocated account held in one market class: new money enters it by share and it compounds at the class's rate.
+type leg struct {
+	class string
+	share float64
+	rate  model.Schedule
 }
 
 // path is one account's balance: real data up to start, then extrapolation.
@@ -557,6 +582,8 @@ type path struct {
 	flowsAfter model.Date
 	startVal   float64
 	rate       model.Schedule
+	// legs is the account's allocation, one sub-balance per class in the allocation's order; the account's rate does not apply while there are legs.
+	legs []leg
 	// plan is set on an equity account, whose value follows its shares' prices instead of growing at rate.
 	plan    *equityPlan
 	changes []change // flows after start, ordered by date then rank
@@ -612,6 +639,13 @@ func (p *path) valueAt(d model.Date) float64 {
 	if p.plan != nil {
 		return pt.bal + p.plan.drift(pt.date, d)
 	}
+	if p.legs != nil {
+		sum := 0.0
+		for i, l := range p.legs {
+			sum += pt.subs[i] * l.rate.Compound(pt.date, d)
+		}
+		return sum
+	}
 	return pt.bal * p.rate.Compound(pt.date, d)
 }
 
@@ -624,7 +658,23 @@ func (p *path) growthAt(d model.Date) float64 {
 	if p.plan != nil {
 		return pt.cumGrowth + p.plan.drift(pt.date, d)
 	}
+	if p.legs != nil {
+		sum := 0.0
+		for i := range p.legs {
+			sum += p.legGrowthAt(i, d)
+		}
+		return sum
+	}
 	return pt.cumGrowth + pt.bal*(p.rate.Compound(pt.date, d)-1)
+}
+
+// legGrowthAt is the growth accumulated from start to d in leg i.
+func (p *path) legGrowthAt(i int, d model.Date) float64 {
+	if d <= p.start {
+		return 0
+	}
+	pt := p.pointAt(d)
+	return pt.cumSubs[i] + pt.subs[i]*(p.legs[i].rate.Compound(pt.date, d)-1)
 }
 
 // amountOn is the item's amount on d under the projection's amounts and raises: the schedule's value lifted by the raises and, if the item is indexed, by inflation. It reports false if the schedule has no value on d.
@@ -694,6 +744,9 @@ func (p *path) collect(rec *model.Record, items []model.BudgetItem, cutoffs map[
 // settle orders the changes and works out the balance after each date with one.
 func (p *path) settle() {
 	p.points = []point{{date: p.start, bal: p.startVal}}
+	if p.legs != nil {
+		p.points[0].subs, p.points[0].cumSubs = p.split(p.startVal), make([]float64, len(p.legs))
+	}
 	if p.idle {
 		return
 	}
@@ -704,6 +757,10 @@ func (p *path) settle() {
 		}
 		return a.rank < b.rank
 	})
+	if p.legs != nil {
+		p.settleLegs()
+		return
+	}
 	bal, cum, cur := p.startVal, 0.0, p.start
 	for i := 0; i < len(p.changes); {
 		d := p.changes[i].date
@@ -718,6 +775,49 @@ func (p *path) settle() {
 			bal += p.changes[i].amount
 		}
 		p.points = append(p.points, point{date: d, bal: bal, cumGrowth: cum})
+	}
+}
+
+// split divides an amount among the legs by their shares.
+func (p *path) split(amount float64) []float64 {
+	out := make([]float64, len(p.legs))
+	for i, l := range p.legs {
+		out[i] = amount * l.share
+	}
+	return out
+}
+
+// settleLegs is settle for an allocated path: each leg compounds at its class's rate, money paid in is split by share and money paid out comes from the legs pro rata to their balances (by share if the account holds nothing or less).
+func (p *path) settleLegs() {
+	subs, cum, cur := slices.Clone(p.points[0].subs), make([]float64, len(p.legs)), p.start
+	for i := 0; i < len(p.changes); {
+		d := p.changes[i].date
+		for j, l := range p.legs {
+			g := subs[j] * (l.rate.Compound(cur, d) - 1)
+			subs[j] += g
+			cum[j] += g
+		}
+		cur = d
+		for ; i < len(p.changes) && p.changes[i].date == d; i++ {
+			amt := p.changes[i].amount
+			total := 0.0
+			for _, v := range subs {
+				total += v
+			}
+			for j, l := range p.legs {
+				if amt >= 0 || total <= 0 {
+					subs[j] += amt * l.share
+				} else {
+					subs[j] += amt * subs[j] / total
+				}
+			}
+		}
+		bal, growth := 0.0, 0.0
+		for j := range subs {
+			bal += subs[j]
+			growth += cum[j]
+		}
+		p.points = append(p.points, point{date: d, bal: bal, cumGrowth: growth, subs: slices.Clone(subs), cumSubs: slices.Clone(cum)})
 	}
 }
 

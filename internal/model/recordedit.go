@@ -47,6 +47,10 @@ func (r *Record) Clone() *Record {
 	}
 	c.Globals = cloneSchedules(r.Globals)
 	c.Classes = slices.Clone(r.Classes)
+	for i, cl := range c.Classes {
+		c.Classes[i].Return = cl.Return.clone()
+	}
+	c.Correlations = slices.Clone(r.Correlations)
 	c.Prices = r.Prices.clone()
 	c.StockGrowth = cloneSchedules(r.StockGrowth)
 	c.Household = r.Household.Clone()
@@ -60,6 +64,7 @@ func (r *Record) Clone() *Record {
 		ca := *a
 		ca.Default = a.Default.clone()
 		ca.Closed = clonePtr(a.Closed)
+		ca.Allocation = slices.Clone(a.Allocation)
 		ca.Snapshots = slices.Clone(a.Snapshots)
 		ca.Transactions = slices.Clone(a.Transactions)
 		ca.Grants, ca.Vests = nil, nil
@@ -193,6 +198,7 @@ func (r *Record) WithDocuments(src *Record) *Record {
 	}
 	c := r.Clone()
 	c.Budget, c.Projections, c.Calendars, c.StockGrowth = n.Budget, n.Projections, n.Calendars, n.StockGrowth
+	c.Classes, c.Correlations = n.Classes, n.Correlations
 	c.Household, c.Tax = n.Household, n.Tax
 	c.Accounts, c.Assets, c.accountIdx, c.assetIdx, c.seq = n.Accounts, n.Assets, n.accountIdx, n.assetIdx, n.seq
 	for _, a := range c.Accounts {

@@ -872,6 +872,10 @@ func baseValue(rec *model.Record, proj string, i int, d model.Date) float64 {
 		}
 	case model.KindStock:
 		v, _ = rec.StockGrowthOf(m.Target.ID).At(d)
+	case model.KindClass:
+		if c := rec.Class(m.Target.ID); c != nil {
+			v, _ = c.Return.At(d)
+		}
 	case model.KindGlobal:
 		v, _ = rec.Globals[model.PropInflation].At(d)
 	}
@@ -903,6 +907,10 @@ func objectText(rec *model.Record, o model.ObjectRef) string {
 		return "budget item " + itemName(rec, o.ID)
 	case model.KindStock:
 		return "stock " + o.ID
+	case model.KindClass:
+		if c := rec.Class(o.ID); c != nil {
+			return "class " + c.Name
+		}
 	}
 	return string(o.Kind) + " " + o.ID
 }
@@ -912,7 +920,7 @@ func propertiesFor(kind model.ObjectKind) []string {
 	switch kind {
 	case model.KindAccount, model.KindAsset:
 		return []string{model.PropGrowth, model.PropDefault}
-	case model.KindStock:
+	case model.KindStock, model.KindClass:
 		return []string{model.PropGrowth}
 	case model.KindBudgetItem:
 		return []string{model.PropAmount, model.PropGrowth, propEndsOn}
@@ -944,6 +952,10 @@ func objectsFor(base *model.Record, kind model.ObjectKind, proj string, index in
 	case model.KindStock:
 		for _, s := range rec.Symbols() {
 			out = append(out, objectChoice{s, s})
+		}
+	case model.KindClass:
+		for _, c := range rec.Classes {
+			out = append(out, objectChoice{c.ID, c.Name})
 		}
 	case model.KindBudgetItem:
 		items, _ := ops.ItemsBefore(base, proj, index)

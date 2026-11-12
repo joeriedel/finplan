@@ -177,11 +177,11 @@ var writeCommands = []*command{
 		run:    cmdProjectionRemoveAccount,
 	},
 	{
-		Name: "mod add", Summary: "add a modification of an item's amount or growth, an account's or asset's growth or default balance, a stock's growth, inflation, or a focal grant to an equity account, to a projection; its target must exist, for an item in the record or added earlier in the chain",
+		Name: "mod add", Summary: "add a modification of an item's amount or growth, an account's or asset's growth or default balance, a stock's or market class's growth, inflation, or a focal grant to an equity account, to a projection; its target must exist, for an item in the record or added earlier in the chain",
 		Args: []argDef{{Name: "projection", Description: "projection to change", Required: true}},
 		Flags: append([]flagDef{
-			{Name: "target", Type: typeString, Required: true, Description: "what to change: item:<id or name>, account:<id or name>, asset:<id or name>, stock:<symbol> or global"},
-			{Name: "property", Type: typeEnum, Required: true, Choices: []string{model.PropAmount, model.PropGrowth, model.PropDefault, model.PropInflation, model.PropAddGrant}, Description: "amount or growth (an annual raise) for an item, growth or default (the balance on dates with no actual data) for an account or asset, growth (the stock's annual price change, projected from its latest price) for a stock, inflation for global, add_grant for an equity account"},
+			{Name: "target", Type: typeString, Required: true, Description: "what to change: item:<id or name>, account:<id or name>, asset:<id or name>, stock:<symbol>, class:<id or name> or global"},
+			{Name: "property", Type: typeEnum, Required: true, Choices: []string{model.PropAmount, model.PropGrowth, model.PropDefault, model.PropInflation, model.PropAddGrant}, Description: "amount or growth (an annual raise) for an item, growth or default (the balance on dates with no actual data) for an account or asset, growth (the stock's annual price change, projected from its latest price) for a stock, growth (the class's annual return) for a market class, inflation for global, add_grant for an equity account"},
 			{Name: "mode", Type: typeEnum, Choices: modModes, Default: string(model.ModeSet), Description: "set replaces the value beneath; scale multiplies it, so the result follows what lies beneath"},
 			{Name: "value", Type: typeNumber, Description: "a constant value (a rate is a fraction: 0.04 for 4%; with --mode scale a multiplier: 0.7 cuts by 30%); without it the schedule is read as JSON. For add_grant the grant's dollar value"},
 			{Name: "from", Type: typeDate, Description: "with --value, the date the value starts: " + dateNote + "; always when omitted. For add_grant the grant date, the first if --yearly"},
@@ -757,12 +757,21 @@ func (c *call) modTarget(p *model.Projection) (model.ObjectRef, error) {
 			return model.ObjectRef{}, usageErr("--target stock needs a symbol: stock:<symbol>")
 		}
 		return model.ObjectRef{Kind: model.KindStock, ID: name}, nil
+	case "class":
+		if name == "" {
+			return model.ObjectRef{}, usageErr("--target class needs a market class: class:<id or name>")
+		}
+		if _, _, err := c.open(); err != nil {
+			return model.ObjectRef{}, err
+		}
+		id, err := classNamed(c.rec, name)
+		return model.ObjectRef{Kind: model.KindClass, ID: id}, err
 	case "item", "account", "asset":
 		if name == "" {
 			return model.ObjectRef{}, usageErr("--target %s needs a name: %s:<id or name>", kind, kind)
 		}
 	default:
-		return model.ObjectRef{}, usageErr("--target %q: use item:<id or name>, account:<id or name>, asset:<id or name>, stock:<symbol> or global", c.str("target"))
+		return model.ObjectRef{}, usageErr("--target %q: use item:<id or name>, account:<id or name>, asset:<id or name>, stock:<symbol>, class:<id or name> or global", c.str("target"))
 	}
 	view, err := c.rec.For(p.Name)
 	if err != nil {

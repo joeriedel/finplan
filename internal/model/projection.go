@@ -13,6 +13,7 @@ const (
 	KindAsset      ObjectKind = "asset"
 	KindGlobal     ObjectKind = "global"
 	KindStock      ObjectKind = "stock" // the object is a stock symbol
+	KindClass      ObjectKind = "class" // the object is a market class id
 )
 
 // ObjectRef names the object of a modification.
@@ -72,7 +73,7 @@ type Projection struct {
 	Mods            []Modification
 	// Accounts are hypothetical accounts that exist only under this projection and the projections built on it.
 	Accounts []ProjAccount
-	// Shocks and Rebalances are stored but not executed by the placeholder engine.
+	// Shocks and Rebalances are stored but the engine does not execute them yet.
 	Shocks     []Shock
 	Rebalances []Rebalance
 }

@@ -45,7 +45,7 @@ func checkMod(m model.Modification) (model.Modification, error) {
 		switch {
 		case m.IsScale() && seg.Value < 0:
 			return m, refuse(ErrInvalidValue, "a scale of %v must not be negative", seg.Value)
-		case !m.IsScale() && (m.Target.Kind == model.KindBudgetItem || m.Target.Kind == model.KindStock) && m.Property == model.PropGrowth && seg.Value <= -1:
+		case !m.IsScale() && (m.Target.Kind == model.KindBudgetItem || m.Target.Kind == model.KindStock || m.Target.Kind == model.KindClass) && m.Property == model.PropGrowth && seg.Value <= -1:
 			return m, refuse(ErrInvalidValue, "a rate of %v must be above -1", seg.Value)
 		}
 	}
@@ -115,7 +115,7 @@ func checkTarget(rec *model.Record, p *model.Projection, index int) error {
 		want = []string{model.PropGrowth, model.PropDefault, model.PropAddGrant}
 	case model.KindAsset:
 		want = []string{model.PropGrowth, model.PropDefault}
-	case model.KindStock:
+	case model.KindStock, model.KindClass:
 		want = []string{model.PropGrowth}
 	case model.KindGlobal:
 		want = []string{model.PropInflation}
@@ -153,6 +153,10 @@ func checkTarget(rec *model.Record, p *model.Projection, index int) error {
 		}
 		if view.Asset(model.AssetID(m.Target.ID)) == nil {
 			return refuse(ErrUnknownTarget, "there is no asset %q", m.Target.ID)
+		}
+	case model.KindClass:
+		if rec.Class(m.Target.ID) == nil {
+			return refuse(ErrUnknownTarget, "there is no market class %q", m.Target.ID)
 		}
 	case model.KindStock:
 		if !rec.HasStock(m.Target.ID) {

@@ -598,7 +598,7 @@ func TestEditKeepsAbsentStart(t *testing.T) {
 func TestScheduledModKeepsSegmentsOnPropertyAndMode(t *testing.T) {
 	a := demoApp(t)
 	pt := a.proj
-	job := demodata.ProjNewJob // mod 1: account Brokerage growth set, three segments
+	job := demodata.ProjNewJob // mod 1: class us-large-cap growth set, three segments
 	before := a.rec.Projection(job).Mods[1].Values.Segments()
 	if len(before) < 2 {
 		t.Fatalf("not a scheduled modification: %+v", before)

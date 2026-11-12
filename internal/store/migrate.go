@@ -84,6 +84,17 @@ var migrations = []string{
 		BEGIN SELECT RAISE(ABORT, 'fact corrections are append-only'); END;
 	CREATE TRIGGER fact_corrections_no_delete BEFORE DELETE ON fact_corrections
 		BEGIN SELECT RAISE(ABORT, 'fact corrections are append-only'); END;`,
+	// 5: the shipped market classes and their correlations, inserted into a database that has no classes; the bodies are format 7 documents.
+	`INSERT INTO documents (kind, key, ordinal, format, body)
+	SELECT * FROM (VALUES
+		('class', 'us-large-cap', 0, 7, '{"id":"us-large-cap","name":"US large cap","return":[{"from":-2147483648,"end":null,"value":0.1}],"volatility":0.16}'),
+		('class', 'us-small-cap', 1, 7, '{"id":"us-small-cap","name":"US small cap","return":[{"from":-2147483648,"end":null,"value":0.11}],"volatility":0.2}'),
+		('class', 'international', 2, 7, '{"id":"international","name":"International","return":[{"from":-2147483648,"end":null,"value":0.08}],"volatility":0.18}'),
+		('class', 'us-bonds', 3, 7, '{"id":"us-bonds","name":"US bonds","return":[{"from":-2147483648,"end":null,"value":0.045}],"volatility":0.06}'),
+		('class', 'treasuries', 4, 7, '{"id":"treasuries","name":"Treasuries","return":[{"from":-2147483648,"end":null,"value":0.04}],"volatility":0.05}'),
+		('class', 'cash', 5, 7, '{"id":"cash","name":"Cash","return":[{"from":-2147483648,"end":null,"value":0.03}],"volatility":0.01}'),
+		('correlations', '', 0, 7, '[{"a":"international","b":"treasuries","value":-0.05},{"a":"international","b":"us-bonds","value":0.1},{"a":"international","b":"us-large-cap","value":0.75},{"a":"international","b":"us-small-cap","value":0.7},{"a":"treasuries","b":"us-bonds","value":0.9},{"a":"treasuries","b":"us-large-cap","value":-0.1},{"a":"treasuries","b":"us-small-cap","value":-0.15},{"a":"us-bonds","b":"us-large-cap","value":0.1},{"a":"us-bonds","b":"us-small-cap","value":0.05},{"a":"us-large-cap","b":"us-small-cap","value":0.85}]')
+	) WHERE NOT EXISTS (SELECT 1 FROM documents WHERE kind = 'class');`,
 }
 
 // migrate brings the database up to schema version target in one transaction. It fails, changing

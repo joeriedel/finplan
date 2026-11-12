@@ -107,6 +107,9 @@ func EditAccount(st *store.Store, rec *model.Record, id model.AccountID, ch Acco
 		if err := checkAttrs(a.Type, a.Tax, a.StatedRate); err != nil {
 			return Result{}, err
 		}
+		if err := next.CheckAllocation(a.Type, a.Allocation); err != nil {
+			return Result{}, refuse(ErrInvalidValue, "%v: clear the allocation first", err)
+		}
 		return Result{Account: a, Asset: next.Asset(model.DefaultAssetID(id))}, nil
 	})
 }

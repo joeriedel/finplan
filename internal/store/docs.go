@@ -17,26 +17,27 @@ import (
 // converts it. Format 2 added the modification mode and the budget item growth to format 1's shape; a
 // format 1 document has neither and reads as set and zero, and the bump makes an older build refuse a
 // document whose scale modifications it would otherwise silently ignore. Format 3 added the accounts a
-// projection defines; a format 1 or 2 document has none and reads as an empty list. Format 4 added the close date of an account; an older document has none and reads as an open account, and the bump makes an older build refuse a document whose closed accounts it would otherwise show as open. Format 5 stores a budget item's amount and growth as segment arrays and adds the count and unit of a custom recurrence; an older document has numbers there, which read as a one-segment schedule (a zero growth as none), and the bump makes an older build refuse a document whose schedules it would otherwise misread. Format 6 adds the income type of a budget item, the household and the tax tables; a budget item of an older document has no income type, which an income item reads as wages, and a record with no tax tables is given the shipped ones when it is loaded.
-const formatCurrent = 6
+// projection defines; a format 1 or 2 document has none and reads as an empty list. Format 4 added the close date of an account; an older document has none and reads as an open account, and the bump makes an older build refuse a document whose closed accounts it would otherwise show as open. Format 5 stores a budget item's amount and growth as segment arrays and adds the count and unit of a custom recurrence; an older document has numbers there, which read as a one-segment schedule (a zero growth as none), and the bump makes an older build refuse a document whose schedules it would otherwise misread. Format 6 adds the income type of a budget item, the household and the tax tables; a budget item of an older document has no income type, which an income item reads as wages, and a record with no tax tables is given the shipped ones when it is loaded. Format 7 stores a market class's return as a segment array with its volatility, the correlations of the classes and the allocation of an account; an older class document has a number as its return, which reads as a one-segment schedule, and the bump makes an older build refuse a document whose allocations it would otherwise ignore.
+const formatCurrent = 7
 
 // Document kinds.
 const (
-	kindRecord     = "record"
-	kindAccount    = "account"
-	kindAsset      = "asset"
-	kindBudget     = "budget"
-	kindClass      = "class"
-	kindGlobal     = "global"
-	kindProjection = "projection"
-	kindCalendar   = "calendar"
-	kindStock      = "stock"
-	kindHousehold  = "household"
-	kindTaxFederal = "taxfed"
-	kindTaxState   = "taxstate"
+	kindRecord       = "record"
+	kindAccount      = "account"
+	kindAsset        = "asset"
+	kindBudget       = "budget"
+	kindClass        = "class"
+	kindCorrelations = "correlations"
+	kindGlobal       = "global"
+	kindProjection   = "projection"
+	kindCalendar     = "calendar"
+	kindStock        = "stock"
+	kindHousehold    = "household"
+	kindTaxFederal   = "taxfed"
+	kindTaxState     = "taxstate"
 )
 
-// The DTOs below are the stored shape of formats 1 to 6. They are separate from the model types so that
+// The DTOs below are the stored shape of formats 1 to 7. They are separate from the model types so that
 // renaming a model field cannot change what is on disk.
 
 type recordDoc struct {
@@ -63,6 +64,12 @@ type accountDoc struct {
 	StatedRate float64            `json:"stated_rate"`
 	Default    []intervalDoc      `json:"default"`
 	Closed     *model.Date        `json:"closed,omitempty"`
+	Allocation []holdingDoc       `json:"allocation,omitempty"`
+}
+
+type holdingDoc struct {
+	Class   string  `json:"class"`
+	Percent float64 `json:"percent"`
 }
 
 type ruleDoc struct {
@@ -156,9 +163,16 @@ func docHousehold(d householdDoc) model.Household {
 }
 
 type classDoc struct {
-	ID     string  `json:"id"`
-	Name   string  `json:"name"`
-	Return float64 `json:"return"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Return     numOrSegs `json:"return,omitempty"`
+	Volatility float64   `json:"volatility"`
+}
+
+type correlationDoc struct {
+	A     string  `json:"a"`
+	B     string  `json:"b"`
+	Value float64 `json:"value"`
 }
 
 type objectRefDoc struct {
@@ -295,7 +309,7 @@ type docRow struct {
 // decodeDoc decodes a document body of the given format version into v, the current shape.
 func decodeDoc(row docRow, v any) error {
 	switch row.format {
-	case 1, 2, 3, 4, 5, 6:
+	case 1, 2, 3, 4, 5, 6, 7:
 		if err := json.Unmarshal(row.body, v); err != nil {
 			return fmt.Errorf("store: %s %q: %w", row.kind, row.key, err)
 		}

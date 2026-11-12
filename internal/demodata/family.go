@@ -138,6 +138,7 @@ func familyBudget() model.Budget {
 func Family() *model.Record {
 	rec := model.NewRecord(FamilyToday)
 	rec.Globals[model.PropInflation] = model.Constant(0.025)
+	rec.Classes, rec.Correlations = model.DefaultClasses(), model.DefaultCorrelations()
 	rec.Budget = familyBudget()
 	rec.Household = model.Household{
 		Members: []model.HouseholdMember{
@@ -154,7 +155,7 @@ func Family() *model.Record {
 	rsu := familyRSU()
 
 	for _, s := range accountSpecs {
-		a := &model.Account{ID: s.id, Name: s.name, Type: s.typ, Tax: s.tax, StatedRate: s.rate}
+		a := &model.Account{ID: s.id, Name: s.name, Type: s.typ, Tax: s.tax, StatedRate: s.rate, Allocation: model.DefaultAllocation(s.typ)}
 		if s.id == Roth {
 			a.Default.Intervals = []model.Interval{{From: model.MinDate, To: model.Ptr(historyOpen.Add(-1)), Value: 70000}}
 		}
@@ -205,7 +206,7 @@ func Family() *model.Record {
 			Values:   model.MustSchedule(model.Segment{From: model.D(2027, time.March, 1), Value: 6500}),
 		},
 		{
-			Target:   model.ObjectRef{Kind: model.KindAccount, ID: string(Brokerage)},
+			Target:   model.ObjectRef{Kind: model.KindClass, ID: model.ClassLargeCap},
 			Property: model.PropGrowth,
 			Values:   growth,
 		},

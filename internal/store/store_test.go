@@ -35,7 +35,13 @@ func openTemp(t *testing.T) (*Store, string) {
 func richFamily(t *testing.T) *model.Record {
 	t.Helper()
 	rec := demodata.Family()
-	rec.Classes = []model.MarketClass{{ID: "lc", Name: "Large cap", Return: 0.07}, {ID: "tr", Name: "Treasuries", Return: 0.03}}
+	rec.Classes = []model.MarketClass{
+		{ID: "lc", Name: "Large cap", Return: model.MustSchedule(model.Segment{From: model.MinDate, End: model.Ptr(model.D(2030, time.January, 1)), Value: 0.07}, model.Segment{From: model.D(2031, time.January, 1), Value: 0.05}), Volatility: 0.15},
+		{ID: "tr", Name: "Treasuries", Return: model.Constant(0.03), Volatility: 0.05},
+		{ID: "flat", Name: "Flat"},
+	}
+	rec.Correlations = []model.Correlation{{A: "lc", B: "tr", Value: -0.2}}
+	rec.Account(demodata.Brokerage).Allocation = []model.Holding{{Class: "lc", Percent: 60}, {Class: "tr", Percent: 40}}
 	if err := rec.AddAsset(&model.Asset{
 		ID: "tuned", Name: "Tuned", Members: []model.Member{model.AccountMember(demodata.Brokerage)},
 		Default: model.DefaultBalance{Intervals: []model.Interval{{From: 10, To: model.Ptr(model.Date(20)), Value: 5}, {From: 30, Value: 6}}},
@@ -115,7 +121,7 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	want := demodata.Family()
 	mustSave(t, s, want)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 6 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 7 {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
 	// Format 1 documents have no mode and no growth; a schedule of no growth is not stored.
@@ -184,8 +190,56 @@ func TestEmptyDatabaseLoadsEmptyRecord(t *testing.T) {
 	s, _ := openTemp(t)
 	s.now = func() time.Time { return time.Date(2031, time.March, 9, 23, 30, 0, 0, time.Local) }
 	today := model.D(2031, time.March, 9)
-	if got := mustLoad(t, s); !reflect.DeepEqual(got, model.NewRecord(today)) {
-		t.Fatalf("empty database should load as an empty record dated today, got today %v", got.Today)
+	want := model.NewRecord(today)
+	want.Classes, want.Correlations = model.DefaultClasses(), model.DefaultCorrelations()
+	if got := mustLoad(t, s); !reflect.DeepEqual(got, want) {
+		t.Fatalf("empty database should load as an empty record dated today with the shipped classes, got today %v", got.Today)
+	}
+}
+
+func TestMigrationSeedsTheShippedClasses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v4.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(db, 4); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got := mustLoad(t, s)
+	if !reflect.DeepEqual(got.Classes, model.DefaultClasses()) || !reflect.DeepEqual(got.Correlations, model.DefaultCorrelations()) {
+		t.Errorf("migrated database has classes %+v and correlations %+v", got.Classes, got.Correlations)
+	}
+}
+
+func TestMigrationKeepsExistingClasses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v4.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(db, 4); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO documents (kind, key, ordinal, format, body) VALUES ('class', 'mine', 0, 6, '{"id":"mine","name":"Mine","return":0.07}')`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got := mustLoad(t, s)
+	want := []model.MarketClass{{ID: "mine", Name: "Mine", Return: model.Constant(0.07)}}
+	if !reflect.DeepEqual(got.Classes, want) || got.Correlations != nil {
+		t.Errorf("classes %+v, correlations %+v: a database with classes must keep them and get no others", got.Classes, got.Correlations)
 	}
 }
 

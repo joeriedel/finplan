@@ -6,6 +6,7 @@ package engine
 import (
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/joeriedel/finplan/internal/model"
 )
@@ -40,9 +41,10 @@ var causeOrder = []Cause{
 }
 
 // Line is the change attributed to one cause, split by where it came from: Actual is read back from
-// the record (and defaults), Projected is extrapolated.
+// the record (and defaults), Projected is extrapolated. Class names the market class of a growth line of an account with an allocation, and is empty on every other line.
 type Line struct {
 	Cause     Cause
+	Class     string
 	Actual    float64
 	Projected float64
 }
@@ -53,7 +55,7 @@ type BreakdownResult struct {
 	From, To model.Date
 	Start    float64
 	End      float64
-	Lines    []Line // in a fixed cause order, causes with no change omitted
+	Lines    []Line // in a fixed cause order, causes with no change omitted; growth by class follows the other growth line in class order
 	Diagnostics
 }
 
@@ -77,7 +79,7 @@ func Breakdown(rec *model.Record, projection string, target model.AssetID, from,
 	if err != nil {
 		return nil, err
 	}
-	acc := &accum{inside: map[model.AccountID]bool{}, lines: map[Cause]*Line{}}
+	acc := &accum{inside: map[model.AccountID]bool{}, lines: map[Cause]*Line{}, classes: map[string]*Line{}}
 	for _, id := range r.res.Accounts {
 		acc.inside[id] = true
 	}
@@ -92,10 +94,30 @@ func Breakdown(rec *model.Record, projection string, target model.AssetID, from,
 		acc.add(CauseUnexplained, acc.cancelled, false)
 	}
 	// Summed in cause order: float addition order must not depend on map iteration.
+	classIDs := make([]string, 0, len(acc.classes))
+	for _, c := range rec.Classes {
+		if acc.classes[c.ID] != nil {
+			classIDs = append(classIDs, c.ID)
+		}
+	}
+	// Classes the record no longer has, for an allocation that names one, follow in ID order.
+	var orphans []string
+	for id := range acc.classes {
+		if rec.Class(id) == nil {
+			orphans = append(orphans, id)
+		}
+	}
+	slices.Sort(orphans)
+	classIDs = append(classIDs, orphans...)
 	sum := 0.0
 	for _, c := range causeOrder {
 		if l, ok := acc.lines[c]; ok {
 			sum += l.Actual + l.Projected
+		}
+		if c == CauseGrowth {
+			for _, id := range classIDs {
+				sum += acc.classes[id].Projected
+			}
 		}
 	}
 	// What remains comes from asset-level defaults, which no account's changes explain.
@@ -106,6 +128,13 @@ func Breakdown(rec *model.Record, projection string, target model.AssetID, from,
 		if l, ok := acc.lines[c]; ok && (l.Actual != 0 || l.Projected != 0) {
 			out.Lines = append(out.Lines, *l)
 		}
+		if c == CauseGrowth {
+			for _, id := range classIDs {
+				if l := acc.classes[id]; l.Projected != 0 {
+					out.Lines = append(out.Lines, *l)
+				}
+			}
+		}
 	}
 	return out, nil
 }
@@ -113,6 +142,7 @@ func Breakdown(rec *model.Record, projection string, target model.AssetID, from,
 type accum struct {
 	inside    map[model.AccountID]bool
 	lines     map[Cause]*Line
+	classes   map[string]*Line
 	cancelled float64 // signed sum of transfers between accounts under the asset
 }
 
@@ -150,7 +180,17 @@ func (p *path) breakdown(rec *model.Record, from, to model.Date, acc *accum) {
 				acc.addFlow(c.cause, c.amount, c.counter, true)
 			}
 		}
-		acc.add(CauseGrowth, p.growthAt(to)-p.growthAt(lo), true)
+		if p.legs == nil {
+			acc.add(CauseGrowth, p.growthAt(to)-p.growthAt(lo), true)
+		}
+		for i, l := range p.legs {
+			line := acc.classes[l.class]
+			if line == nil {
+				line = &Line{Cause: CauseGrowth, Class: l.class}
+				acc.classes[l.class] = line
+			}
+			line.Projected += p.legGrowthAt(i, to) - p.legGrowthAt(i, lo)
+		}
 	}
 }
 

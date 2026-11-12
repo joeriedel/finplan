@@ -28,6 +28,9 @@ type Record struct {
 	// StockGrowth is each stock's base growth schedule by symbol; a stock with none is projected flat.
 	StockGrowth map[string]Schedule
 
+	// Correlations are the pairwise correlations of the classes' returns; the engine does not use them yet.
+	Correlations []Correlation
+
 	// Household is who files the tax return, and Tax the rules it is taxed by.
 	Household Household
 	Tax       tax.Tables
