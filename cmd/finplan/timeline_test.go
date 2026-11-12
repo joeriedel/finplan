@@ -72,8 +72,8 @@ func segmentsOf(t *testing.T, sh shownSchedule) model.Schedule {
 	return s
 }
 
-// dragBrokerage plays the timeline edits of the scenario on the schedule, checking each step: drag the anchors, open a gap, push a segment along, and delete one.
-func dragBrokerage(t *testing.T, s model.Schedule) model.Schedule {
+// dragGrowth plays the timeline edits of the scenario on the schedule, checking each step: drag the anchors, open a gap, push a segment along, and delete one.
+func dragGrowth(t *testing.T, s model.Schedule) model.Schedule {
 	t.Helper()
 	d := model.D
 	step := func(name string, next model.Schedule, err error, want ...model.Segment) model.Schedule {
@@ -122,7 +122,7 @@ func TestTimelineScenarioThroughCLI(t *testing.T) {
 	if !reflect.DeepEqual(s.Segments(), want) {
 		t.Fatalf("the demo schedule is %v", s.Segments())
 	}
-	edited := dragBrokerage(t, s)
+	edited := dragGrowth(t, s)
 
 	// The mod edit command takes no segment that starts at the beginning of time in JSON, so the first one starts long before the record.
 	type jseg struct {
@@ -161,7 +161,7 @@ func TestTimelineScenarioThroughCLI(t *testing.T) {
 func TestTimelineScenarioKeepsBeginning(t *testing.T) {
 	path := seededFile(t)
 	idx, shown := classGrowth(t, path)
-	edited := dragBrokerage(t, segmentsOf(t, shown))
+	edited := dragGrowth(t, segmentsOf(t, shown))
 
 	st, err := store.Open(path)
 	if err != nil {
