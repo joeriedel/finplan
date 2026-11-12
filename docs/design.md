@@ -122,7 +122,7 @@ The dates of an item are `BudgetItem.Dates`. The interval kinds (weekly, biweekl
 
 A raise steps the amount up once a year, on the anniversary of the item's start (else its recurrence anchor, else the record's `Today`), not continuously. It combines with inflation indexing. The growth schedule can be set on the item and changed by a projection modification of the item's `growth` property (set or scale); the rate in effect on each anniversary is used. The amount in effect on each date comes from the amount schedule (as changed by amount modifications); a date it does not cover pays nothing.
 
-Items cover income (gross salary, RSU vests, bonuses, pensions, Social Security) as well as expenses. Matching rules (payee, category, account) map transactions to budget items, so baselines can be derived from history and actual spending compared with the budget.
+An income item has an income type: wages (the default; income tax and payroll tax), ordinary (other taxable income, no payroll tax) or tax-free. Existing income items load as wages. Items cover income (gross salary, RSU vests, bonuses, pensions, Social Security) as well as expenses. Matching rules (payee, category, account) map transactions to budget items, so baselines can be derived from history and actual spending compared with the budget.
 
 Taxes are not budget items. The engine computes them (see Taxes), and the net pay after tax and payroll deductions is what lands in the account.
 
@@ -215,11 +215,15 @@ Trades inside tax-advantaged accounts (401k, TSP, IRA, Roth IRA, HSA, 529) are n
 
 ## Taxes
 
-The engine computes taxes from income, realized gains, contributions and deductions, using tax rules shipped as engine data, versioned in code: brackets, standard deductions, credits and contribution limits by year, with rules for extending them past the last known year (indexed to inflation). Tax rules are engine data, not projection inputs.
+The engine computes taxes from income, realized gains, contributions and deductions, using tax rules that are data, not code: brackets, standard deductions, credits and contribution limits by year, stored as documents in the database (kinds `taxfed`, one per year, and `taxstate`, one per state name and year; `internal/tax`). The shipped federal and Virginia tables for 2024 to 2026 are kept in code (`tax.Defaults`) and installed when a database with no tax documents is loaded; the user can edit any table (`ops.SetFederalTable`, `ops.SetStateTable`) and revert one to its shipped version (`ops.RevertFederalTable`, `ops.RevertStateTable`; a table the program ships none of cannot be reverted). Tables are not projection inputs. A year past the last table indexes the federal brackets, standard deductions, Social Security wage base, 401(k), IRA and HSA limits and child tax credit by inflation; statutory thresholds and the credit for other dependents stay fixed, and state tables are not indexed.
+
+The household (`model.Household`, document kind `household`) names who files and how: its members (name, birth date, role earner, spouse or dependent), the filing status (default married filing jointly), the name of the state table that taxes it (default VA) and the checking account tax is reconciled against (empty means the first checking account; deleting that account resets it and changing its type is refused). State tables share one generic shape (brackets, standard deduction by filing status, exemptions, 529 cap) that Virginia fits, so a user can add another state as a table; only federal and Virginia ship.
+
+`tax.Compute` (`internal/tax/compute.go`) computes one year from amounts given: federal brackets and standard deduction, the child tax credit (dependents under 17) and the credit for other dependents, Social Security (wage base per earner), Medicare and additional Medicare, the net investment income tax, 401(k)/TSP and IRA limits per earner and the HSA family limit per return (an excess is post-tax; Roth contributions are not deductible), the Virginia 529 deduction with a cap per account, and the 10% early-withdrawal penalty. It is exposed by `finplan tax compute`. The engine does not use it yet: it still charges the placeholder rates below, and withholding and year-end reconciliation are not built.
 
 Scope: US federal and Virginia, modeled properly; no generic multi-state support. Filing status, dependents (including the child tax credit), the Virginia 529 deduction, early-withdrawal penalties and the net investment income tax are in scope.
 
-Withholding, estimated payments, refunds and amounts owed are what land in accounts. At each year end the engine reconciles tax due against tax paid.
+Withholding, estimated payments, refunds and amounts owed are what land in accounts. At each year end the engine reconciles tax due against tax paid (planned; not built).
 
 ## The engine
 
@@ -239,7 +243,7 @@ The engine must be fast: goal solving and Monte Carlo rerun it thousands of time
 
 Details the build settled, and the placeholders it uses until the real rules arrive.
 
-**Layout.** Model types and asset rules are in `internal/model`; the engine is in `internal/engine` and imports the model. The invented family-of-six dataset (`demodata.Family()`, reference date 2026-11-08; 13 accounts, among them the equity account `equity`, see "Equity: RSU grants") is in `internal/demodata`; the older `demodata.Generate` is gone.
+**Layout.** Model types and asset rules are in `internal/model`; the engine is in `internal/engine` and imports the model. The invented family-of-six dataset (`demodata.Family()`, whose household files jointly in Virginia and whose salaries are typed as wages; reference date 2026-11-08; 13 accounts, among them the equity account `equity`, see "Equity: RSU grants") is in `internal/demodata`; the older `demodata.Generate` is gone.
 
 **Dates and growth.** Dates have day resolution. Growth compounds annually over exactly days/365.25.
 
@@ -368,7 +372,7 @@ Migration 2 adds `presets`, kept apart because `Save` replaces the documents who
 
 **Change polling and backup.** `DataVersion()` returns SQLite's `data_version`, which changes when another connection commits, for polling. `Backup(path)` runs `VACUUM INTO` a temporary file in the target folder and renames it into place, so a failure leaves an existing file untouched; it refuses the store's own database file.
 
-**Versioning and loading.** Each document row carries its own format version, and decoding dispatches on it. The current format is 5, which stores a budget item's amount and growth as segment arrays and adds a custom recurrence's count and unit (older documents have numbers there, which load as a one-segment schedule, a growth of 0 as none; an older build refuses format 5); format 4 added an account's close date (older documents have none and load as open accounts); format 3 added the accounts a projection defines to its document (formats 1 and 2 have none and load as an empty list); format 2 added a modification's `mode` and a budget item's `growth`. Formats 1 to 5 all load (base budget items and the items a projection adds are migrated alike), a missing mode loads as `set` and a missing growth as none, and an unknown mode is an error. A later format adds a case that reads the old shape and converts it. A row with an unknown format fails with `ErrUnknownFormat` rather than being dropped. The stored shape is a set of DTOs separate from the model types, so renaming a model field does not change what is on disk. `Load` rebuilds the record through the model constructors, replaying members in their original `Seq` order, so the loaded record equals the saved one; an empty database loads as an empty record.
+**Versioning and loading.** Each document row carries its own format version, and decoding dispatches on it. The current format is 6, which adds a budget item's income type, the household document and the tax table documents (`taxfed`, `taxstate`); an older income item loads as wages, and a record with no tax tables is given the shipped ones on load. Format 5  stores a budget item's amount and growth as segment arrays and adds a custom recurrence's count and unit (older documents have numbers there, which load as a one-segment schedule, a growth of 0 as none; an older build refuses format 5); format 4 added an account's close date (older documents have none and load as open accounts); format 3 added the accounts a projection defines to its document (formats 1 and 2 have none and load as an empty list); format 2 added a modification's `mode` and a budget item's `growth`. Formats 1 to 6 all load (base budget items and the items a projection adds are migrated alike), a missing mode loads as `set` and a missing growth as none, and an unknown mode is an error. A later format adds a case that reads the old shape and converts it. A row with an unknown format fails with `ErrUnknownFormat` rather than being dropped. The stored shape is a set of DTOs separate from the model types, so renaming a model field does not change what is on disk. `Load` rebuilds the record through the model constructors, replaying members in their original `Seq` order, so the loaded record equals the saved one; an empty database loads as an empty record.
 
 **View presets.** `PutPreset`, `Preset`, `Presets` and `DeletePreset` store opaque bytes under a name with a format version owned by the writer. The store does not interpret them and does not import `internal/graph`. The app stores them as JSON in `PresetFormat` 1 (`graph.EncodePreset`, `graph.DecodePreset`; an unknown format is an error). `Restore` skips lines the record no longer has and the bands that use them, and falls back to another switcher if the saved projection is gone.
 
@@ -426,7 +430,7 @@ Commands are data: `cmd/finplan/cliread.go` holds the read command table and `cm
     finplan mod edit <projection> <index> [--mode set|scale] [--value N [--from D [--end D]]]
     finplan mod move <projection> <from> <to>
     finplan mod remove <projection> <index>
-    finplan item add <projection> [--kind --name --amount --every --start --day --day2 --count --unit --end --account --from --to --indexed --growth --id]
+    finplan item add <projection> [--kind --name --amount --every --start --day --day2 --count --unit --end --account --from --to --indexed --growth --income-type --id]
     finplan item edit <projection> <item> [item flags]
     finplan item end <projection> <item> <date>
     finplan asset new <name> [--id]
@@ -452,6 +456,15 @@ Commands are data: `cmd/finplan/cliread.go` holds the read command table and `cm
     finplan budget edit <item> [item flags]
     finplan budget end <item> <date>
     finplan budget delete <item>
+    finplan household show
+    finplan household set [--filing mfj|single|hoh|mfs] [--state NAME] [--checking ACCOUNT|none]
+    finplan household member add <name> --birth D --role earner|spouse|dependent
+    finplan household member edit <name> [--name --birth --role]
+    finplan household member remove <name>
+    finplan tax table show [--year Y [--state NAME]]
+    finplan tax table set [--json-file F]   # JSON table from stdin or F; a body with `name` is a state table, a new name adds a state
+    finplan tax table revert --year Y [--state NAME]   # restore the shipped table; not_found when none ships
+    finplan tax compute [--year Y --wages W1,W2 --k401 --ira --hsa --other-income N --net-investment-income N --early-withdrawal N --contrib-529 A,B --inflation F]
     finplan asset-setting add <projection> --asset A [--start D] [--override-history true|false] [--at N]
     finplan asset-setting edit <projection> <index> [--asset A] [--start D|none] [--override-history true|false|none]
     finplan asset-setting move <projection> <from> <to>
