@@ -148,3 +148,90 @@ func TestNoExposureText(t *testing.T) {
 		t.Errorf("a class no allocation holds: %q", unheld)
 	}
 }
+
+// addClass adds the form's class as the Add class button does and reports whether it was added.
+func addClass(a *app, f newClassForm) bool {
+	c, _ := f.class()
+	return a.edit("add market class", func() (*ops.Result, error) {
+		return ops.AddClass(a.st, a.rec, c, ops.Options{})
+	})
+}
+
+// Scenario: adding Gold at 5% and 15% puts it among the classes, where the correlation matrix and the allocation lists read them, and undo removes it.
+func TestMarketsAddClass(t *testing.T) {
+	a := marketsApp(t)
+	n := len(a.rec.Classes)
+	f := newClassForm{name: "Gold", ret: "5", vol: "15%"}
+	if p := newClassProblem(a.st, a.rec, f); p != "" {
+		t.Fatalf("problem %q", p)
+	}
+	if !addClass(a, f) {
+		t.Fatalf("not added; notices %v", a.notices)
+	}
+	gold := a.rec.Class("gold")
+	if gold == nil || len(a.rec.Classes) != n+1 {
+		t.Fatalf("classes %v", a.rec.Classes)
+	}
+	if r, ok := classRate(*gold); !ok || r != 0.05 || gold.Volatility != 0.15 {
+		t.Errorf("gold return %v, %v, volatility %v", r, ok, gold.Volatility)
+	}
+	if got := a.rec.CorrelationOf("gold", model.ClassLargeCap); got != 0 {
+		t.Errorf("a new class is correlated %v with large cap", got)
+	}
+	a.undo()
+	if a.rec.Class("gold") != nil || len(a.rec.Classes) != n {
+		t.Errorf("undo left %v", a.rec.Classes)
+	}
+}
+
+// Scenario: an unused class can be removed and undo restores it; a class in an allocation cannot, and the reason names what holds it.
+func TestMarketsRemoveClass(t *testing.T) {
+	a := marketsApp(t)
+	addClass(a, newClassForm{name: "Gold", ret: "5", vol: "15"})
+	if p := removeClassProblem(a.st, a.rec, "gold"); p != "" {
+		t.Fatalf("problem %q", p)
+	}
+	if !a.edit("remove market class", func() (*ops.Result, error) {
+		return ops.RemoveClass(a.st, a.rec, "gold", ops.Options{})
+	}) || a.rec.Class("gold") != nil {
+		t.Fatalf("not removed; notices %v", a.notices)
+	}
+	a.undo()
+	if a.rec.Class("gold") == nil {
+		t.Error("undo did not restore the class")
+	}
+	p := removeClassProblem(a.st, a.rec, model.ClassLargeCap)
+	if p == "" || !strings.Contains(p, model.ClassLargeCap) {
+		t.Errorf("problem for large cap %q", p)
+	}
+}
+
+func TestNewClassFormUntouched(t *testing.T) {
+	if !(newClassForm{name: " ", vol: " "}).untouched() {
+		t.Error("blank form is touched")
+	}
+	for _, f := range []newClassForm{{name: "a"}, {ret: "1"}, {vol: "1"}} {
+		if f.untouched() {
+			t.Errorf("%+v is untouched", f)
+		}
+	}
+}
+
+func TestNewClassProblem(t *testing.T) {
+	a := marketsApp(t)
+	for _, c := range []struct {
+		f    newClassForm
+		want string
+	}{
+		{newClassForm{}, "enter a name"},
+		{newClassForm{name: "US large cap", ret: "5", vol: "15"}, "US large cap"},
+		{newClassForm{name: "Gold", ret: "x", vol: "15"}, "expected return"},
+		{newClassForm{name: "Gold", ret: "5", vol: ""}, "volatility"},
+		{newClassForm{name: "Gold", ret: "5", vol: "-3"}, ""},
+	} {
+		p := newClassProblem(a.st, a.rec, c.f)
+		if p == "" || !strings.Contains(p, c.want) {
+			t.Errorf("%+v: problem %q, want %q", c.f, p, c.want)
+		}
+	}
+}

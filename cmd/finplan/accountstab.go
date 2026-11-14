@@ -417,6 +417,11 @@ func (t *acctTab) listRow(r listRow, withTax, indented bool) {
 
 // field draws a text field showing value and returns the text the user typed once they finish editing it.
 func (t *fieldEditor) field(id, hint, value string, width float32) (string, bool) {
+	return t.fieldTip(id, hint, value, "", width)
+}
+
+// fieldTip is field with a tooltip on the input itself, so that it stays when an error is shown beside it.
+func (t *fieldEditor) fieldTip(id, hint, value, tip string, width float32) (string, bool) {
 	text := value
 	if b, ok := t.bufs[id]; ok {
 		text = b
@@ -424,6 +429,9 @@ func (t *fieldEditor) field(id, hint, value string, width float32) (string, bool
 	shown := text
 	imgui.SetNextItemWidth(width)
 	imgui.InputTextWithHint("##"+id, hint, &text, 0, nil)
+	if tip != "" {
+		tooltipOn(tip)
+	}
 	if text != shown {
 		t.bufs[id] = text
 	}

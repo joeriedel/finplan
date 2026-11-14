@@ -4,6 +4,7 @@
 package main
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/joeriedel/finplan/internal/engine"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/ops"
+	"github.com/joeriedel/finplan/internal/store"
 )
 
 // marketsTab is the Markets tab: the market classes with their return, volatility and correlations on the left; the selected class's projection overrides and the accounts exposed to it on the right.
@@ -21,8 +23,19 @@ type marketsTab struct {
 	rec      *model.Record
 	exposure []engine.ClassExposure
 	sel      string
+
+	// add is the Add class form; addCheck and rmCheck keep the problems of that form and of removing the selected class.
+	add               newClassForm
+	addCheck, rmCheck problemCache
 	fieldEditor
 }
+
+// Tooltips of the Markets tab.
+const (
+	returnTip      = "Average yearly return assumed for projections."
+	volatilityTip  = "How much the yearly return swings: its standard deviation. 16% means about two years in three land within 16 points of the expected return. Used only by Monte Carlo."
+	correlationTip = "How two classes move together: 1 always together, 0 unrelated, -1 opposite. Used only by Monte Carlo."
+)
 
 func (t *marketsTab) reset() {
 	t.bufs, t.errs = map[string]string{}, map[string]string{}
@@ -50,6 +63,8 @@ func (t *marketsTab) draw() {
 	imgui.PopStyleColor()
 	if open {
 		t.classes()
+		imgui.Spacing()
+		t.addForm()
 		imgui.Spacing()
 		t.correlations()
 	}
@@ -80,7 +95,14 @@ func (t *marketsTab) classes() {
 	imgui.TableSetupColumnV("Class", 0, 2, 0)
 	imgui.TableSetupColumnV("Expected return per year", imgui.TableColumnFlagsWidthFixed, em*14, 0)
 	imgui.TableSetupColumnV("Volatility", imgui.TableColumnFlagsWidthFixed, em*9, 0)
-	imgui.TableHeadersRow()
+	imgui.TableNextRowV(imgui.TableRowFlagsHeaders, 0)
+	for i, tip := range []string{"", returnTip, volatilityTip} {
+		imgui.TableSetColumnIndex(int32(i))
+		imgui.TableHeader(imgui.TableGetColumnNameIntV(int32(i)))
+		if tip != "" {
+			tooltipOn(tip)
+		}
+	}
 	for _, c := range t.rec.Classes {
 		imgui.PushIDStr("class" + c.ID)
 		imgui.TableNextRowV(0, 0)
@@ -90,15 +112,16 @@ func (t *marketsTab) classes() {
 		}
 		imgui.TableSetColumnIndex(1)
 		if rate, ok := classRate(c); ok {
-			if s, done := t.field("ret"+c.ID, "percent, e.g. 7", formatPercentText(rate), em*8); done {
+			if s, done := t.fieldTip("ret"+c.ID, "percent, e.g. 7", formatPercentText(rate), returnTip, em*8); done {
 				t.editClass(c.ID, "ret", s)
 			}
 		} else {
 			imgui.AlignTextToFramePadding()
 			disabledText("varies, " + describeWhen(c.Return))
+			tooltipOn(returnTip)
 		}
 		imgui.TableSetColumnIndex(2)
-		if s, done := t.field("vol"+c.ID, "percent, e.g. 15", formatPercentText(c.Volatility), em*8); done {
+		if s, done := t.fieldTip("vol"+c.ID, "percent, e.g. 15", formatPercentText(c.Volatility), volatilityTip, em*8); done {
 			t.editClass(c.ID, "vol", s)
 		}
 		imgui.PopID()
@@ -146,11 +169,13 @@ func (t *marketsTab) correlations() {
 	em := imgui.FontSize()
 	cs := t.rec.Classes
 	imgui.SeparatorText("Correlations")
+	tooltipOn(correlationTip)
 	if len(cs) < 2 {
 		disabledText("Correlations need two market classes.")
 		return
 	}
 	disabledText("Type a number from -1 to 1; 0 means uncorrelated.")
+	tooltipOn(correlationTip)
 	if !imgui.BeginTableV("##correlations", int32(len(cs)+1), imgui.TableFlagsBordersInner|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
 		return
 	}
@@ -173,12 +198,14 @@ func (t *marketsTab) correlations() {
 			case i == j:
 				imgui.AlignTextToFramePadding()
 				disabledText("1")
+				tooltipOn(correlationTip)
 			case i > j:
 				imgui.AlignTextToFramePadding()
 				disabledText(trimFloat(v))
+				tooltipOn(correlationTip)
 			default:
 				id := "c" + row.ID + "/" + col.ID
-				if s, done := t.field(id, "-1 to 1", trimFloat(v), -1); done {
+				if s, done := t.fieldTip(id, "-1 to 1", trimFloat(v), correlationTip, -1); done {
 					t.editCorrelation(id, row.ID, col.ID, s)
 				}
 			}
@@ -269,6 +296,9 @@ func (t *marketsTab) detail(cl *model.MarketClass) {
 	}
 
 	imgui.Spacing()
+	t.removeButton(cl)
+
+	imgui.Spacing()
 	imgui.SeparatorText("Projection overrides")
 	ovs := classOverrides(t.rec, cl.ID)
 	if len(ovs) == 0 {
@@ -336,4 +366,102 @@ func noExposureText(rec *model.Record, classID string) string {
 		}
 	}
 	return "No account's allocation holds this class. Allocations are set on the Accounts tab."
+}
+
+// newClassForm is the Add class form: the name and the percents as entered.
+type newClassForm struct {
+	name, ret, vol string
+}
+
+// set changes one field: name, ret or vol.
+func (f *newClassForm) set(field, text string) {
+	switch field {
+	case "name":
+		f.name = text
+	case "ret":
+		f.ret = text
+	case "vol":
+		f.vol = text
+	}
+}
+
+// class reads the form as a market class with a constant return; its ID is left for ops.AddClass to make.
+func (f newClassForm) class() (model.MarketClass, error) {
+	ret, err := parsePercentText(f.ret)
+	if err != nil {
+		return model.MarketClass{}, fmt.Errorf("expected return: %w", err)
+	}
+	vol, err := parsePercentText(f.vol)
+	if err != nil {
+		return model.MarketClass{}, fmt.Errorf("volatility: %w", err)
+	}
+	return model.MarketClass{Name: f.name, Return: model.Constant(ret), Volatility: vol}, nil
+}
+
+// newClassProblem says why the form cannot be added, or "" if it can: what ops.AddClass refuses.
+func newClassProblem(st *store.Store, rec *model.Record, f newClassForm) string {
+	if strings.TrimSpace(f.name) == "" {
+		return "enter a name"
+	}
+	c, err := f.class()
+	if err != nil {
+		return err.Error()
+	}
+	_, err = ops.AddClass(st, rec, c, ops.Options{DryRun: true})
+	return reasonOf(err)
+}
+
+// removeClassProblem says why the class cannot be removed, or "" if it can: what ops.RemoveClass refuses.
+func removeClassProblem(st *store.Store, rec *model.Record, id string) string {
+	_, err := ops.RemoveClass(st, rec, id, ops.Options{DryRun: true})
+	return reasonOf(err)
+}
+
+// addForm draws the Add class form under the classes table, shown even when there are no classes.
+func (t *marketsTab) addForm() {
+	em := imgui.FontSize()
+	f := &t.add
+	imgui.SeparatorText("Add class")
+	input := func(field, label, hint, tip string, width float32) {
+		imgui.AlignTextToFramePadding()
+		disabledText(label)
+		imgui.SameLine()
+		s := map[string]string{"name": f.name, "ret": f.ret, "vol": f.vol}[field]
+		imgui.SetNextItemWidth(width)
+		if imgui.InputTextWithHint("##newclass"+field, hint, &s, 0, nil) {
+			f.set(field, s)
+		}
+		if tip != "" {
+			tooltipOn(tip)
+		}
+	}
+	input("name", "name", "e.g. Gold", "", em*12)
+	imgui.SameLine()
+	input("ret", "return per year", "percent, e.g. 5", returnTip, em*6)
+	imgui.SameLine()
+	input("vol", "volatility", "percent, e.g. 15", volatilityTip, em*6)
+	formButton("Add##addclass", t.addCheck.get(problemKey(t.rec, "", *f), func() string { return newClassProblem(t.a.st, t.rec, *f) }), f.untouched(), func() {
+		c, _ := f.class()
+		if t.a.edit("add market class", func() (*ops.Result, error) {
+			return ops.AddClass(t.a.st, t.a.rec, c, ops.Options{})
+		}) {
+			t.add = newClassForm{}
+		}
+	})
+}
+
+// removeButton draws the Remove button of the selected class; while the class is in use it is disabled and the reason is its tooltip.
+func (t *marketsTab) removeButton(cl *model.MarketClass) {
+	imgui.SeparatorText("Remove")
+	reason := t.rmCheck.get(problemKey(t.rec, cl.ID, nil), func() string { return removeClassProblem(t.a.st, t.rec, cl.ID) })
+	imgui.BeginDisabledV(reason != "")
+	if imgui.Button("Remove class") {
+		t.a.edit("remove market class", func() (*ops.Result, error) {
+			return ops.RemoveClass(t.a.st, t.a.rec, cl.ID, ops.Options{})
+		})
+	}
+	imgui.EndDisabled()
+	if reason != "" && imgui.IsItemHoveredV(imgui.HoveredFlagsAllowWhenDisabled) {
+		tooltipText("Cannot remove: " + reason)
+	}
 }

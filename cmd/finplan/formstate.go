@@ -32,6 +32,9 @@ func (f newAcctForm) untouched() bool {
 	return allBlank(f.name) && (f.typ == model.TypeEquity || allBlank(f.rate))
 }
 
+// untouched reports whether nothing has been typed into the Add class form.
+func (f newClassForm) untouched() bool { return allBlank(f.name, f.ret, f.vol) }
+
 // untouched reports whether the form still holds what the grant had: the draft is the grant's own and no note is typed.
 func (d grantDraft) untouched(g *model.Grant) bool { return d == draftOfGrant(g) }
 
