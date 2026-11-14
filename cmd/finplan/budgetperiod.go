@@ -15,6 +15,12 @@ import (
 	"github.com/joeriedel/finplan/internal/ops"
 )
 
+// periodColumns are the columns of the This period table, with the share of its width each takes, sized to read at 1280 pixels wide. How far over or under budget a period is shows in the Standing column and in Recent periods, not in a column of its own.
+var periodColumns = []struct {
+	header string
+	weight float32
+}{{"Item", 1.8}, {"Period", 2.2}, {"Timing", 0.8}, {"Budgeted", 2.4}, {"Expected", 1.1}, {"Posted", 1.1}, {"Status", 1.1}, {"Remaining", 1}, {"Standing", 2.6}, {"Recent periods", 2}, {"", 1.6}}
+
 // periodsShown is how many periods of each item the This period view keeps variance for: the current one and the five before it.
 const periodsShown = 6
 
@@ -217,10 +223,46 @@ func (s *periodState) standingCell(l engine.LineStatus) {
 		imgui.PushStyleColorVec4(imgui.ColText, rgba(c, 1))
 		defer imgui.PopStyleColor()
 	}
-	if imgui.SelectableBoolV(standingText(l)+"##standing", s.sel == l.Item.ID, 0, imgui.NewVec2(0, 0)) {
+	text := standingText(l)
+	clipped := textClipped(imgui.CalcTextSize(text).X, imgui.ContentRegionAvail().X)
+	if imgui.SelectableBoolV(text+"##standing", s.sel == l.Item.ID, 0, imgui.NewVec2(0, 0)) {
 		s.sel = toggled(s.sel, l.Item.ID)
 	}
-	tooltipOn("List the transactions matched to this line in this period")
+	tooltipOn(fullTextTip(text, clipped, "List the transactions matched to this line in this period"))
+}
+
+// fullTextTip is the tooltip of a cell: its hint, headed by the whole text when the cell clips it.
+func fullTextTip(text string, clipped bool, hint string) string {
+	if clipped {
+		return text + "\n\n" + hint
+	}
+	return hint
+}
+
+// budgetedText is the budgeted amount of the period, and for a wages paycheck its gross with the deposit it is expected to bring.
+func budgetedText(v model.PeriodView) string {
+	if v.Gross != 0 {
+		return "Gross " + formatDollars(v.Gross) + " · deposit " + formatDollars(v.Budgeted)
+	}
+	return formatDollars(v.Budgeted)
+}
+
+// recentText is the variance of each recent period of the item, oldest first.
+func recentText(r engine.ItemPeriods) string {
+	var recent []string
+	for _, h := range r.Periods {
+		recent = append(recent, signedDollars(h.Variance))
+	}
+	return strings.Join(recent, "  ")
+}
+
+// recentTip says in words how far over or under budget each recent period of the item was, oldest first.
+func recentTip(r engine.ItemPeriods) string {
+	var lines []string
+	for _, h := range r.Periods {
+		lines = append(lines, h.Period.Start.String()+": "+overUnder(h.Variance))
+	}
+	return "Over or under budget, oldest first:\n" + strings.Join(lines, "\n")
 }
 
 // toggled is key, or nothing if it is already selected.
@@ -252,16 +294,14 @@ func (t *budgetTab) periods() {
 		disabledText("No budget item has a period on this date.")
 		return
 	}
-	headers := []string{"Item", "Period", "Timing", "Budgeted", "Expected", "Posted", "Status", "Remaining", "Over or under", "Standing", "Recent periods", ""}
-	weights := []float32{2, 2.4, 0.9, 1.1, 1.3, 1.3, 1.2, 1.1, 1.3, 2.6, 2.2, 2}
 	em := imgui.FontSize()
 	defer s.transactions(a.rec)
-	if !imgui.BeginTableV("##budgetperiods", int32(len(headers)), imgui.TableFlagsBordersInnerV|imgui.TableFlagsPadOuterX|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
+	if !imgui.BeginTableV("##budgetperiods", int32(len(periodColumns)), imgui.TableFlagsBordersInnerV|imgui.TableFlagsPadOuterX|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
 		return
 	}
 	defer imgui.EndTable()
-	for i, h := range headers {
-		imgui.TableSetupColumnV(h, 0, weights[i], 0)
+	for _, c := range periodColumns {
+		imgui.TableSetupColumnV(c.header, 0, c.weight, 0)
 	}
 	imgui.TableHeadersRow()
 	for _, r := range s.rows {
@@ -277,7 +317,7 @@ func (t *budgetTab) periods() {
 		cell(0, r.Item.Name)
 		cell(1, v.Period.Start.String()+" to "+v.Period.End.String())
 		cell(2, string(v.Timing))
-		cell(3, formatDollars(v.Budgeted))
+		cell(3, budgetedText(v))
 
 		imgui.TableSetColumnIndex(4)
 		expected := s.expect[id]
@@ -311,28 +351,20 @@ func (t *budgetTab) periods() {
 		tooltipOn("Posted: nothing more is applied. Pending: what remains is still to come, even for a lump whose date has passed")
 
 		cell(7, formatDollars(v.Remaining))
-		cell(8, overUnder(v.Variance))
 
-		imgui.TableSetColumnIndex(9)
+		imgui.TableSetColumnIndex(8)
 		imgui.AlignTextToFramePadding()
 		if l, ok := s.standing[id]; ok {
 			s.standingCell(l)
 		}
 
-		var recent []string
-		for _, h := range r.Periods {
-			recent = append(recent, signedDollars(h.Variance))
-		}
-		cell(10, strings.Join(recent, "  "))
+		recent := recentText(r)
+		cell(9, recent)
 		if imgui.IsItemHovered() {
-			var lines []string
-			for _, h := range r.Periods {
-				lines = append(lines, h.Period.Start.String()+": "+overUnder(h.Variance))
-			}
-			tooltipText("Over or under budget, oldest first:\n" + strings.Join(lines, "\n"))
+			tooltipText(fullTextTip(recent, textClipped(imgui.CalcTextSize(recent).X, imgui.ContentRegionAvail().X), recentTip(r)))
 		}
 
-		imgui.TableSetColumnIndex(11)
+		imgui.TableSetColumnIndex(10)
 		ch, problem := s.periodChange(r)
 		formButton("Set##period", problem, problem == "nothing is changed", func() { t.setPeriod(r, ch) })
 		if v.Overridden {
@@ -362,7 +394,7 @@ func (s *periodState) unaccountedRows(rec *model.Record) {
 		imgui.TableSetColumnIndex(1)
 		imgui.AlignTextToFramePadding()
 		imgui.TextUnformatted(rec.Account(u.Account).Name + ", " + u.Month.Time().Format("January 2006"))
-		imgui.TableSetColumnIndex(9)
+		imgui.TableSetColumnIndex(8)
 		if imgui.SelectableBoolV(signedDollars(u.Amount)+" outside the budget##standing", s.sel == key, 0, imgui.NewVec2(0, 0)) {
 			s.sel = toggled(s.sel, key)
 		}

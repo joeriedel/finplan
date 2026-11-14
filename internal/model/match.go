@@ -100,6 +100,12 @@ func (b BudgetItem) matchesMemo(t Transaction) bool {
 	return b.Name != "" && strings.EqualFold(t.Memo, b.Name)
 }
 
+// IsWages reports whether the item is a wages paycheck: an income item taxed as wages.
+func (b BudgetItem) IsWages() bool { return b.Kind == ItemIncome && b.Income() == IncomeWages }
+
+// NetDeposits, set by the engine, returns for the record a function giving the net deposit projected for the wages paycheck of an item on a date: the gross less what the paycheck withholds. It reports false when it knows none, as when the engine is not linked in; a paycheck is then compared at its gross.
+var NetDeposits func(r *Record) func(it BudgetItem, d Date) (float64, bool)
+
 func deriveMatches(r *Record) *Matches {
 	m := &Matches{byItem: map[string][]Match{}, byTx: map[TxRef]string{}}
 	for _, it := range r.Budget.Items {
@@ -118,7 +124,7 @@ func deriveMatches(r *Record) *Matches {
 				continue
 			}
 			if it.EffectiveTiming() == Lump {
-				m.matchLump(it, a, cands)
+				m.matchLump(r, it, a, cands)
 			} else {
 				m.matchSpread(it, a, cands)
 			}
@@ -149,7 +155,7 @@ func (m *Matches) matchSpread(it BudgetItem, a *Account, cands []int) {
 	}
 }
 
-func (m *Matches) matchLump(it BudgetItem, a *Account, cands []int) {
+func (m *Matches) matchLump(r *Record, it BudgetItem, a *Account, cands []int) {
 	first, last := a.Transactions[cands[0]].Date, a.Transactions[cands[len(cands)-1]].Date
 	type pair struct {
 		occ         Date
@@ -158,11 +164,20 @@ func (m *Matches) matchLump(it BudgetItem, a *Account, cands []int) {
 		amountApart float64
 	}
 	var pairs []pair
+	var deposit func(BudgetItem, Date) (float64, bool)
+	if it.IsWages() && NetDeposits != nil {
+		deposit = NetDeposits(r)
+	}
 	for _, occ := range it.Dates(first.Add(-MatchWindow-1), last.Add(MatchWindow)) {
 		if it.Start != nil && occ < *it.Start || it.End != nil && occ > *it.End {
 			continue
 		}
 		budgeted, _ := it.Amount.At(occ)
+		if deposit != nil {
+			if net, ok := deposit(it, occ); ok {
+				budgeted = net
+			}
+		}
 		for _, i := range cands {
 			t := a.Transactions[i]
 			if dist := int(max(t.Date-occ, occ-t.Date)); dist <= MatchWindow {

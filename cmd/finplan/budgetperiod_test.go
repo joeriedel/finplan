@@ -82,3 +82,31 @@ func TestParseDrift(t *testing.T) {
 		}
 	}
 }
+
+// The table has no Over or under column, and a wages row shows its gross with the deposit expected.
+func TestPeriodTableColumnsAndWagesText(t *testing.T) {
+	for _, c := range periodColumns {
+		if c.header == "Over or under" {
+			t.Error("the table still has an Over or under column")
+		}
+	}
+	a := demoApp(t)
+	s := &a.budget.period
+	s.load(a.rec, a.rec.Today)
+	for _, r := range s.rows {
+		v := r.Current()
+		text := budgetedText(v)
+		if wages := r.Item.IsWages(); wages != strings.HasPrefix(text, "Gross ") || wages != strings.Contains(text, " · deposit "+formatDollars(v.Budgeted)) {
+			t.Errorf("%s: budgeted text %q", r.Item.ID, text)
+		}
+	}
+}
+
+func TestFullTextTipShowsTheWholeTextOnlyWhenClipped(t *testing.T) {
+	if got := fullTextTip("matched $5,000, $12 under", false, "hint"); got != "hint" {
+		t.Errorf("unclipped: %q", got)
+	}
+	if got := fullTextTip("matched $5,000, $12 under", true, "hint"); got != "matched $5,000, $12 under\n\nhint" {
+		t.Errorf("clipped: %q", got)
+	}
+}

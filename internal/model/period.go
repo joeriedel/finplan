@@ -216,8 +216,9 @@ type PeriodView struct {
 	Item   string
 	Period Period
 	Timing Timing
-	// Budgeted is the budgeted amount of the period; Expected the amount expected instead, if it was set.
+	// Budgeted is the budgeted amount of the period; Expected the amount expected instead, if it was set. For a wages paycheck the period counts its projected net deposit, and Gross is the item's gross amount; Gross is zero otherwise.
 	Budgeted float64
+	Gross    float64
 	Expected *float64
 	// Posted is what has posted: the recorded amount, or the estimate if PostedAuto.
 	Posted     float64

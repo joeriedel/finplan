@@ -15,7 +15,7 @@ import (
 // recentPeriods is how many periods of an item budget period list shows variance for: the current one and the five before it.
 const recentPeriods = 6
 
-const periodOut = "{item, name, period_start, period_end, timing, budgeted, expected (null when not set), posted, posted_auto (true when posted is the estimate: with no override and no recorded transaction in the item's accounts during the period, a lump counts as posted once its date is on or before the item's cutoff and a spread item in proportion to the days of the period up to the cutoff; in an account that has transactions in the period, a lump is posted when a transaction matches it, at the matched amount, and a spread item has posted its matched sum, see budget matches), status (auto, posted or pending), remaining (what the projection still applies for the period: expected or budgeted less posted, not below 0, and nothing when posted or when a lump is matched), missing (true for a lump past due with no matching transaction in an account that has transactions in the period: it is still to come, and the projection applies it the day after the cutoff), variance (posted less budgeted while the period is open; once it is over, expected if set, else posted, less budgeted), cutoff (the date the item's balances run to), occurrence_id (null when nothing was recorded for the period), history: [{period_start, period_end, budgeted, expected, posted, status, variance}] (the last 6 periods, oldest first, the current one last)}; amounts are rounded to cents, and budgeted is the base budget's amount"
+const periodOut = "{item, name, period_start, period_end, timing, budgeted, gross and expected_deposit (wages items only: the per-paycheck gross, and the net deposit projected for the paycheck, which is what budgeted, variance and remaining count for such an item), expected (null when not set), posted, posted_auto (true when posted is the estimate: with no override and no recorded transaction in the item's accounts during the period, a lump counts as posted once its date is on or before the item's cutoff and a spread item in proportion to the days of the period up to the cutoff; in an account that has transactions in the period, a lump is posted when a transaction matches it, at the matched amount, and a spread item has posted its matched sum, see budget matches), status (auto, posted or pending), remaining (what the projection still applies for the period: expected or budgeted less posted, not below 0, and nothing when posted or when a lump is matched), missing (true for a lump past due with no matching transaction in an account that has transactions in the period: it is still to come, and the projection applies it the day after the cutoff), variance (posted less budgeted while the period is open; once it is over, expected if set, else posted, less budgeted), cutoff (the date the item's balances run to), occurrence_id (null when nothing was recorded for the period), history: [{period_start, period_end, budgeted, expected, posted, status, variance}] (the last 6 periods, oldest first, the current one last)}; amounts are rounded to cents, and budgeted is the base budget's amount, a wages paycheck's as its projected net deposit"
 
 var periodCommands = []*command{
 	{
@@ -82,6 +82,8 @@ type jperiod struct {
 	End        jdate            `json:"period_end"`
 	Timing     string           `json:"timing"`
 	Budgeted   float64          `json:"budgeted"`
+	Gross      float64          `json:"gross,omitempty"`
+	Deposit    float64          `json:"expected_deposit,omitempty"`
 	Expected   *float64         `json:"expected"`
 	Posted     float64          `json:"posted"`
 	PostedAuto bool             `json:"posted_auto"`
@@ -109,6 +111,9 @@ func periodJSON(p engine.ItemPeriods) jperiod {
 		Item: p.Item.ID, Name: p.Item.Name, Start: jd(v.Period.Start), End: jd(v.Period.End), Timing: string(v.Timing),
 		Budgeted: cents(v.Budgeted), Expected: centsPtr(v.Expected), Posted: cents(v.Posted), PostedAuto: v.PostedAuto,
 		Status: string(v.Status), Remaining: cents(v.Remaining), Missing: v.Missing, Variance: cents(v.Variance), Cutoff: jd(p.Cutoff), History: []jperiodHistory{},
+	}
+	if v.Gross != 0 {
+		j.Gross, j.Deposit = cents(v.Gross), cents(v.Budgeted)
 	}
 	if v.Overridden && v.Override.ID != 0 {
 		j.Occurrence = model.Ptr(v.Override.ID)
