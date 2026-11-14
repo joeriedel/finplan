@@ -96,15 +96,33 @@ func checkTx(rec *model.Record, account model.AccountID, v store.Values) error {
 	return nil
 }
 
-// AddTransaction records a transaction of the account; the amount is signed from the account's view. A transfer needs a counter account the record has. An identical transaction already recorded does not stop it: two equal payments can happen.
+// checkLink refuses a link to a budget item the record lacks or that does not touch the account.
+func checkLink(rec *model.Record, account model.AccountID, item string) error {
+	if item == "" {
+		return nil
+	}
+	it, ok := rec.Budget.Item(item)
+	if !ok {
+		return refuse(ErrUnknownObject, "there is no budget item %q", item)
+	}
+	if !it.Touches(account) {
+		return refuse(ErrInvalidValue, "budget item %q does not touch account %q", item, account)
+	}
+	return nil
+}
+
+// AddTransaction records a transaction of the account; the amount is signed from the account's view. A transfer needs a counter account the record has. A link to a budget item must name an item that touches the account. An identical transaction already recorded does not stop it: two equal payments can happen.
 func AddTransaction(st *store.Store, rec *model.Record, account model.AccountID, t model.Transaction, o Options) (*Result, error) {
 	res, err := editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		a := next.Account(account)
 		if a == nil {
 			return Result{}, unknownAccount(account)
 		}
-		v := store.Values{Date: t.Date, Amount: t.Amount, TxKind: t.Kind, Counter: t.Counter, Memo: t.Memo}
+		v := store.Values{Date: t.Date, Amount: t.Amount, TxKind: t.Kind, Counter: t.Counter, Memo: t.Memo, Item: t.Item}
 		if err := checkTx(next, account, v); err != nil {
+			return Result{}, err
+		}
+		if err := checkLink(next, account, v.Item); err != nil {
 			return Result{}, err
 		}
 		if err := a.AddTransaction(t); err != nil {
@@ -122,6 +140,8 @@ type EntryChange struct {
 	TxKind  *model.TxKind
 	Counter *model.AccountID
 	Memo    *string
+	// Item is the budget item the transaction is linked to; a pointer to the empty string clears the link.
+	Item *string
 }
 
 // entryError turns the failure of a store call on an entry into the operation's error.
@@ -157,12 +177,20 @@ func CorrectEntry(st *store.Store, rec *model.Record, id int64, ch EntryChange, 
 	if ch.Memo != nil {
 		v.Memo = *ch.Memo
 	}
+	if ch.Item != nil {
+		v.Item = *ch.Item
+	}
 	if !finite(v.Amount) {
 		return nil, refuse(ErrInvalidValue, "%v is not a number within range", v.Amount)
 	}
 	if e.Kind == store.KindTransaction {
 		if err := checkTx(rec, e.Account, v); err != nil {
 			return nil, err
+		}
+		if v.Item != e.Item {
+			if err := checkLink(rec, e.Account, v.Item); err != nil {
+				return nil, err
+			}
 		}
 	} else if a := rec.Account(e.Account); a != nil {
 		if err := checkOpenOn(a, v.Date); err != nil {

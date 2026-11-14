@@ -248,6 +248,38 @@ func TestPartlyPostedPaycheckIsTaxedAsTheFullPaycheck(t *testing.T) {
 	}
 }
 
+func TestMatchedPaycheckShowsTheDepositAsPostedAndIsTaxedAtItsGross(t *testing.T) {
+	rec := fixture(t)
+	salary, _ := rec.Budget.Item("salary")
+	per, _ := salary.PeriodAt(d(2025, time.December, 15))
+	v := periodView(rec, salary, per, d(2026, time.January, 1), nil, nil, rec.Globals[model.PropInflation])
+	if !v.Matched || v.Posted != 500 || v.Remaining != 0 {
+		t.Errorf("period posted %v remaining %v matched %v, want the deposit of 500 posted and nothing remaining", v.Posted, v.Remaining, v.Matched)
+	}
+	full := fixture(t)
+	occurrence(full, "salary", d(2025, time.December, 15), model.StatusAuto, model.Ptr(1000.0), nil)
+	want, got := taxYear(t, full, "", 2025), taxYear(t, rec, "", 2025)
+	if !near(got.Wages, want.Wages) || !near(got.WithheldPaychecks, want.WithheldPaychecks) {
+		t.Errorf("wages %v and withheld %v, want %v and %v", got.Wages, got.WithheldPaychecks, want.Wages, want.WithheldPaychecks)
+	}
+}
+
+func TestLumpPaidBeforeItsDueDateAfterTheCutoffIsNotBookedAgain(t *testing.T) {
+	// Insurance of 100 is due on the 20th and was paid on the 14th, two days before the cutoff.
+	insurance := periodItem("insurance", 100, 20, model.Lump)
+	insurance.Start = model.Ptr(d(2026, time.January, 1))
+	rec := periodRecord(t, insurance)
+	must(t, rec.Account("chk").AddTransaction(model.Transaction{Date: d(2026, time.January, 14), Amount: -100, Kind: model.TxExpense, Memo: "insurance"}))
+	for _, date := range []model.Date{d(2026, time.January, 20), d(2026, time.February, 19)} {
+		if got := chkOn(t, rec, date); !near(got, 5000) {
+			t.Errorf("%v: balance %v, want 5000", date, got)
+		}
+	}
+	if got := chkOn(t, rec, d(2026, time.February, 20)); !near(got, 4900) {
+		t.Errorf("next occurrence: balance %v, want 4900", got)
+	}
+}
+
 func TestPendingContributionAtTheLimitMovesNothing(t *testing.T) {
 	// The savings of 30000 a month reach the 401(k) limit long before December, so the pending one of the 16th is refused whole.
 	setup := func() *model.Record {

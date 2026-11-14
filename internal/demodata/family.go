@@ -352,6 +352,7 @@ func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
 	if end == 0 {
 		end = FamilyToday
 	}
+	vary := seededFor(a.ID, "variation")
 	for _, it := range append(slices.Clone(rec.Budget.Items), mortgagePayments()) {
 		if !it.Touches(a.ID) {
 			continue
@@ -362,6 +363,10 @@ func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
 				continue
 			}
 			t := model.Transaction{Date: d, Memo: it.Name}
+			variable := it.Kind == model.ItemExpense && !fixedBills[it.ID] && a.Type != model.Type529
+			if it.ID == skippedBillItem && d == skippedBillDate {
+				continue
+			}
 			if it.Kind == model.ItemExpense && it.Timing == model.Spread {
 				t.Kind = model.TxExpense
 				// A spread item posts evenly over its period, as the engine assumes of it; the last day takes the rounding.
@@ -373,6 +378,9 @@ func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
 					if day == per.End {
 						t.Amount = -(amount - daily*float64(days-1))
 					}
+					if variable {
+						t.Amount = -jitter(vary, -t.Amount)
+					}
 					must(a.AddTransaction(t))
 				}
 				continue
@@ -382,11 +390,29 @@ func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
 				t.Kind, t.Amount = model.TxIncome, amount*netPay(rec, d)
 			case it.Kind == model.ItemExpense:
 				t.Kind, t.Amount = model.TxExpense, -amount
+				if variable {
+					t.Amount = -jitter(vary, amount)
+					if shifted := d.Add(vary.IntN(2*dateSwing+1) - dateSwing); shifted > historyOpen && shifted <= end {
+						t.Date = shifted
+					}
+				}
 			case it.From == a.ID:
 				t.Kind, t.Amount, t.Counter = model.TxTransfer, -amount, it.To
 			default:
 				t.Kind, t.Amount, t.Counter = model.TxTransfer, amount, it.From
 			}
+			must(a.AddTransaction(t))
+		}
+	}
+	for _, t := range unbudgeted(a.ID, end) {
+		must(a.AddTransaction(t))
+	}
+	for _, t := range cardSettlements(end) {
+		switch a.ID {
+		case Card:
+			must(a.AddTransaction(t))
+		case Checking:
+			t.Amount, t.Counter = -t.Amount, Card
 			must(a.AddTransaction(t))
 		}
 	}

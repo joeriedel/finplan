@@ -14,7 +14,7 @@ import (
 // Cause names why a balance changed.
 type Cause string
 
-// Causes. SocialSecurity and FERS are the benefits the household's members receive, which Income would otherwise show. GainsTax is the part of a year's tax that the capital gains realized in taxable accounts add, and Shock the change a market shock made to the holdings of a class (a line with a Class). Grant is the value of new RSU grants added to an equity account and Vest the net proceeds of its vests, which leave it for the deposit account; the withholding of a vest is Tax. Match is the employer's deposit on a paycheck. Interest is what a credit card owing money compounds, or the interest part of a mortgage payment, and Principal the part of a payment that pays the mortgage down; a mortgage payment shows on the paying account as interest and principal and on the mortgage as principal. Unexplained is the part of an actual change that snapshots show and transactions do not.
+// Causes. SocialSecurity and FERS are the benefits the household's members receive, which Income would otherwise show. GainsTax is the part of a year's tax that the capital gains realized in taxable accounts add, and Shock the change a market shock made to the holdings of a class (a line with a Class). Grant is the value of new RSU grants added to an equity account and Vest the net proceeds of its vests, which leave it for the deposit account; the withholding of a vest is Tax. Match is the employer's deposit on a paycheck. Interest is what a credit card owing money compounds, or the interest part of a mortgage payment, and Principal the part of a payment that pays the mortgage down; a mortgage payment shows on the paying account as interest and principal and on the mortgage as principal. Unaccounted is the income and expense transactions that match no budget item, which Income and Expense would otherwise hold. Unexplained is the part of an actual change that snapshots show and transactions do not.
 // Default is a change that comes from default balances, including a hand-off between defaults and
 // actual data.
 const (
@@ -35,6 +35,7 @@ const (
 	CauseVest           Cause = "vest"
 	CauseGrowth         Cause = "growth"
 	CauseOpening        Cause = "opening"
+	CauseUnaccounted    Cause = "unaccounted"
 	CauseUnexplained    Cause = "unexplained"
 	CauseDefault        Cause = "default"
 )
@@ -44,7 +45,7 @@ const residualTolerance = 1e-6
 
 var causeOrder = []Cause{
 	CauseIncome, CauseSocialSecurity, CauseFERS, CauseExpense, CauseTransfer, CauseContribution, CauseMatch, CauseWithdrawal, CausePrincipal, CauseInterest,
-	CauseGrant, CauseVest, CauseTax, CauseGainsTax, CauseGrowth, CauseShock, CauseOpening, CauseUnexplained, CauseDefault,
+	CauseGrant, CauseVest, CauseTax, CauseGainsTax, CauseGrowth, CauseShock, CauseOpening, CauseUnaccounted, CauseUnexplained, CauseDefault,
 }
 
 // Line is the change attributed to one cause, split by where it came from: Actual is read back from
@@ -240,16 +241,19 @@ func (p *path) breakdownReadBack(rec *model.Record, a, b model.Date, acc *accum)
 	if sp, ok := p.acct.Span(); ok {
 		lo, hi := max(a, sp.From), min(b, min(sp.To, p.start))
 		if hi > lo {
-			for _, t := range p.acct.TransactionsIn(lo, hi) {
+			matches, base := rec.Matches(), p.acct.TransactionIndexAfter(lo)
+			for k, t := range p.acct.TransactionsIn(lo, hi) {
 				explained += t.Amount
 				if eq := vestDeposit(rec, p.acct.ID, t); eq != "" {
 					acc.addFlow(CauseTransfer, t.Amount, eq, false)
 					continue
 				}
-				switch t.Kind {
-				case model.TxIncome:
+				switch {
+				case matches.IsUnaccounted(model.TxRef{Account: p.acct.ID, Index: base + k}, t):
+					acc.add(CauseUnaccounted, t.Amount, false)
+				case t.Kind == model.TxIncome:
 					acc.addFlow(CauseIncome, t.Amount, "", false)
-				case model.TxExpense:
+				case t.Kind == model.TxExpense:
 					acc.addFlow(CauseExpense, t.Amount, "", false)
 				default:
 					src, dst := p.acct.ID, t.Counter

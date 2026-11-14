@@ -60,23 +60,23 @@ func TestEvalPeriod(t *testing.T) {
 	spread := BudgetItem{ID: "s", Kind: ItemExpense, Timing: Spread}
 	lump := BudgetItem{ID: "l", Kind: ItemIncome, Timing: Lump}
 	p := Period{D(2026, 1, 1), D(2026, 1, 10)}
-	v := EvalPeriod(spread, p, 100, nil, D(2026, 1, 4))
+	v := EvalPeriod(spread, p, 100, nil, D(2026, 1, 4), nil)
 	if !v.PostedAuto || v.Posted != 40 || v.Remaining != 60 || v.Variance != -60 || v.Closed {
 		t.Errorf("spread %+v", v)
 	}
-	v = EvalPeriod(lump, p, 100, nil, D(2026, 1, 4))
+	v = EvalPeriod(lump, p, 100, nil, D(2026, 1, 4), nil)
 	if v.Posted != 100 || v.Remaining != 0 {
 		t.Errorf("lump on or before the cutoff %+v", v)
 	}
-	v = EvalPeriod(lump, p, 100, nil, D(2025, 12, 31))
+	v = EvalPeriod(lump, p, 100, nil, D(2025, 12, 31), nil)
 	if v.Posted != 0 || v.Remaining != 100 {
 		t.Errorf("lump after the cutoff %+v", v)
 	}
-	v = EvalPeriod(lump, p, 100, &Occurrence{Status: StatusPending, Posted: Ptr(30.0)}, D(2026, 1, 4))
+	v = EvalPeriod(lump, p, 100, &Occurrence{Status: StatusPending, Posted: Ptr(30.0)}, D(2026, 1, 4), nil)
 	if v.PostedAuto || v.Posted != 30 || v.Remaining != 70 {
 		t.Errorf("pending %+v", v)
 	}
-	v = EvalPeriod(spread, p, 100, &Occurrence{Expected: Ptr(150.0)}, D(2026, 1, 20))
+	v = EvalPeriod(spread, p, 100, &Occurrence{Expected: Ptr(150.0)}, D(2026, 1, 20), nil)
 	if !v.Closed || v.Posted != 150 || v.Variance != 50 || v.Remaining != 0 {
 		t.Errorf("closed with an expected amount %+v", v)
 	}

@@ -42,7 +42,7 @@ func Periods(rec *model.Record, projection string, asOf model.Date, n int) ([]It
 			v, _ := BudgetedAmount(rec, it, p.Start)
 			return v
 		}
-		out = append(out, ItemPeriods{it, cutoff, model.PeriodHistory(it, asOf, n, rec.Occurrences, cutoff, budgeted)})
+		out = append(out, ItemPeriods{it, cutoff, model.PeriodHistory(it, asOf, n, rec.Occurrences, cutoff, budgeted, func(p model.Period) *model.PeriodMatch { return rec.PeriodMatch(it, p, cutoff) })})
 	}
 	return out, nil
 }

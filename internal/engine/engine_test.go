@@ -48,13 +48,13 @@ func fixture(t *testing.T) *model.Record {
 	bare := &model.Account{ID: "bare", Type: model.TypeSavings, Tax: model.Taxable}
 	bare.Default.Intervals = []model.Interval{{From: model.MinDate, To: model.Ptr(d(2026, time.June, 30)), Value: 500}}
 	for _, tx := range []model.Transaction{
-		{Date: d(2025, time.December, 15), Amount: 500, Kind: model.TxIncome},
-		{Date: d(2025, time.December, 16), Amount: -300, Kind: model.TxTransfer, Counter: "inv"},
-		{Date: d(2025, time.December, 20), Amount: -200, Kind: model.TxExpense},
+		{Date: d(2025, time.December, 15), Amount: 500, Kind: model.TxIncome, Memo: "salary"},
+		{Date: d(2025, time.December, 16), Amount: -300, Kind: model.TxTransfer, Counter: "inv", Memo: "save"},
+		{Date: d(2025, time.December, 20), Amount: -200, Kind: model.TxExpense, Memo: "rent"},
 	} {
 		must(t, chk.AddTransaction(tx))
 	}
-	must(t, inv.AddTransaction(model.Transaction{Date: d(2025, time.December, 16), Amount: 300, Kind: model.TxTransfer, Counter: "chk"}))
+	must(t, inv.AddTransaction(model.Transaction{Date: d(2025, time.December, 16), Amount: 300, Kind: model.TxTransfer, Counter: "chk", Memo: "save"}))
 	for _, a := range []*model.Account{chk, inv, late, bare} {
 		must(t, rec.AddAccount(a))
 	}
@@ -64,9 +64,9 @@ func fixture(t *testing.T) *model.Record {
 	must(t, rec.AddAsset(&model.Asset{ID: "pair", Members: []model.Member{model.AccountMember("chk"), model.AccountMember("inv")}}))
 	monthly := func(day int) model.Recurrence { return model.Recurrence{Kind: model.Monthly, Day: day} }
 	rec.Budget.Items = []model.BudgetItem{
-		{ID: "salary", Kind: model.ItemIncome, Amount: model.Constant(1000), Recurrence: monthly(15), Account: "chk"},
-		{ID: "rent", Kind: model.ItemExpense, Amount: model.Constant(200), Recurrence: monthly(20), Account: "chk", Timing: model.Lump},
-		{ID: "save", Kind: model.ItemTransfer, Amount: model.Constant(300), Recurrence: monthly(16), From: "chk", To: "inv"},
+		{ID: "salary", Name: "salary", Kind: model.ItemIncome, Amount: model.Constant(1000), Recurrence: monthly(15), Account: "chk"},
+		{ID: "rent", Name: "rent", Kind: model.ItemExpense, Amount: model.Constant(200), Recurrence: monthly(20), Account: "chk", Timing: model.Lump},
+		{ID: "save", Name: "save", Kind: model.ItemTransfer, Amount: model.Constant(300), Recurrence: monthly(16), From: "chk", To: "inv"},
 		{ID: "late-deposit", Kind: model.ItemTransfer, Amount: model.Constant(100), Recurrence: monthly(1), From: "chk", To: "late"},
 	}
 	return rec
@@ -817,7 +817,7 @@ func TestTransferCountedOnBothSides(t *testing.T) {
 			must(t, rec.AddAccount(b))
 			must(t, rec.AddAsset(&model.Asset{ID: "both", Members: []model.Member{model.AccountMember("a"), model.AccountMember("b")}}))
 			rec.Budget.Items = []model.BudgetItem{
-				{ID: "move", Kind: model.ItemTransfer, Amount: model.Constant(70), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, From: c.from, To: c.to},
+				{ID: "move", Name: "move", Kind: model.ItemTransfer, Amount: model.Constant(70), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, From: c.from, To: c.to},
 			}
 			bd, err := Breakdown(rec, "", "both", d(2025, time.December, 15), d(2026, time.May, 1))
 			must(t, err)
@@ -856,7 +856,7 @@ func TestRecordedTransferCountedOnBothSides(t *testing.T) {
 			early.AddSnapshot(d(2025, time.December, 1), 3000)
 			early.AddSnapshot(d(2026, time.January, 10), 3000)
 			for _, day := range []model.Date{d(2026, time.February, 1), d(2026, time.March, 1)} {
-				must(t, later.AddTransaction(model.Transaction{Date: day, Amount: 70 * sign, Kind: model.TxTransfer, Counter: "early"}))
+				must(t, later.AddTransaction(model.Transaction{Date: day, Amount: 70 * sign, Kind: model.TxTransfer, Counter: "early", Memo: "move"}))
 			}
 			must(t, rec.AddAccount(later))
 			must(t, rec.AddAccount(early))
@@ -866,7 +866,7 @@ func TestRecordedTransferCountedOnBothSides(t *testing.T) {
 				from, to = to, from
 			}
 			rec.Budget.Items = []model.BudgetItem{
-				{ID: "move", Kind: model.ItemTransfer, Amount: model.Constant(70), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, From: from, To: to},
+				{ID: "move", Name: "move", Kind: model.ItemTransfer, Amount: model.Constant(70), Recurrence: model.Recurrence{Kind: model.Monthly, Day: 1}, From: from, To: to},
 			}
 			for _, date := range []model.Date{d(2025, time.December, 15), d(2026, time.February, 15), d(2026, time.March, 20), d(2026, time.May, 1)} {
 				if got := sample(t, rec, "", "both", date); !near(got.Amount, 8000) {

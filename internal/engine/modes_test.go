@@ -106,6 +106,8 @@ func TestSkippedScaleOfMissingItem(t *testing.T) {
 func gymRecord(t *testing.T, start model.Date, growth float64, indexed bool) *model.Record {
 	t.Helper()
 	rec := fixture(t)
+	// The gym is not in the recorded transactions, so without them the checking account has none in the gym's periods and the date rule applies; with them the unpaid gym would be missing and booked again.
+	rec.Account("chk").Transactions = nil
 	if indexed {
 		rec.Globals[model.PropInflation] = model.Constant(0.02)
 	}

@@ -218,6 +218,7 @@ var dataCommands = []*command{
 			{Name: "kind", Type: typeEnum, Required: true, Choices: []string{string(model.TxIncome), string(model.TxExpense), string(model.TxTransfer)}, Description: "income, expense or transfer"},
 			{Name: "counter", Type: typeString, Description: "a transfer's account on the other side: account id or name"},
 			{Name: "memo", Type: typeString, Description: "a note on the transaction"},
+			{Name: "item", Type: typeString, Description: "a budget item (id or name) the transaction is linked to; it must touch the account. A linked transaction matches that item whatever its memo"},
 		},
 		Output: entryOut,
 		run:    cmdEntryAddTransaction,
@@ -231,6 +232,7 @@ var dataCommands = []*command{
 			{Name: "kind", Type: typeEnum, Choices: []string{string(model.TxIncome), string(model.TxExpense), string(model.TxTransfer)}, Description: "a transaction's kind"},
 			{Name: "counter", Type: typeString, Description: "a transfer's account on the other side: account id or name; empty clears it"},
 			{Name: "memo", Type: typeString, Description: "a note on the transaction; empty clears it"},
+			{Name: "item", Type: typeString, Description: "a budget item (id or name) the transaction is linked to; none clears the link"},
 			{Name: "note", Type: typeString, Description: "why the entry is corrected, kept in entry history"},
 		},
 		Output: entryOut + ", with the values after the correction",
@@ -795,6 +797,11 @@ func cmdEntryAddTransaction(c *call) (any, error) {
 			return nil, err
 		}
 	}
+	if c.set["item"] {
+		if t.Item, err = c.itemRef(c.str("item")); err != nil {
+			return nil, err
+		}
+	}
 	res, err := ops.AddTransaction(c.st, c.rec, acct, t, c.options())
 	return c.entryResult(res, err, nil)
 }
@@ -842,8 +849,17 @@ func cmdEntryCorrect(c *call) (any, error) {
 	if c.set["memo"] {
 		ch.Memo = model.Ptr(c.str("memo"))
 	}
+	if c.set["item"] {
+		item := ""
+		if c.str("item") != "none" {
+			if item, err = c.itemRef(c.str("item")); err != nil {
+				return nil, err
+			}
+		}
+		ch.Item = &item
+	}
 	if ch == (ops.EntryChange{}) {
-		return nil, usageErr("entry correct needs at least one of --date, --amount, --kind, --counter and --memo")
+		return nil, usageErr("entry correct needs at least one of --date, --amount, --kind, --counter, --memo and --item")
 	}
 	res, err := ops.CorrectEntry(c.st, c.rec, id, ch, c.str("note"), c.options())
 	return c.entryResult(res, err, func() (store.Entry, error) { return c.st.Entry(id) })
@@ -878,6 +894,14 @@ func cmdBudgetAdd(c *call) (any, error) {
 		id = res.Item.ID
 	}
 	return c.itemResult(res, err, id)
+}
+
+// itemRef resolves a budget item given by id or name to its id.
+func (c *call) itemRef(ref string) (string, error) {
+	if _, _, err := c.open(); err != nil {
+		return "", err
+	}
+	return pickItem(c.rec.Budget.Items, ref)
 }
 
 // baseItemArg returns the base budget item the positional argument at pos names, by id or name.

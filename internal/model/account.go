@@ -73,6 +73,8 @@ type Transaction struct {
 	Kind    TxKind
 	Counter AccountID
 	Memo    string
+	// Item is the id of the budget item the transaction is linked to, or empty for none. A linked transaction matches that item only.
+	Item string
 	// Entry is the id of the stored entry of the transaction when a recorded vest is tied to it (RecordedVest.TxEntry), else 0. The store sets it when it loads the record.
 	Entry int64
 }

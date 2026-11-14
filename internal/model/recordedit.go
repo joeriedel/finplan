@@ -45,6 +45,7 @@ func (r *Record) Clone() *Record {
 	if r.Projections == nil {
 		c.Projections = nil
 	}
+	c.matches = nil
 	c.Globals = cloneSchedules(r.Globals)
 	c.Classes = slices.Clone(r.Classes)
 	for i, cl := range c.Classes {

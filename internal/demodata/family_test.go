@@ -495,3 +495,103 @@ func TestFamilyCollegeSavings(t *testing.T) {
 		t.Error("the oldest child is in college today")
 	}
 }
+
+// TestFamilyHistoryHasNoise checks that the recorded history strays from the budget the way real records do: amounts vary, bills land a few days off, and about a fifth more transactions go to payees the budget does not name.
+func TestFamilyHistoryHasNoise(t *testing.T) {
+	rec := Family()
+	matches := rec.Matches()
+	payeeNames := map[string]bool{}
+	for _, p := range payees {
+		payeeNames[p.memo] = true
+	}
+	for _, id := range []model.AccountID{Checking, Card} {
+		a := rec.Account(id)
+		unbudgeted, other := 0, 0
+		for i, tx := range a.Transactions {
+			if matches.IsUnaccounted(model.TxRef{Account: id, Index: i}, tx) {
+				unbudgeted++
+				if !payeeNames[tx.Memo] {
+					t.Errorf("%s: %q is unaccounted but is not an invented payee", id, tx.Memo)
+				}
+			} else {
+				other++
+			}
+		}
+		if share := float64(unbudgeted) / float64(other); share < 0.15 || share > 0.25 {
+			t.Errorf("%s: unbudgeted transactions are %.2f of the others (%d of %d), want about 0.2", id, share, unbudgeted, other)
+		}
+	}
+
+	amounts, offDays := map[float64]bool{}, map[int]bool{}
+	for _, tx := range rec.Account(Card).Transactions {
+		if tx.Memo == "Groceries" {
+			amounts[tx.Amount] = true
+			if tx.Amount < -1800.0/28*1.2 || tx.Amount > -1800.0/31*0.8 {
+				t.Errorf("a groceries charge of %v strays more than 15%% from the daily budget", tx.Amount)
+			}
+		}
+	}
+	for _, m := range rec.Matches().Item("childcare") {
+		off := int(m.Transaction.Date - m.Period)
+		offDays[off] = true
+		if off < -dateSwing || off > dateSwing {
+			t.Errorf("childcare due %v paid on %v", m.Period, m.Transaction.Date)
+		}
+	}
+	if len(amounts) < 100 {
+		t.Errorf("groceries has %d distinct amounts", len(amounts))
+	}
+	if len(offDays) < 4 {
+		t.Errorf("childcare is paid on %d distinct days from its due date", len(offDays))
+	}
+	for _, id := range []model.AccountID{Checking, Card} {
+		for _, s := range rec.Account(id).Snapshots {
+			if id == Checking && s.Balance < 0 {
+				t.Errorf("checking is overdrawn on %v: %v", s.Date, s.Balance)
+			}
+		}
+	}
+}
+
+// TestFamilySkippedBillIsMissingAndStillProjected checks that the one unpaid bill of the current period shows as missing, no other lump does, and the projection applies the bill the day after the cutoff: the record that paid it is ahead of the one that did not by the budgeted bill from 9 November on, and not on the cutoff.
+func TestFamilySkippedBillIsMissingAndStillProjected(t *testing.T) {
+	rec := Family()
+	rows, err := engine.Periods(rec, ProjBase, FamilyToday, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		v := r.Current()
+		if v.Missing != (r.Item.ID == skippedBillItem) {
+			t.Errorf("%s: missing %v, posted %v, remaining %v", r.Item.ID, v.Missing, v.Posted, v.Remaining)
+		}
+	}
+	paid := rec.Clone()
+	bill, _ := rec.Budget.Item(skippedBillItem)
+	amount, _ := bill.Amount.At(skippedBillDate)
+	if err := paid.Account(Checking).AddTransaction(model.Transaction{Date: skippedBillDate, Amount: -amount, Kind: model.TxExpense, Memo: bill.Name}); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []*model.Record{rec, paid} {
+		if err := r.AddAsset(&model.Asset{ID: "checking-only", Name: "Checking", Members: []model.Member{model.AccountMember(Checking)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dates := []model.Date{FamilyToday, FamilyToday.Add(1), d(2026, time.November, 30)}
+	late, err1 := engine.Balances(rec, ProjBase, "checking-only", dates)
+	early, err2 := engine.Balances(paid, ProjBase, "checking-only", dates)
+	if err1 != nil || err2 != nil {
+		t.Fatal(err1, err2)
+	}
+	// The balance on the cutoff is the recorded snapshot in both; from the next day the paid record has the bill behind it, and the other still has it to come.
+	budgeted, _ := engine.BudgetedAmount(rec, bill, skippedBillDate)
+	gap := func(i int) float64 { return early.Samples[i].Amount - late.Samples[i].Amount }
+	if g := gap(0); math.Abs(g) > 0.01 {
+		t.Errorf("on the cutoff the records differ by %v", g)
+	}
+	for i := 1; i < 3; i++ {
+		if g := gap(i); math.Abs(g-budgeted) > 0.01 {
+			t.Errorf("on %v the paid record is %v ahead, want the budgeted bill %v: the missing bill is not applied after the cutoff", dates[i], g, budgeted)
+		}
+	}
+}

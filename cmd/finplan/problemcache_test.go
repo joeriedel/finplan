@@ -45,12 +45,13 @@ func TestProblemKeyChangesWithEveryTransactionField(t *testing.T) {
 		t.Fatal("the key is not stable")
 	}
 	changed := map[string]string{
-		"date":    problemKey(rec, "checking", entryDraft{"2030-01-02", "-5", "m", "n", model.TxTransfer, "savings"}),
-		"amount":  problemKey(rec, "checking", entryDraft{"2030-01-01", "-6", "m", "n", model.TxTransfer, "savings"}),
-		"memo":    problemKey(rec, "checking", entryDraft{"2030-01-01", "-5", "x", "n", model.TxTransfer, "savings"}),
-		"note":    problemKey(rec, "checking", entryDraft{"2030-01-01", "-5", "m", "x", model.TxTransfer, "savings"}),
-		"kind":    problemKey(rec, "checking", entryDraft{"2030-01-01", "-5", "m", "n", model.TxExpense, "savings"}),
-		"counter": problemKey(rec, "checking", entryDraft{"2030-01-01", "-5", "m", "n", model.TxTransfer, "card"}),
+		"date":    problemKey(rec, "checking", entryDraft{"2030-01-02", "-5", "m", "n", model.TxTransfer, "savings", ""}),
+		"amount":  problemKey(rec, "checking", entryDraft{"2030-01-01", "-6", "m", "n", model.TxTransfer, "savings", ""}),
+		"memo":    problemKey(rec, "checking", entryDraft{"2030-01-01", "-5", "x", "n", model.TxTransfer, "savings", ""}),
+		"note":    problemKey(rec, "checking", entryDraft{"2030-01-01", "-5", "m", "x", model.TxTransfer, "savings", ""}),
+		"kind":    problemKey(rec, "checking", entryDraft{"2030-01-01", "-5", "m", "n", model.TxExpense, "savings", ""}),
+		"counter": problemKey(rec, "checking", entryDraft{"2030-01-01", "-5", "m", "n", model.TxTransfer, "card", ""}),
+		"item":    problemKey(rec, "checking", entryDraft{"2030-01-01", "-5", "m", "n", model.TxTransfer, "savings", "groceries"}),
 		"account": problemKey(rec, "savings", base),
 		"record":  problemKey(model.NewRecord(0), "checking", base),
 	}

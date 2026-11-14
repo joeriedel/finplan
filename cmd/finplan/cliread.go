@@ -43,13 +43,13 @@ var commands = []*command{
 		Name: "account entries", Summary: "list an account's record entries (snapshots and transactions) with their current values, in the order they were stored; voided entries are left out unless --voided is given",
 		Args:   []argDef{{Name: "account", Description: "account id or name", Required: true}},
 		Flags:  []flagDef{{Name: "voided", Type: typeBool, Default: "false", Description: "include voided entries, marked void: true"}},
-		Output: "[{id, kind (snapshot or transaction), date, amount, tx_kind, counter, memo}]; empty fields are null; with --voided each also has void (true for a voided entry)",
+		Output: "[{id, kind (snapshot or transaction), date, amount, tx_kind, counter, memo, item (the budget item a transaction is linked to)}]; empty fields are null; with --voided each also has void (true for a voided entry)",
 		run:    cmdAccountEntries,
 	},
 	{
 		Name: "entry history", Summary: "show every revision of one entry: its original values, then each correction or void",
 		Args:   []argDef{{Name: "entry-id", Description: "entry id, as listed by account entries", Required: true}},
-		Output: "{id, revisions: [{date, amount, tx_kind, counter, memo, made_at (RFC 3339), note, void}]}",
+		Output: "{id, revisions: [{date, amount, tx_kind, counter, memo, item, made_at (RFC 3339), note, void}]}",
 		run:    cmdEntryHistory,
 	},
 	{
@@ -120,7 +120,7 @@ var commands = []*command{
 			{Name: "to", Type: typeDate, Required: true, EndOfMonth: true, Description: "end of the period, inclusive: " + endNote},
 			{Name: "projection", Type: typeString, Description: projDesc},
 		},
-		Output: "{target (asset id), projection, from, to, start, end, total, lines: [{cause, class, actual, projected}], " + diagShape + "}. class is null except on the growth lines of an account with an allocation, which has one growth line per market class, in the order of the classes, instead of a single one, and on shock lines, the change a market shock made to the holdings of a class (cause shock; cause gains tax is the part of a year's tax that realized capital gains add, and tax the rest). " + jsonNote,
+		Output: "{target (asset id), projection, from, to, start, end, total, lines: [{cause, class, actual, projected}], " + diagShape + "}. class is null except on the growth lines of an account with an allocation, which has one growth line per market class, in the order of the classes, instead of a single one, and on shock lines, the change a market shock made to the holdings of a class (cause shock; cause gains tax is the part of a year's tax that realized capital gains add, and tax the rest). Income and expense lines count only transactions that match a budget item; cause unaccounted holds the income and expense transactions that match none (see budget unaccounted), and cause unexplained the part of a change that snapshots show and transactions do not. " + jsonNote,
 		run:    cmdBreakdown,
 	},
 	{
@@ -379,10 +379,11 @@ type jvalues struct {
 	TxKind  *string `json:"tx_kind"`
 	Counter *string `json:"counter"`
 	Memo    *string `json:"memo"`
+	Item    *string `json:"item"`
 }
 
 func valuesJSON(v store.Values) jvalues {
-	return jvalues{jd(v.Date), v.Amount, nullable(string(v.TxKind)), nullable(string(v.Counter)), nullable(v.Memo)}
+	return jvalues{jd(v.Date), v.Amount, nullable(string(v.TxKind)), nullable(string(v.Counter)), nullable(v.Memo), nullable(v.Item)}
 }
 
 type jentry struct {

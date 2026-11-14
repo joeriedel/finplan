@@ -126,6 +126,9 @@ var migrations = []string{
 		BEGIN SELECT RAISE(ABORT, 'fact corrections are append-only'); END;
 	CREATE TRIGGER fact_corrections_no_delete BEFORE DELETE ON fact_corrections
 		BEGIN SELECT RAISE(ABORT, 'fact corrections are append-only'); END;`,
+	// 7: the budget item a transaction is linked to, empty for none; a correction carries the whole new value.
+	`ALTER TABLE entries ADD COLUMN item TEXT NOT NULL DEFAULT '';
+	ALTER TABLE corrections ADD COLUMN item TEXT NOT NULL DEFAULT '';`,
 }
 
 // migrate brings the database up to schema version target in one transaction. It fails, changing

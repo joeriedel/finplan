@@ -121,7 +121,7 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	want := demodata.Family()
 	mustSave(t, s, want)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 14 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 15 {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
 	// Format 1 documents have no mode and no growth; a schedule of no growth is not stored.
@@ -743,7 +743,8 @@ func TestMigrateFromVersion2(t *testing.T) {
 	for _, q := range []string{
 		`ATTACH DATABASE '` + srcPath + `' AS src`,
 		`INSERT INTO documents SELECT * FROM src.documents`,
-		`INSERT INTO entries SELECT * FROM src.entries`,
+		`INSERT INTO entries (id, account, kind, date, amount, tx_kind, counter, memo, made_at)
+			SELECT id, account, kind, date, amount, tx_kind, counter, memo, made_at FROM src.entries`,
 		`INSERT INTO corrections (id, entry, date, amount, tx_kind, counter, memo, note, made_at)
 			SELECT id, entry, date, amount, tx_kind, counter, memo, note, made_at FROM src.corrections`,
 	} {
@@ -817,8 +818,10 @@ func TestMigrateFromVersion3(t *testing.T) {
 	for _, q := range []string{
 		`ATTACH DATABASE '` + srcPath + `' AS src`,
 		`INSERT INTO documents SELECT * FROM src.documents`,
-		`INSERT INTO entries SELECT * FROM src.entries`,
-		`INSERT INTO corrections SELECT * FROM src.corrections`,
+		`INSERT INTO entries (id, account, kind, date, amount, tx_kind, counter, memo, made_at)
+			SELECT id, account, kind, date, amount, tx_kind, counter, memo, made_at FROM src.entries`,
+		`INSERT INTO corrections (id, entry, date, amount, tx_kind, counter, memo, note, void, made_at)
+			SELECT id, entry, date, amount, tx_kind, counter, memo, note, void, made_at FROM src.corrections`,
 	} {
 		if _, err := db.Exec(q); err != nil {
 			t.Fatal(err)

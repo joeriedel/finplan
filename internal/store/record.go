@@ -392,7 +392,7 @@ func buildAccount(d accountDoc, entries []Entry) (*model.Account, error) {
 		case KindSnapshot:
 			a.AddSnapshot(e.Date, e.Amount)
 		case KindTransaction:
-			t := model.Transaction{Date: e.Date, Amount: e.Amount, Kind: e.TxKind, Counter: e.Counter, Memo: e.Memo}
+			t := model.Transaction{Date: e.Date, Amount: e.Amount, Kind: e.TxKind, Counter: e.Counter, Memo: e.Memo, Item: e.Item}
 			if err := a.AddTransaction(t); err != nil {
 				return nil, fmt.Errorf("store: %w", err)
 			}
@@ -487,7 +487,7 @@ func linkTies(r *model.Record, entries []Entry) {
 			}
 			for i := range b.Transactions {
 				t := &b.Transactions[i]
-				if t.Entry == 0 && t.Date == e.Date && t.Amount == e.Amount && t.Kind == e.TxKind && t.Counter == e.Counter && t.Memo == e.Memo {
+				if t.Entry == 0 && t.Date == e.Date && t.Amount == e.Amount && t.Kind == e.TxKind && t.Counter == e.Counter && t.Memo == e.Memo && t.Item == e.Item {
 					t.Entry = e.ID
 					break
 				}
@@ -540,14 +540,14 @@ func (s *Store) changedSinceLoad(tx *sql.Tx) ([]Entry, error) {
 	}
 	var out []Entry
 	for _, e := range changed {
-		rows, err := tx.Query(`SELECT date, amount, tx_kind, counter, memo FROM entries WHERE id = ?
-			UNION ALL SELECT date, amount, tx_kind, counter, memo FROM corrections WHERE entry = ?`, e.ID, e.ID)
+		rows, err := tx.Query(`SELECT date, amount, tx_kind, counter, memo, item FROM entries WHERE id = ?
+			UNION ALL SELECT date, amount, tx_kind, counter, memo, item FROM corrections WHERE entry = ?`, e.ID, e.ID)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
 			r := e
-			if err := rows.Scan(&r.Date, &r.Amount, &r.TxKind, &r.Counter, &r.Memo); err != nil {
+			if err := rows.Scan(&r.Date, &r.Amount, &r.TxKind, &r.Counter, &r.Memo, &r.Item); err != nil {
 				rows.Close()
 				return nil, err
 			}

@@ -40,6 +40,7 @@ type Record struct {
 	Household Household
 	Tax       tax.Tables
 
+	matches    *matchBox // see Matches
 	seq        int
 	accountIdx map[AccountID]int
 	assetIdx   map[AssetID]int

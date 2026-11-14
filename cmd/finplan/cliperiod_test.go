@@ -20,6 +20,7 @@ type periodRow struct {
 	PostedAuto  bool     `json:"posted_auto"`
 	Status      string   `json:"status"`
 	Remaining   float64  `json:"remaining"`
+	Missing     bool     `json:"missing"`
 	Variance    float64  `json:"variance"`
 	OccurrenceI *int64   `json:"occurrence_id"`
 	History     []struct {

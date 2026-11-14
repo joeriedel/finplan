@@ -924,6 +924,10 @@ func (p *path) collect(rec *model.Record, items []model.BudgetItem, cutoffs, ite
 			if _, found := rec.Occurrences.Get(it.ID, d); found && !matchOnly {
 				continue
 			}
+			// A lump paid before its due date after the cutoff is booked by the transaction already.
+			if _, found := rec.Occurrences.Get(it.ID, d); !found && rec.Paid(it, d, after) {
+				continue
+			}
 			if amt, ok := amountOn(rec, it, d, amounts, growths, infl); ok {
 				p.flows(rec, it, d, amt)
 			}
@@ -1005,7 +1009,7 @@ func periodView(rec *model.Record, it model.BudgetItem, per model.Period, cutoff
 	if o, found := rec.Occurrences.Get(it.ID, per.Start); found {
 		ov = &o
 	}
-	return model.EvalPeriod(it, per, budgeted, ov, cutoff)
+	return model.EvalPeriod(it, per, budgeted, ov, cutoff, rec.PeriodMatch(it, per, cutoff))
 }
 
 // remainderPeriods lists the periods of the item whose remainder is booked: the cutoff's, the one before it if its occurrence is marked pending, and every later one up to upTo with an occurrence fact.
@@ -1046,6 +1050,10 @@ func remainderBooked(per model.Period, v model.PeriodView, cutoff, upTo model.Da
 func countedAmount(rec *model.Record, it model.BudgetItem, per model.Period, v model.PeriodView, cutoff model.Date) float64 {
 	after, upTo := itemSpan(rec, it, cutoff, model.MaxDate)
 	amt := v.Posted
+	if v.Matched && it.Kind == model.ItemIncome && it.Income() == model.IncomeWages {
+		// Wages are taxed at the gross the item states; the deposit that matched is the net of it.
+		amt = v.Budgeted
+	}
 	if upTo > after {
 		amt += remainderBooked(per, v, after, upTo)
 	}

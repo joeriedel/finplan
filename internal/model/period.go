@@ -228,13 +228,17 @@ type PeriodView struct {
 	// Variance is posted less budgeted in the period that has not closed; once it has (it ends before the cutoff), the expected amount if set, else posted, less budgeted.
 	Variance float64
 	Closed   bool
+	// Missing is set for a lump that is past due with no matching transaction in an account that has recorded transactions in the period; it is still to come, so Remaining is its planned amount.
+	Missing bool
+	// Matched is set for a lump whose occurrence a transaction matched and that has no occurrence fact.
+	Matched bool
 	// Overridden is set when an occurrence fact exists for the period.
 	Overridden bool
 	Override   Occurrence
 }
 
-// EvalPeriod works out the period of the item against the cutoff, given the period's budgeted amount and its occurrence fact, if any (nil for none). A lump counts as posted when its date is on or before the cutoff; a spread item in proportion to the days of its period up to the cutoff, both inclusive.
-func EvalPeriod(it BudgetItem, p Period, budgeted float64, ov *Occurrence, cutoff Date) PeriodView {
+// EvalPeriod works out the period of the item against the cutoff, given the period's budgeted amount, its occurrence fact, if any (nil for none), and what the transaction matches say of it (nil for nothing known). With no fact, a lump counts as posted when its date is on or before the cutoff; a spread item in proportion to the days of its period up to the cutoff, both inclusive. With matches, a lump is posted when matched, at the matched amount, and one past due without a match is missing and still to come; a spread item has posted what matched.
+func EvalPeriod(it BudgetItem, p Period, budgeted float64, ov *Occurrence, cutoff Date, match *PeriodMatch) PeriodView {
 	v := PeriodView{Item: it.ID, Period: p, Timing: it.EffectiveTiming(), Budgeted: budgeted, Status: StatusAuto, Closed: p.End < cutoff}
 	var o Occurrence
 	if ov != nil {
@@ -246,7 +250,14 @@ func EvalPeriod(it BudgetItem, p Period, budgeted float64, ov *Occurrence, cutof
 	}
 	planned := o.Planned(budgeted)
 	auto := 0.0
+	matched := match != nil && ov == nil
 	switch {
+	case matched && v.Timing == Lump:
+		auto = match.Amount
+		v.Missing = !match.Matched && p.Start <= cutoff
+		v.Matched = match.Matched
+	case matched:
+		auto = match.Amount
 	case cutoff < p.Start:
 	case v.Timing == Lump || p.End <= cutoff:
 		auto = planned
@@ -264,6 +275,9 @@ func EvalPeriod(it BudgetItem, p Period, budgeted float64, ov *Occurrence, cutof
 	}
 	if v.Status != StatusPosted {
 		v.Remaining = max(0, planned-v.Posted)
+		if matched && v.Timing == Lump && match.Matched {
+			v.Remaining = 0
+		}
 	}
 	if v.Closed && o.Expected != nil {
 		v.Variance = *o.Expected - budgeted
@@ -273,8 +287,8 @@ func EvalPeriod(it BudgetItem, p Period, budgeted float64, ov *Occurrence, cutof
 	return v
 }
 
-// PeriodHistory returns the n periods of the item up to and including the one containing d, oldest first, evaluated against the cutoff. budgeted gives the budgeted amount of a period.
-func PeriodHistory(it BudgetItem, d Date, n int, book *OccurrenceBook, cutoff Date, budgeted func(Period) float64) []PeriodView {
+// PeriodHistory returns the n periods of the item up to and including the one containing d, oldest first, evaluated against the cutoff. budgeted gives the budgeted amount of a period and match what the transaction matches say of it.
+func PeriodHistory(it BudgetItem, d Date, n int, book *OccurrenceBook, cutoff Date, budgeted func(Period) float64, match func(Period) *PeriodMatch) []PeriodView {
 	var out []PeriodView
 	p, ok := it.PeriodAt(d)
 	for ; ok && len(out) < n; p, ok = it.PeriodBefore(p) {
@@ -282,7 +296,7 @@ func PeriodHistory(it BudgetItem, d Date, n int, book *OccurrenceBook, cutoff Da
 		if o, found := book.Get(it.ID, p.Start); found {
 			ov = &o
 		}
-		out = append(out, EvalPeriod(it, p, budgeted(p), ov, cutoff))
+		out = append(out, EvalPeriod(it, p, budgeted(p), ov, cutoff, match(p)))
 	}
 	slices.Reverse(out)
 	return out

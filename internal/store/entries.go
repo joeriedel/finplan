@@ -28,6 +28,8 @@ type Values struct {
 	TxKind  model.TxKind
 	Counter model.AccountID
 	Memo    string
+	// Item is the id of the budget item a transaction is linked to; empty for none.
+	Item string
 }
 
 // Entry is a stored record entry with its current, corrected values.
@@ -55,7 +57,7 @@ type querier interface {
 
 const currentEntries = `SELECT e.id, e.account, e.kind,
 		COALESCE(c.date, e.date), COALESCE(c.amount, e.amount), COALESCE(c.tx_kind, e.tx_kind),
-		COALESCE(c.counter, e.counter), COALESCE(c.memo, e.memo), COALESCE(c.void, 0)
+		COALESCE(c.counter, e.counter), COALESCE(c.memo, e.memo), COALESCE(c.item, e.item), COALESCE(c.void, 0)
 	FROM entries e LEFT JOIN corrections c ON c.id = (SELECT MAX(id) FROM corrections WHERE entry = e.id)`
 
 // queryEntries returns the entries matching the condition (an SQL expression, which may be empty), in id
@@ -82,7 +84,7 @@ func queryEntries(q querier, withVoided bool, cond string, args ...any) ([]Entry
 	var out []Entry
 	for rows.Next() {
 		var e Entry
-		if err := rows.Scan(&e.ID, &e.Account, &e.Kind, &e.Date, &e.Amount, &e.TxKind, &e.Counter, &e.Memo, &e.Void); err != nil {
+		if err := rows.Scan(&e.ID, &e.Account, &e.Kind, &e.Date, &e.Amount, &e.TxKind, &e.Counter, &e.Memo, &e.Item, &e.Void); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -161,8 +163,8 @@ func (s *Store) correct(tx *sql.Tx, id int64, v Values, note string) error {
 	e := es[0]
 	switch e.Kind {
 	case KindSnapshot:
-		if v.TxKind != "" || v.Counter != "" || v.Memo != "" {
-			return fmt.Errorf("%w: entry %d is a snapshot: kind, counter and memo must be empty", ErrInvalidEntry, id)
+		if v.TxKind != "" || v.Counter != "" || v.Memo != "" || v.Item != "" {
+			return fmt.Errorf("%w: entry %d is a snapshot: kind, counter, memo and item must be empty", ErrInvalidEntry, id)
 		}
 		others, err := queryEntries(tx, false, `e.account = ?`, string(e.Account))
 		if err != nil {
@@ -178,9 +180,9 @@ func (s *Store) correct(tx *sql.Tx, id int64, v Values, note string) error {
 			return fmt.Errorf("%w: entry %d: a transfer names no counter account", ErrInvalidEntry, id)
 		}
 	}
-	_, err = tx.Exec(`INSERT INTO corrections (entry, date, amount, tx_kind, counter, memo, note, made_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, int32(v.Date), v.Amount, string(v.TxKind), string(v.Counter), v.Memo, note, s.now().UnixNano())
+	_, err = tx.Exec(`INSERT INTO corrections (entry, date, amount, tx_kind, counter, memo, item, note, made_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, int32(v.Date), v.Amount, string(v.TxKind), string(v.Counter), v.Memo, v.Item, note, s.now().UnixNano())
 	return err
 }
 
@@ -204,9 +206,9 @@ func (s *Store) void(tx *sql.Tx, id int64, note string) error {
 		return fmt.Errorf("%w: entry %d", ErrNotFound, id)
 	}
 	v := es[0].Values
-	_, err = tx.Exec(`INSERT INTO corrections (entry, date, amount, tx_kind, counter, memo, note, void, made_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
-		id, int32(v.Date), v.Amount, string(v.TxKind), string(v.Counter), v.Memo, note, s.now().UnixNano())
+	_, err = tx.Exec(`INSERT INTO corrections (entry, date, amount, tx_kind, counter, memo, item, note, void, made_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+		id, int32(v.Date), v.Amount, string(v.TxKind), string(v.Counter), v.Memo, v.Item, note, s.now().UnixNano())
 	return err
 }
 
@@ -222,7 +224,7 @@ func (s *Store) History(id int64) ([]Revision, error) {
 		for rows.Next() {
 			var r Revision
 			var at int64
-			if err := rows.Scan(&r.Date, &r.Amount, &r.TxKind, &r.Counter, &r.Memo, &r.Note, &r.Void, &at); err != nil {
+			if err := rows.Scan(&r.Date, &r.Amount, &r.TxKind, &r.Counter, &r.Memo, &r.Item, &r.Note, &r.Void, &at); err != nil {
 				return err
 			}
 			r.MadeAt = time.Unix(0, at).UTC()
@@ -230,14 +232,14 @@ func (s *Store) History(id int64) ([]Revision, error) {
 		}
 		return rows.Err()
 	}
-	err := read(`SELECT date, amount, tx_kind, counter, memo, '', 0, made_at FROM entries WHERE id = ?`, id)
+	err := read(`SELECT date, amount, tx_kind, counter, memo, item, '', 0, made_at FROM entries WHERE id = ?`, id)
 	if err != nil {
 		return nil, err
 	}
 	if len(revs) == 0 {
 		return nil, fmt.Errorf("%w: entry %d", ErrNotFound, id)
 	}
-	err = read(`SELECT date, amount, tx_kind, counter, memo, note, void, made_at FROM corrections WHERE entry = ? ORDER BY id`, id)
+	err = read(`SELECT date, amount, tx_kind, counter, memo, item, note, void, made_at FROM corrections WHERE entry = ? ORDER BY id`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -272,9 +274,9 @@ func (s *Store) appendNew(tx *sql.Tx, a *model.Account, stored, changed []Entry)
 		if changedKeys[k] {
 			return fmt.Errorf("%w: account %q has an entry voided or corrected since the record was loaded", ErrRecordChanged, a.ID)
 		}
-		_, err := tx.Exec(`INSERT INTO entries (account, kind, date, amount, tx_kind, counter, memo, made_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			string(a.ID), string(k.Kind), int32(k.Date), k.Amount, string(k.TxKind), string(k.Counter), k.Memo, s.now().UnixNano())
+		_, err := tx.Exec(`INSERT INTO entries (account, kind, date, amount, tx_kind, counter, memo, item, made_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			string(a.ID), string(k.Kind), int32(k.Date), k.Amount, string(k.TxKind), string(k.Counter), k.Memo, k.Item, s.now().UnixNano())
 		return err
 	}
 	for _, sn := range a.Snapshots {
@@ -283,7 +285,7 @@ func (s *Store) appendNew(tx *sql.Tx, a *model.Account, stored, changed []Entry)
 		}
 	}
 	for _, t := range a.Transactions {
-		k := entryKey{KindTransaction, Values{t.Date, t.Amount, t.Kind, t.Counter, t.Memo}}
+		k := entryKey{KindTransaction, Values{t.Date, t.Amount, t.Kind, t.Counter, t.Memo, t.Item}}
 		if err := insert(k); err != nil {
 			return err
 		}

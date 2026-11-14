@@ -101,11 +101,13 @@ type entryDraft struct {
 	date, amount, memo, note string
 	kind                     model.TxKind
 	counter                  model.AccountID
+	// item is the id of the budget item the transaction is linked to, empty for none.
+	item string
 }
 
 // draftOf prefills a draft from the current values of the entry.
 func draftOf(e store.Entry) entryDraft {
-	return entryDraft{date: e.Date.String(), amount: trimFloat(e.Amount), memo: e.Memo, kind: e.TxKind, counter: e.Counter}
+	return entryDraft{date: e.Date.String(), amount: trimFloat(e.Amount), memo: e.Memo, kind: e.TxKind, counter: e.Counter, item: e.Item}
 }
 
 // counterFor is the counter account the draft saves: only a transfer has one.
@@ -135,7 +137,7 @@ func txProblem(st *store.Store, rec *model.Record, id model.AccountID, d entryDr
 	if d.kind == "" {
 		return "pick a kind"
 	}
-	t := model.Transaction{Date: date, Amount: amount, Kind: d.kind, Counter: d.counterFor(), Memo: d.memo}
+	t := model.Transaction{Date: date, Amount: amount, Kind: d.kind, Counter: d.counterFor(), Memo: d.memo, Item: d.item}
 	_, err = ops.AddTransaction(st, rec, id, t, ops.Options{DryRun: true})
 	return reasonOf(err)
 }
@@ -162,6 +164,9 @@ func entryChange(e store.Entry, d entryDraft) (ops.EntryChange, error) {
 		}
 		if d.memo != e.Memo {
 			ch.Memo = &d.memo
+		}
+		if d.item != e.Item {
+			ch.Item = &d.item
 		}
 	}
 	return ch, nil
@@ -342,10 +347,12 @@ func (t *acctTab) txForm(acct *model.Account) {
 	t.label("Memo")
 	imgui.SetNextItemWidth(em * 16)
 	imgui.InputTextWithHint("##txmemo", "optional", &d.memo, 0, nil)
+	t.label("Budget item")
+	d.item = t.itemPick("txitem", acct.ID, d.item)
 	t.label("")
 	formButton("Add##entry", t.ent.txCheck.get(problemKey(t.a.rec, string(acct.ID), *d), func() string { return txProblem(t.a.st, t.a.rec, acct.ID, *d) }), d.untouched(), func() {
 		date, amount, _ := d.draftValues()
-		tx := model.Transaction{Date: date, Amount: amount, Kind: d.kind, Counter: d.counterFor(), Memo: d.memo}
+		tx := model.Transaction{Date: date, Amount: amount, Kind: d.kind, Counter: d.counterFor(), Memo: d.memo, Item: d.item}
 		if t.a.addEntry("record transaction", func() (*ops.Result, error) {
 			return ops.AddTransaction(t.a.st, t.a.rec, acct.ID, tx, ops.Options{})
 		}) {
@@ -387,6 +394,37 @@ func (t *acctTab) counterPick(id string, self, cur model.AccountID) model.Accoun
 		return ""
 	case k > 0:
 		return choices[k-1].ID
+	}
+	return cur
+}
+
+// itemPick draws the combo of the budget items that touch the account, with a (none) choice, and returns the id of the one it holds. A transaction linked to an item matches that item whatever its memo.
+func (t *acctTab) itemPick(id string, account model.AccountID, cur string) string {
+	var items []model.BudgetItem
+	labels := []string{"(none)"}
+	selected := 0
+	for _, it := range t.a.rec.Budget.Items {
+		if it.Touches(account) {
+			items = append(items, it)
+			labels = append(labels, it.Name)
+			if it.ID == cur {
+				selected = len(items)
+			}
+		}
+	}
+	preview := "(none)"
+	if cur != "" {
+		preview = cur
+		if it, ok := t.a.rec.Budget.Item(cur); ok {
+			preview = it.Name
+		}
+	}
+	k := pick(id, preview, imgui.FontSize()*16, labels, selected)
+	switch {
+	case k == 0:
+		return ""
+	case k > 0:
+		return items[k-1].ID
 	}
 	return cur
 }
@@ -499,6 +537,8 @@ func (t *acctTab) entryPanel(acct *model.Account) {
 			t.label("Memo")
 			imgui.SetNextItemWidth(em * 16)
 			imgui.InputTextWithHint("##entmemo", "", &d.memo, 0, nil)
+			t.label("Budget item")
+			d.item = t.itemPick("entitem", acct.ID, d.item)
 		}
 		t.label("Note")
 		imgui.SetNextItemWidth(em * 24)
