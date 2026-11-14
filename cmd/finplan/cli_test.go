@@ -208,7 +208,8 @@ func TestCLIBudgetAndProjections(t *testing.T) {
 		ModificationCount int   `json:"modification_count"`
 	}
 	cliJSON(t, &projs, "--demo", "projection", "list")
-	if len(projs) != 9 || projs[0].Name != "Base" || projs[0].Parent != nil || projs[0].Start == nil || *projs[0].Start != "2026-11-08" {
+	// The demo has Base, eight projections built on it, and Base with drift.
+	if len(projs) != 10 || projs[0].Name != "Base" || projs[0].Parent != nil || projs[0].Start == nil || *projs[0].Start != "2026-11-08" {
 		t.Errorf("projections = %+v", projs)
 	}
 	if projs[2].Name != "Withdraw $100k" || *projs[2].Parent != "Base" || projs[2].ModificationCount != 1 {

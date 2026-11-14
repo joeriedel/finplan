@@ -81,7 +81,7 @@ var commands = []*command{
 	{
 		Name: "projection show", Summary: "show a projection's settings, its own hypothetical accounts and its modifications",
 		Args:   []argDef{{Name: "name", Description: "projection name", Required: true}},
-		Output: "{name, parent, start, override_history, retire_on (the date wages stop and the household draws on its accounts), withdrawal_order ([taxable, tax-deferred, roth] in the order they are drawn on), roth_bracket (the federal bracket rate each year's Roth conversion fills to, a fraction: 0.22 for 22%); each of the three is null when the projection inherits it, asset_settings: [{asset, start, override_history}], accounts: [{id, name, type, tax, stated_rate, opening, from}] (the hypothetical accounts the projection defines itself, not those it inherits), modifications: [{index, target: {kind, id}, property, mode (set or scale), schedule: [{from, end, value}], item}], shocks: [{index, class, date, percent (-40 for a 40% drop)}], rebalances: [{index, account, date, allocation: [{class, percent}]}]}; modifications are in the order they apply; shocks and rebalances are in the order they were added, each numbered from 0",
+		Output: "{name, parent, start, override_history, retire_on (the date wages stop and the household draws on its accounts), withdrawal_order ([taxable, tax-deferred, roth] in the order they are drawn on), roth_bracket (the federal bracket rate each year's Roth conversion fills to, a fraction: 0.22 for 22%); drift_months (how many complete months of unaccounted money are averaged into a monthly flow on each account that has any; 0 is off); each of the four is null when the projection inherits it, asset_settings: [{asset, start, override_history}], accounts: [{id, name, type, tax, stated_rate, opening, from}] (the hypothetical accounts the projection defines itself, not those it inherits), modifications: [{index, target: {kind, id}, property, mode (set or scale), schedule: [{from, end, value}], item}], shocks: [{index, class, date, percent (-40 for a 40% drop)}], rebalances: [{index, account, date, allocation: [{class, percent}]}]}; modifications are in the order they apply; shocks and rebalances are in the order they were added, each numbered from 0",
 		run:    cmdProjectionShow,
 	},
 	{
@@ -724,12 +724,13 @@ func projectionJSON(rec *model.Record, p *model.Projection) any {
 		RetireOn        *jdate     `json:"retire_on"`
 		WithdrawalOrder []string   `json:"withdrawal_order"`
 		RothBracket     *float64   `json:"roth_bracket"`
+		DriftMonths     *int       `json:"drift_months"`
 		AssetSettings   []jsetting `json:"asset_settings"`
 		Accounts        []jaccount `json:"accounts"`
 		Modifications   []jmod     `json:"modifications"`
 		Shocks          []jshock   `json:"shocks"`
 		Rebalances      []jrebal   `json:"rebalances"`
-	}{p.Name, nullable(p.Parent), jdp(p.Start), p.OverrideHistory, jdp(p.RetireOn), nil, p.RothBracket, []jsetting{}, []jaccount{}, []jmod{}, []jshock{}, []jrebal{}}
+	}{p.Name, nullable(p.Parent), jdp(p.Start), p.OverrideHistory, jdp(p.RetireOn), nil, p.RothBracket, p.DriftMonths, []jsetting{}, []jaccount{}, []jmod{}, []jshock{}, []jrebal{}}
 	for _, b := range p.WithdrawalOrder {
 		out.WithdrawalOrder = append(out.WithdrawalOrder, string(b))
 	}

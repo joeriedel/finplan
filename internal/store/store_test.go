@@ -121,7 +121,7 @@ func TestFormat1DocumentsLoadUnchanged(t *testing.T) {
 	want := demodata.Family()
 	mustSave(t, s, want)
 	var format int
-	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 15 {
+	if err := s.db.QueryRow(`SELECT MAX(format) FROM documents`).Scan(&format); err != nil || format != formatCurrent || formatCurrent != 16 {
 		t.Fatalf("format written: %d, %v", format, err)
 	}
 	// Format 1 documents have no mode and no growth; a schedule of no growth is not stored.
@@ -1637,6 +1637,34 @@ func TestRetirementSettingsRoundTripAndOldProjectionsHaveNone(t *testing.T) {
 		t.Fatal(err)
 	}
 	if proj, err := docProjection(old); err != nil || proj.RetireOn != nil || proj.WithdrawalOrder != nil || proj.RothBracket != nil {
+		t.Errorf("old document: %+v %v", proj, err)
+	}
+}
+
+func TestDriftMonthsRoundTrip(t *testing.T) {
+	s, _ := openTemp(t)
+	rec := demodata.Family()
+	rec.Projection(demodata.ProjBase).DriftMonths = model.Ptr(0)
+	mustSave(t, s, rec)
+	got, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := got.Projection(demodata.ProjBase).DriftMonths; n == nil || *n != 0 {
+		t.Errorf("off is not kept: %v", n)
+	}
+	if n := got.Projection(demodata.ProjDrift).DriftMonths; n == nil || *n != 6 {
+		t.Errorf("Base with drift: %v", n)
+	}
+	if n := got.Projection(demodata.ProjNewJob).DriftMonths; n != nil {
+		t.Errorf("New job sets %v", *n)
+	}
+	// A format 15 projection document has none.
+	var old projectionDoc
+	if err := decodeDoc(docRow{kind: kindProjection, key: "old", format: 15, body: []byte(`{"name":"Old","parent":"","start":null,"override_history":null}`)}, &old); err != nil {
+		t.Fatal(err)
+	}
+	if proj, err := docProjection(old); err != nil || proj.DriftMonths != nil {
 		t.Errorf("old document: %+v %v", proj, err)
 	}
 }

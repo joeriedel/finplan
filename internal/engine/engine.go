@@ -168,6 +168,7 @@ func prepareDrawn(base *model.Record, projection string, target model.AssetID, h
 	var starts []model.Setting[model.Date]
 	var overrides []model.Setting[bool]
 	var plan drawPlan
+	driftMonths := 0
 	plan.order = model.DefaultWithdrawalOrder()
 	var growth []model.Setting[rateLayer]
 	// A projection setting reaches the accounts under its target, whether or not the line's asset contains the target.
@@ -219,6 +220,9 @@ func prepareDrawn(base *model.Record, projection string, target model.AssetID, h
 		}
 		if p.RothBracket != nil {
 			plan.bracket = p.RothBracket
+		}
+		if p.DriftMonths != nil {
+			driftMonths = *p.DriftMonths
 		}
 		for _, s := range p.AssetSettings {
 			if err := resolveTarget(s.Asset); err != nil {
@@ -635,6 +639,7 @@ func prepareDrawn(base *model.Record, projection string, target model.AssetID, h
 	}
 	for _, p := range all {
 		p.collect(rec, items, cutoffs, itemCuts, amounts, growths, infl, horizon, plans)
+		p.addDrift(rec, driftMonths, horizon)
 	}
 	byID := map[model.AccountID]*path{}
 	for _, p := range all {

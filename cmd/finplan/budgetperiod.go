@@ -18,28 +18,54 @@ import (
 // periodsShown is how many periods of each item the This period view keeps variance for: the current one and the five before it.
 const periodsShown = 6
 
-// periodState is the This period view's memo of the engine's answer, which is dropped whenever the record is replaced (every edit, undo and reload installs a new one), and the status picked and the amounts typed for each item, keyed by item id.
+// periodState is the This period view's memo of the engine's answer, which is dropped whenever the record is replaced (every edit, undo and reload installs a new one) or the date shown changes, and the status picked and the amounts typed for each item, keyed by item id.
 type periodState struct {
-	rec    *model.Record
-	rows   []engine.ItemPeriods
-	err    string
-	status map[string]model.OccurrenceStatus
-	posted map[string]string
-	expect map[string]string
+	rec  *model.Record
+	date model.Date
+	rows []engine.ItemPeriods
+	// standing is each line's status on the date, by item id, and unaccounted the month's unaccounted money.
+	standing    map[string]engine.LineStatus
+	unaccounted []model.UnaccountedMonth
+	err         string
+	status      map[string]model.OccurrenceStatus
+	posted      map[string]string
+	expect      map[string]string
+	// at is the date typed in the date field, nil while the view follows the Graph's cursor; dateText is the field and dateErr what is wrong with it.
+	at       *model.Date
+	dateText string
+	dateErr  string
+	// sel is the line whose transactions are listed: an item id, or "unaccounted:" and an account id.
+	sel string
+}
+
+// shownDate is the date the view shows: the typed one, else the Graph cursor's.
+func (s *periodState) shownDate(a *app) model.Date {
+	if s.at != nil {
+		return *s.at
+	}
+	return a.graph.cur.effective()
 }
 
 var periodStatusNames = map[model.OccurrenceStatus]string{model.StatusAuto: "Auto", model.StatusPosted: "Posted", model.StatusPending: "Pending"}
 
-// load computes the rows for the record's today, and starts the fields of each from what is recorded.
-func (s *periodState) load(rec *model.Record) {
-	s.rec, s.rows, s.err = rec, nil, ""
+// load computes the rows and the standing of each line on the date, and starts the fields of each row from what is recorded.
+func (s *periodState) load(rec *model.Record, date model.Date) {
+	s.rec, s.date, s.rows, s.standing, s.unaccounted, s.err = rec, date, nil, nil, nil, ""
 	s.status, s.posted, s.expect = map[string]model.OccurrenceStatus{}, map[string]string{}, map[string]string{}
-	rows, err := engine.Periods(rec, "", rec.Today, periodsShown)
+	rows, err := engine.Periods(rec, "", date, periodsShown)
 	if err != nil {
 		s.err = err.Error()
 		return
 	}
-	s.rows = rows
+	view, err := engine.StatusAsOf(rec, date)
+	if err != nil {
+		s.err = err.Error()
+		return
+	}
+	s.rows, s.unaccounted, s.standing = rows, view.Unaccounted, map[string]engine.LineStatus{}
+	for _, l := range view.Lines {
+		s.standing[l.Item.ID] = l
+	}
 	for _, r := range rows {
 		v := r.Current()
 		s.status[r.Item.ID] = v.Status
@@ -131,26 +157,105 @@ func (t *budgetTab) clearPeriod(r engine.ItemPeriods) bool {
 	})
 }
 
-// periods draws the This period view: each budget item's period that contains today, with what has posted, what remains and how far over or under budget it is.
+// standingText says in words where the line stands on the date.
+func standingText(l engine.LineStatus) string {
+	switch l.State {
+	case engine.StateMatched:
+		return "matched " + formatDollars(l.Amount) + ", " + overUnder(l.Variance)
+	case engine.StateEstimated:
+		return "no transactions; assumed " + formatDollars(l.View.Posted)
+	case engine.StateOnPace, engine.StateHot, engine.StateLight:
+		return string(l.State) + ": " + formatDollars(l.Amount) + " of " + formatDollars(l.Amount-l.Variance) + " due so far"
+	}
+	return string(l.State)
+}
+
+// standingColor is the color of the standing: missing in red, not yet due in grey, the rest in the text color.
+func standingColor(l engine.LineStatus) (uint32, bool) {
+	switch l.State {
+	case engine.StateMissing:
+		return colError, true
+	case engine.StateNotYetDue, engine.StateEstimated:
+		return colMuted, true
+	}
+	return 0, false
+}
+
+// periodDate draws the date field: the date shown follows the Graph's cursor until one is typed, and Follow cursor returns to it.
+func (t *budgetTab) periodDate() {
+	s := &t.period
+	imgui.AlignTextToFramePadding()
+	imgui.TextUnformatted("Date")
+	imgui.SameLine()
+	imgui.SetNextItemWidth(imgui.FontSize() * 8)
+	imgui.InputTextWithHint("##perioddate", s.shownDate(t.a).String(), &s.dateText, 0, nil)
+	tooltipOn("A date to show the periods on, written " + dateHint + "; until one is set, the view follows the Graph's cursor")
+	imgui.SameLine()
+	if imgui.Button("Show##perioddate") {
+		d, err := parseDate(strings.TrimSpace(s.dateText))
+		if err != nil {
+			s.dateErr = err.Error()
+		} else {
+			s.at, s.dateErr = &d, ""
+		}
+	}
+	imgui.SameLine()
+	imgui.BeginDisabledV(s.at == nil)
+	if imgui.Button("Follow cursor##perioddate") {
+		s.at, s.dateText, s.dateErr = nil, "", ""
+	}
+	imgui.EndDisabled()
+	if s.dateErr != "" {
+		imgui.SameLine()
+		errorText(s.dateErr)
+	}
+}
+
+// standingCell draws the standing of the line, which selects the line to list its transactions when clicked.
+func (s *periodState) standingCell(l engine.LineStatus) {
+	if c, ok := standingColor(l); ok {
+		imgui.PushStyleColorVec4(imgui.ColText, rgba(c, 1))
+		defer imgui.PopStyleColor()
+	}
+	if imgui.SelectableBoolV(standingText(l)+"##standing", s.sel == l.Item.ID, 0, imgui.NewVec2(0, 0)) {
+		s.sel = toggled(s.sel, l.Item.ID)
+	}
+	tooltipOn("List the transactions matched to this line in this period")
+}
+
+// toggled is key, or nothing if it is already selected.
+func toggled(sel, key string) string {
+	if sel == key {
+		return ""
+	}
+	return key
+}
+
+// periods draws the This period view: each budget item's period that contains the date, with what has posted, what remains, how far over or under budget it is and where it stands on the date, then the month's unaccounted money.
 func (t *budgetTab) periods() {
 	a := t.a
 	s := &t.period
-	if s.rec != a.rec {
-		s.load(a.rec)
+	t.periodDate()
+	if d := s.shownDate(a); s.rec != a.rec || s.date != d {
+		s.load(a.rec, d)
 	}
-	imgui.TextUnformatted("Periods on " + a.rec.Today.String() + ". A period runs from one occurrence of an item to the day before the next.")
+	imgui.TextUnformatted("Periods on " + s.date.String() + ". A period runs from one occurrence of an item to the day before the next.")
+	if s.date > a.rec.Today {
+		disabledText("After today nothing is recorded: each line is judged on what is recorded up to " + a.rec.Today.String() + ", and what falls later is not yet due.")
+	}
 	disabledText("The projection applies only what remains of each period after its account's last recorded date: the expected amount, or the budgeted one, less what has posted. Grey is an estimate until you set an amount.")
 	if s.err != "" {
 		errorText(s.err)
 		return
 	}
 	if len(s.rows) == 0 {
-		disabledText("No budget item has a period today.")
+		disabledText("No budget item has a period on this date.")
 		return
 	}
-	headers := []string{"Item", "Period", "Timing", "Budgeted", "Expected", "Posted", "Status", "Remaining", "Over or under", "Recent periods", ""}
-	weights := []float32{2, 2.4, 0.9, 1.1, 1.3, 1.3, 1.2, 1.1, 1.3, 2.2, 2}
+	headers := []string{"Item", "Period", "Timing", "Budgeted", "Expected", "Posted", "Status", "Remaining", "Over or under", "Standing", "Recent periods", ""}
+	weights := []float32{2, 2.4, 0.9, 1.1, 1.3, 1.3, 1.2, 1.1, 1.3, 2.6, 2.2, 2}
 	em := imgui.FontSize()
+	defer s.transactions(a.rec)
 	if !imgui.BeginTableV("##budgetperiods", int32(len(headers)), imgui.TableFlagsBordersInnerV|imgui.TableFlagsPadOuterX|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
 		return
 	}
@@ -208,11 +313,17 @@ func (t *budgetTab) periods() {
 		cell(7, formatDollars(v.Remaining))
 		cell(8, overUnder(v.Variance))
 
+		imgui.TableSetColumnIndex(9)
+		imgui.AlignTextToFramePadding()
+		if l, ok := s.standing[id]; ok {
+			s.standingCell(l)
+		}
+
 		var recent []string
 		for _, h := range r.Periods {
 			recent = append(recent, signedDollars(h.Variance))
 		}
-		cell(9, strings.Join(recent, "  "))
+		cell(10, strings.Join(recent, "  "))
 		if imgui.IsItemHovered() {
 			var lines []string
 			for _, h := range r.Periods {
@@ -221,7 +332,7 @@ func (t *budgetTab) periods() {
 			tooltipText("Over or under budget, oldest first:\n" + strings.Join(lines, "\n"))
 		}
 
-		imgui.TableSetColumnIndex(10)
+		imgui.TableSetColumnIndex(11)
 		ch, problem := s.periodChange(r)
 		formButton("Set##period", problem, problem == "nothing is changed", func() { t.setPeriod(r, ch) })
 		if v.Overridden {
@@ -232,5 +343,75 @@ func (t *budgetTab) periods() {
 			tooltipOn("Forget what was recorded for this period")
 		}
 		imgui.PopID()
+	}
+	s.unaccountedRows(a.rec)
+}
+
+// unaccountedKey is the selection of the account's unaccounted money.
+func unaccountedKey(id model.AccountID) string { return "unaccounted:" + string(id) }
+
+// unaccountedRows draws a row per account with unaccounted money in the month, and under the table the transactions of the selected line.
+func (s *periodState) unaccountedRows(rec *model.Record) {
+	for _, u := range s.unaccounted {
+		key := unaccountedKey(u.Account)
+		imgui.PushIDStr(key)
+		imgui.TableNextRowV(0, 0)
+		imgui.TableSetColumnIndex(0)
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted("Unaccounted")
+		imgui.TableSetColumnIndex(1)
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted(rec.Account(u.Account).Name + ", " + u.Month.Time().Format("January 2006"))
+		imgui.TableSetColumnIndex(9)
+		if imgui.SelectableBoolV(signedDollars(u.Amount)+" outside the budget##standing", s.sel == key, 0, imgui.NewVec2(0, 0)) {
+			s.sel = toggled(s.sel, key)
+		}
+		tooltipOn("List the transactions that no budget item accounts for")
+		imgui.PopID()
+	}
+}
+
+// transactions lists the transactions of the selected line.
+func (s *periodState) transactions(rec *model.Record) {
+	var lines []model.Transaction
+	var accounts []model.AccountID
+	title := ""
+	if l, ok := s.standing[s.sel]; ok {
+		title = l.Item.Name + ", " + l.View.Period.Start.String() + " to " + l.View.Period.End.String()
+		for _, m := range l.Matches {
+			lines, accounts = append(lines, m.Transaction), append(accounts, m.Ref.Account)
+		}
+	}
+	for _, u := range s.unaccounted {
+		if unaccountedKey(u.Account) == s.sel {
+			title = "Unaccounted in " + rec.Account(u.Account).Name + ", " + u.Month.Time().Format("January 2006")
+			for _, tx := range u.Transactions {
+				lines, accounts = append(lines, tx.Transaction), append(accounts, tx.Ref.Account)
+			}
+		}
+	}
+	if title == "" {
+		return
+	}
+	imgui.Spacing()
+	imgui.SeparatorText(title)
+	if len(lines) == 0 {
+		disabledText("No transactions up to " + s.date.String() + ".")
+		return
+	}
+	if !imgui.BeginTableV("##periodtransactions", 4, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
+		return
+	}
+	defer imgui.EndTable()
+	for i, h := range []string{"Date", "Account", "Amount", "Memo"} {
+		imgui.TableSetupColumnV(h, 0, []float32{1, 2, 1, 4}[i], 0)
+	}
+	imgui.TableHeadersRow()
+	for i, tx := range lines {
+		imgui.TableNextRowV(0, 0)
+		for c, text := range []string{tx.Date.String(), rec.Account(accounts[i]).Name, signedDollars(tx.Amount), tx.Memo} {
+			imgui.TableSetColumnIndex(int32(c))
+			imgui.TextUnformatted(text)
+		}
 	}
 }

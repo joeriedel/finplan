@@ -64,3 +64,20 @@ func TestWithdrawalOrders(t *testing.T) {
 		t.Errorf("order text: %q", got)
 	}
 }
+
+func TestInheritedDrift(t *testing.T) {
+	a := demoApp(t)
+	if n := inheritedDrift(a.rec, a.rec.Projection(demodata.ProjDrift)); n != 0 {
+		t.Errorf("Base with drift inherits %d from Base", n)
+	}
+	child := &model.Projection{Name: "Child", Parent: demodata.ProjDrift}
+	if err := a.rec.AddProjection(child); err != nil {
+		t.Fatal(err)
+	}
+	if n := inheritedDrift(a.rec, child); n != 6 {
+		t.Errorf("Child inherits %d, want 6", n)
+	}
+	if driftText(0) != "off" || driftText(1) != "1 month" || driftText(6) != "6 months" {
+		t.Errorf("drift texts %q %q %q", driftText(0), driftText(1), driftText(6))
+	}
+}

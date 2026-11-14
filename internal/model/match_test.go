@@ -288,3 +288,41 @@ func TestPeriodMatchOfALumpTransferIsMatchedOnEitherLeg(t *testing.T) {
 		t.Error("not paid")
 	}
 }
+
+func TestPeriodMatchAsOfIsTrackedByTransactionsInThePeriod(t *testing.T) {
+	p := Period{D(2026, 3, 1), D(2026, 3, 31)}
+	asOf := D(2026, 3, 5)
+
+	// No transaction between the due date and the cutoff, many after: the lump is missing, not unknown.
+	it := rent(1000)
+	rec := matchRecord(t, []BudgetItem{it}, expense(20, 15, "Pharmacy"), expense(25, 30, "Pharmacy"))
+	if pm := rec.PeriodMatch(it, p, asOf); pm != nil {
+		t.Fatalf("PeriodMatch tracked %+v", pm)
+	}
+	pm := rec.PeriodMatchAsOf(it, p, asOf)
+	if pm == nil {
+		t.Fatal("not tracked")
+	}
+	if v := EvalPeriod(it, p, 1000, nil, asOf, pm); !v.Missing || v.Posted != 0 {
+		t.Errorf("lump %+v", v)
+	}
+
+	// A spread line shows what actually matched up to the cutoff, not the pro-rata estimate.
+	food := BudgetItem{ID: "food", Name: "Groceries", Kind: ItemExpense, Amount: Constant(600), Recurrence: Recurrence{Kind: Monthly, Day: 1}, Account: "checking", Timing: Spread}
+	rec = matchRecord(t, []BudgetItem{food}, expense(20, 400, "Groceries"))
+	pm = rec.PeriodMatchAsOf(food, p, asOf)
+	if pm == nil || pm.Matched || pm.Amount != 0 {
+		t.Fatalf("spread before spending %+v", pm)
+	}
+	rec = matchRecord(t, []BudgetItem{food}, expense(2, 50, "Groceries"), expense(20, 400, "Groceries"))
+	pm = rec.PeriodMatchAsOf(food, p, asOf)
+	if pm == nil || pm.Amount != 50 {
+		t.Errorf("spread %+v", pm)
+	}
+
+	// Transactions only in a later period leave the account untracked in this one.
+	rec = matchRecord(t, []BudgetItem{it}, Transaction{Date: D(2026, 4, 10), Amount: -15, Kind: TxExpense, Memo: "Pharmacy"})
+	if pm := rec.PeriodMatchAsOf(it, p, asOf); pm != nil {
+		t.Errorf("later period tracked %+v", pm)
+	}
+}

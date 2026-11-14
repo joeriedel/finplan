@@ -4,7 +4,9 @@
 package main
 
 import (
+	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/AllenDang/cimgui-go/imgui"
@@ -176,4 +178,73 @@ func (t *projTab) setOrder(proj string, order []model.Bucket) {
 	t.a.edit("set withdrawal order", func() (*ops.Result, error) {
 		return ops.SetWithdrawalOrder(t.a.st, t.a.rec, proj, order, ops.Options{})
 	})
+}
+
+// inheritedDrift returns the drift months the projection inherits from the projections it builds on, the nearest one that sets it winning: 0, off, if none does.
+func inheritedDrift(rec *model.Record, p *model.Projection) int {
+	chain, err := rec.Chain(p.Name)
+	if err != nil || len(chain) == 0 {
+		return 0
+	}
+	months := 0
+	for _, q := range chain[:len(chain)-1] {
+		if q.DriftMonths != nil {
+			months = *q.DriftMonths
+		}
+	}
+	return months
+}
+
+// driftText is a drift setting as the user reads it: off, or a number of months.
+func driftText(months int) string {
+	switch months {
+	case 0:
+		return "off"
+	case 1:
+		return "1 month"
+	}
+	return strconv.Itoa(months) + " months"
+}
+
+// parseDrift reads the drift field: empty inherits, off turns drift off, and a whole number of months of at least 1 averages that many.
+func parseDrift(text string) (*int, error) {
+	switch strings.ToLower(text) {
+	case "":
+		return nil, nil
+	case "off":
+		return model.Ptr(0), nil
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(strings.ToLower(text), " months"))
+	if err != nil || n < 1 {
+		return nil, fmt.Errorf("%q is not off or a whole number of months, 1 or more", text)
+	}
+	return &n, nil
+}
+
+// drift draws the projection's drift row: how many months of unaccounted money are averaged into a monthly flow on each account.
+func (t *projTab) drift(p *model.Projection, w float32) {
+	t.label("Drift")
+	hint := "inherit: " + driftText(inheritedDrift(t.a.rec, p))
+	text := ""
+	if p.DriftMonths != nil {
+		text = "off"
+		if *p.DriftMonths > 0 {
+			text = strconv.Itoa(*p.DriftMonths)
+		}
+	}
+	if input, done := t.field("drift", hint, text, w); done {
+		t.commit("drift", func() {
+			months, err := parseDrift(strings.TrimSpace(input))
+			if err != nil {
+				t.setErr("drift", err.Error())
+				return
+			}
+			t.a.edit("set drift", func() (*ops.Result, error) {
+				return ops.SetDrift(t.a.st, t.a.rec, p.Name, months, ops.Options{})
+			})
+		})
+	}
+	if imgui.IsItemHovered() {
+		tooltipText("Months of money that moved without a budget line, averaged per month, and carried forward as a monthly flow on each account that has any. Write off, or the number of months; leave empty to inherit.")
+	}
 }

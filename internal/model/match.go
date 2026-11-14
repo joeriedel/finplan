@@ -224,13 +224,23 @@ func (a *Account) hasTransactions(from, to Date) bool {
 
 // PeriodMatch returns what the matches say of the period of a base budget item, counting only transactions dated on or before the cutoff, and nil when they say nothing: the item is not in the budget, or none of its accounts has a recorded transaction in the period up to the cutoff (an account known by balance snapshots only is not tracked by transactions).
 func (r *Record) PeriodMatch(it BudgetItem, p Period, cutoff Date) *PeriodMatch {
+	return r.periodMatch(it, p, cutoff, false)
+}
+
+// PeriodMatchAsOf is PeriodMatch for a look back at a past date: the cutoff limits which matches count, but an account is tracked by transactions when it has any in the whole period, so a quiet stretch between the due date and the cutoff does not make a missed payment look unknown.
+func (r *Record) PeriodMatchAsOf(it BudgetItem, p Period, cutoff Date) *PeriodMatch {
+	return r.periodMatch(it, p, cutoff, true)
+}
+
+func (r *Record) periodMatch(it BudgetItem, p Period, cutoff Date, asOf bool) *PeriodMatch {
 	if _, ok := r.Budget.Item(it.ID); !ok {
 		return nil
 	}
 	var side AccountID
 	tracked := false
 	for _, id := range itemAccounts(it) {
-		if a := r.Account(id); a != nil && a.hasTransactions(p.Start, min(p.End, cutoff)) {
+		a := r.Account(id)
+		if a != nil && (a.hasTransactions(p.Start, min(p.End, cutoff)) || asOf && a.hasTransactions(p.Start, p.End)) {
 			if !tracked {
 				side = id
 			}

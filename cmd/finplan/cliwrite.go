@@ -181,6 +181,17 @@ var writeCommands = []*command{
 		run:    cmdProjectionSetRothBracket,
 	},
 	{
+		Name: "projection set-drift", Summary: "set how many months of unaccounted money a projection averages into a monthly flow on each account that has any: what drifts in or out of the accounts without a budget line, carried forward",
+		Args: []argDef{{Name: "name", Description: "projection to change", Required: true}},
+		Flags: []flagDef{
+			{Name: "months", Type: typeInt, Description: "average this many complete calendar months before the account's recorded data ends (at least 1)"},
+			{Name: "off", Type: typeBool, Default: "false", Description: "turn drift off, even if the projection it builds on has it on"},
+			{Name: "inherit", Type: typeBool, Default: "false", Description: "remove the setting, so the projection inherits it from the projection it builds on (and then off)"},
+		},
+		Output: writeOut,
+		run:    cmdProjectionSetDrift,
+	},
+	{
 		Name: "projection set-inflation", Summary: "set a projection's inflation rate to a constant, replacing its first global set inflation modification; scale ones are kept and still apply",
 		Args: []argDef{
 			{Name: "name", Description: "projection to change", Required: true},
@@ -632,6 +643,39 @@ func cmdProjectionSetRothBracket(c *call) (any, error) {
 		rate = &v
 	}
 	res, err := ops.SetRothBracket(st, rec, c.args[0], rate, c.options())
+	return c.finish(c.args[0], res, err)
+}
+
+func cmdProjectionSetDrift(c *call) (any, error) {
+	months, hasMonths, err := c.integer("months")
+	if err != nil {
+		return nil, err
+	}
+	off, inherit := c.str("off") == "true", c.str("inherit") == "true"
+	n := 0
+	for _, b := range []bool{hasMonths, off, inherit} {
+		if b {
+			n++
+		}
+	}
+	if n != 1 {
+		return nil, usageErr("give exactly one of --months, --off and --inherit")
+	}
+	var setting *int
+	switch {
+	case hasMonths:
+		if months < 1 {
+			return nil, usageErr("--months: %d is less than 1; use --off to turn drift off", months)
+		}
+		setting = &months
+	case off:
+		setting = model.Ptr(0)
+	}
+	st, rec, err := c.open()
+	if err != nil {
+		return nil, err
+	}
+	res, err := ops.SetDrift(st, rec, c.args[0], setting, c.options())
 	return c.finish(c.args[0], res, err)
 }
 

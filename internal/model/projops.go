@@ -33,6 +33,7 @@ func (p *Projection) Clone() *Projection {
 	c.RetireOn = clonePtr(p.RetireOn)
 	c.WithdrawalOrder = slices.Clone(p.WithdrawalOrder)
 	c.RothBracket = clonePtr(p.RothBracket)
+	c.DriftMonths = clonePtr(p.DriftMonths)
 	c.AssetSettings = slices.Clone(p.AssetSettings)
 	for i, s := range c.AssetSettings {
 		c.AssetSettings[i].Start = clonePtr(s.Start)

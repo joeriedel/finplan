@@ -68,6 +68,8 @@ const (
 	ProjMax401k = "Max 401k"
 	// ProjRetire60 retires on Parent A's 60th birthday and converts to Roth each year up to the top of the 22% bracket.
 	ProjRetire60 = "Retire at 60"
+	// ProjDrift is the base with the average of the last six months of unaccounted money carried forward on each account.
+	ProjDrift = "Base with drift"
 )
 
 var (
@@ -341,6 +343,7 @@ func Family() *model.Record {
 	must(rec.AddProjection(&model.Projection{Name: ProjRetire60, Parent: ProjBase,
 		RetireOn: model.Ptr(model.D(2045, time.March, 12)), RothBracket: model.Ptr(0.22),
 	}))
+	must(rec.AddProjection(&model.Projection{Name: ProjDrift, Parent: ProjBase, DriftMonths: model.Ptr(6)}))
 	return rec
 }
 

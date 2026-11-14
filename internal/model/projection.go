@@ -103,8 +103,10 @@ type Projection struct {
 	RetireOn        *Date
 	WithdrawalOrder []Bucket
 	RothBracket     *float64
-	AssetSettings   []AssetSetting
-	Mods            []Modification
+	// DriftMonths is how many complete calendar months of unaccounted money, before the projection starts, are averaged into a monthly flow that the projection applies to each account that has any: 0 is off. Nil inherits from the parent chain, and then off.
+	DriftMonths   *int
+	AssetSettings []AssetSetting
+	Mods          []Modification
 	// Accounts are hypothetical accounts that exist only under this projection and the projections built on it.
 	Accounts []ProjAccount
 	// Shocks and Rebalances are executed by the engine on their dates, those of the parent chain first.

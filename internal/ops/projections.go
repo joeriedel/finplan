@@ -172,6 +172,17 @@ func SetRothBracket(st *store.Store, rec *model.Record, name string, rate *float
 	})
 }
 
+// SetDrift sets how many complete calendar months of unaccounted money the projection averages into a monthly flow on each account that has any: 0 turns it off, and nil removes the setting, so the projection inherits. It refuses a negative number of months.
+func SetDrift(st *store.Store, rec *model.Record, name string, months *int, o Options) (*Result, error) {
+	if months != nil && *months < 0 {
+		return nil, refuse(ErrInvalidValue, "the drift months %d are negative; use 0 for off", *months)
+	}
+	return editProjection(st, rec, o, name, func(p *model.Projection) error {
+		p.DriftMonths = copyPtr(months)
+		return nil
+	})
+}
+
 func copyPtr[T any](p *T) *T {
 	if p == nil {
 		return nil

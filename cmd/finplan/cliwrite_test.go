@@ -532,7 +532,7 @@ func TestCLIWriteHelp(t *testing.T) {
 	}
 	for _, name := range []string{
 		"projection new", "projection clone", "projection rename", "projection set-parent", "projection delete",
-		"projection set-start", "projection set-override-history", "projection set-inflation",
+		"projection set-start", "projection set-override-history", "projection set-drift", "projection set-inflation",
 		"mod add", "mod edit", "mod move", "mod remove", "item add", "item edit", "item end",
 		"asset new", "asset rename", "asset delete", "asset add-member", "asset remove-member",
 		"asset add-default", "asset edit-default", "asset move-default", "asset remove-default", "asset set-param", "account new", "account edit",
@@ -987,6 +987,45 @@ func TestCLIRetirementCommands(t *testing.T) {
 	refusedWrite(t, path, "", 1, "invalid", "projection", "set-roth-bracket", "Base", "23")
 	refusedWrite(t, path, "", 1, "invalid", "projection", "set-retirement", "Base", "1800-01-01")
 	refusedWrite(t, path, "", 1, "not_found", "projection", "set-retirement", "Nope", "2040-01-01")
+}
+
+func driftOf(t *testing.T, path, name string) *int {
+	t.Helper()
+	var p struct {
+		DriftMonths *int `json:"drift_months"`
+	}
+	cliJSON(t, &p, "--db", path, "projection", "show", name)
+	return p.DriftMonths
+}
+
+func TestCLIProjectionSetDrift(t *testing.T) {
+	path := seededFile(t)
+	if n := driftOf(t, path, "Base with drift"); n == nil || *n != 6 {
+		t.Errorf("the demo's Base with drift: %v", n)
+	}
+	if n := driftOf(t, path, "Base"); n != nil {
+		t.Errorf("Base inherits drift: %v", *n)
+	}
+	write(t, path, "", "projection", "set-drift", "Base", "--months", "3")
+	if n := driftOf(t, path, "Base"); n == nil || *n != 3 {
+		t.Errorf("after --months 3: %v", n)
+	}
+	write(t, path, "", "projection", "set-drift", "Base", "--off")
+	if n := driftOf(t, path, "Base"); n == nil || *n != 0 {
+		t.Errorf("after --off: %v", n)
+	}
+	write(t, path, "", "projection", "set-drift", "Base with drift", "--inherit")
+	if n := driftOf(t, path, "Base with drift"); n != nil {
+		t.Errorf("after --inherit: %v", *n)
+	}
+	if w := write(t, path, "", "--dry-run", "projection", "set-drift", "Base", "--months", "9"); !w.DryRun || *driftOf(t, path, "Base") != 0 {
+		t.Errorf("a dry run saved: %+v", w)
+	}
+	refusedWrite(t, path, "", 2, "usage", "projection", "set-drift", "Base", "--months", "0")
+	refusedWrite(t, path, "", 2, "usage", "projection", "set-drift", "Base", "--months", "-2")
+	refusedWrite(t, path, "", 2, "usage", "projection", "set-drift", "Base")
+	refusedWrite(t, path, "", 2, "usage", "projection", "set-drift", "Base", "--off", "--inherit")
+	refusedWrite(t, path, "", 1, "not_found", "projection", "set-drift", "Nope", "--months", "3")
 }
 
 // notesOf is the notes of the diagnostics of a balance of the asset under the projection.
