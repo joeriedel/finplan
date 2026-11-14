@@ -129,9 +129,7 @@ func (g *graphTab) drawPlot(views []lineView) {
 	hovered := implot.IsPlotHovered()
 	mouse := imgui.MousePos()
 	day := dateOf(implot.GetPlotMousePos().X)
-	if hovered {
-		g.cursor = day
-	}
+	g.cur.track(hovered, day)
 	g.intervalBand(dl, hovered, day)
 
 	// Bands lie beneath the lines. The selected line is drawn last so that it lies on top.
@@ -176,30 +174,34 @@ func (g *graphTab) drawPlot(views []lineView) {
 		}
 	}
 
-	var rows []crosshairRow
-	var pts []crosshairPoint
-	if hovered {
-		rows, pts = crosshairAt(views, day)
-		drawCrosshair(dl, g.geom(), mouse.X, pts)
+	// The cursor is drawn at the pointer while hovering, else at the locked date if the view includes it.
+	cday := g.cur.effective()
+	rows, pts := crosshairAt(views, cday)
+	cx := mouse.X
+	if !hovered {
+		cx = g.toPx(float64(cday)*secondsPerDay, 0).X
+	}
+	drawn := hovered || (cx >= left && cx <= right)
+	if drawn {
+		drawCrosshair(dl, g.geom(), cx, pts)
 	}
 	implot.PopPlotClipRect()
 
 	// Click selects the line nearest the pointer, within a few pixels; a click elsewhere clears it.
-	// A drag is panning, not a click, and a Shift gesture paints the interval.
-	if hovered && imgui.IsMouseReleased(imgui.MouseButtonLeft) && !g.bandDrag {
-		if d := imgui.MouseDragDelta(); d.X == 0 && d.Y == 0 {
-			best, bestDist := graph.LineID(0), float32(hitRadius*s)
-			for i, v := range views {
-				if dist := graph.Distance(graph.Pt{X: mouse.X, Y: mouse.Y}, polys[i]); dist <= bestDist {
-					best, bestDist = v.line.ID, dist
-				}
+	// A drag is panning, not a click, and a Shift gesture paints the interval. A click also locks the cursor at its date.
+	if d := imgui.MouseDragDelta(); hovered && isClick(imgui.IsMouseReleased(imgui.MouseButtonLeft), d.X != 0 || d.Y != 0, g.bandDrag) {
+		g.cur.lock = day
+		best, bestDist := graph.LineID(0), float32(hitRadius*s)
+		for i, v := range views {
+			if dist := graph.Distance(graph.Pt{X: mouse.X, Y: mouse.Y}, polys[i]); dist <= bestDist {
+				best, bestDist = v.line.ID, dist
 			}
-			g.lines.Select(best)
 		}
+		g.lines.Select(best)
 	}
 
-	if hovered {
-		g.crosshairTags(views, rows, pts, bands, day)
+	if drawn {
+		g.crosshairTags(views, rows, pts, bands, cday, hovered)
 	}
 	if !imgui.IsMouseDown(imgui.MouseButtonLeft) {
 		g.bandDrag = false
@@ -219,7 +221,7 @@ func (g *graphTab) intervalBand(dl *imgui.DrawList, hovered bool, day model.Date
 			x := float64(d) * secondsPerDay
 			var clicked, hov, held bool
 			if implot.DragLineXV(int32(i), &x, rgba(colAccentLit, 0.9), 1.5*uiScale, implot.DragToolFlagsNoFit, &clicked, &hov, &held) {
-				g.iv.setEdge(g.cursor, i == 1, model.Date(math.Round(x/secondsPerDay)))
+				g.iv.setEdge(g.cur.effective(), i == 1, model.Date(math.Round(x/secondsPerDay)))
 			}
 			handleHovered = handleHovered || hov || held
 		}
@@ -251,13 +253,13 @@ func crosshairAt(views []lineView, day model.Date) (rows []crosshairRow, pts []c
 	return rows, pts
 }
 
-// crosshairTags queues the value and date tags for the day under the pointer and shows the tooltip.
-func (g *graphTab) crosshairTags(views []lineView, rows []crosshairRow, pts []crosshairPoint, bands []bandView, day model.Date) {
+// crosshairTags queues the value and date tags for the cursor's day and, if tooltip, shows the tooltip.
+func (g *graphTab) crosshairTags(views []lineView, rows []crosshairRow, pts []crosshairPoint, bands []bandView, day model.Date, tooltip bool) {
 	if len(rows) == 0 {
 		return
 	}
 	g.tags.crosshair(g.geom(), day, pts)
-	if imgui.BeginTooltip() {
+	if tooltip && imgui.BeginTooltip() {
 		imgui.PushStyleColorVec4(imgui.ColText, rgba(colMuted, 1))
 		imgui.TextUnformatted(graph.FormatDate(day))
 		imgui.PopStyleColor()

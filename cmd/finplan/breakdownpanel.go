@@ -44,7 +44,7 @@ func (g *graphTab) breakdownBody() {
 		return
 	}
 	proj, _ := g.lines.Effective(ln.ID)
-	from, to := g.iv.window(g.cursor)
+	from, to := g.iv.window(g.cur.effective())
 	g.breakdownHeader(ln.ID, from, to)
 	k := bkKey{proj, ln.Asset, from, to}
 	entry := g.bkCache.get(k)
@@ -61,7 +61,7 @@ func (g *graphTab) breakdownBody() {
 	if !imgui.BeginTableV("##bktable", 4, imgui.TableFlagsRowBg|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
 		return
 	}
-	imgui.TableSetupColumnV("Cause", 0, 1, 0)
+	imgui.TableSetupColumnV("Breakdown", 0, 1, 0)
 	imgui.TableSetupColumnV("Actual", imgui.TableColumnFlagsWidthFixed, em*9, 0)
 	imgui.TableSetupColumnV("Projected", imgui.TableColumnFlagsWidthFixed, em*9, 0)
 	imgui.TableSetupColumnV("Total", imgui.TableColumnFlagsWidthFixed, em*9, 0)
@@ -138,7 +138,7 @@ func (g *graphTab) breakdownHeader(line graph.LineID, from, to model.Date) {
 	}
 
 	if imgui.Button("Year at cursor") {
-		g.iv.setWindow(yearAt(g.cursor))
+		g.iv.setWindow(yearAt(g.cur.effective()))
 	}
 	imgui.SameLine()
 	if imgui.Button("This year") {
@@ -180,7 +180,7 @@ func (g *graphTab) bkDateField(id string, text *string, editing *bool, shown mod
 	if !end {
 		d--
 	}
-	g.iv.setEdge(g.cursor, end, d)
+	g.iv.setEdge(g.cur.effective(), end, d)
 }
 
 func muted(s string) {

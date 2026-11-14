@@ -56,10 +56,10 @@ type graphTab struct {
 	// The crosshair tags queued by crosshairTags, drawn after the plot.
 	tags tagQueue
 
-	// The breakdown panel: its cache, the interval the user set (unset, it covers the 12 months ending at cursor), the date last under the pointer on the plot, the header fields, and the Shift-drag gesture that paints the interval, anchored at bandAnchor.
+	// The breakdown panel: its cache, the interval the user set (unset, it covers the 12 months ending at cursor), the cursor, the header fields, and the Shift-drag gesture that paints the interval, anchored at bandAnchor.
 	bkCache    *breakdownCache
 	iv         bkInterval
-	cursor     model.Date
+	cur        cursorState
 	bk         bkUI
 	bandDrag   bool
 	bandAnchor model.Date
@@ -134,7 +134,7 @@ func newGraphTab(rec *model.Record, presets []graph.Preset, st *store.Store, not
 		switcher = rec.Projections[0].Name
 	}
 	g := &graphTab{rec: rec, lines: graph.NewLines(switcher), cache: newDataCache(rec), mc: newMCCache(rec), dataStart: graph.DataStart(rec), preset: -1,
-		bkCache: newBreakdownCache(rec), cursor: rec.Today, presets: presets, store: st, notify: notify, demo: demo}
+		bkCache: newBreakdownCache(rec), cur: cursorState{lock: rec.Today}, presets: presets, store: st, notify: notify, demo: demo}
 	for _, id := range defaultLines(rec, demo) {
 		g.lines.Add(id, false, "", graph.AssetColor(rec, id))
 	}
