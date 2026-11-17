@@ -11,7 +11,7 @@ import (
 	"github.com/joeriedel/finplan/internal/model"
 )
 
-// depositRecord is checking known to 16 January with a wages item of 5000 on the 10th and, when contribution is above zero, a payroll deduction of that amount from each paycheck into a 401(k).
+// depositRecord returns a record whose checking is known to 16 January, with a wages item of 5000 on the 10th and, when contribution is above zero, a payroll deduction of that amount from each paycheck into a 401(k).
 func depositRecord(t *testing.T, contribution float64) (*model.Record, model.BudgetItem) {
 	t.Helper()
 	salary := periodItem("salary", 5000, 10, model.Lump)

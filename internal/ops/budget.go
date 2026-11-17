@@ -34,7 +34,7 @@ func AddBudgetItem(st *store.Store, rec *model.Record, item model.BudgetItem, o 
 	})
 }
 
-// EditBudgetItem replaces the base budget item with item, keeping its id; an item with another non-empty ID is refused. The same checks as AddItem apply, but an item whose start is absent may keep it absent. A payroll deduction taken from the item that it no longer fits, because it stopped being wages, recurs otherwise or starts later than it does, becomes an ordinary transfer out of the item's account and is listed in the result's Affected.
+// EditBudgetItem replaces the base budget item with item, keeping its id; an item with another non-empty ID is refused. The same checks as AddItem apply, but an item whose start is absent may keep it absent. A payroll deduction taken from the item becomes an ordinary transfer out of the item's account, and is listed in the result's Affected, when the item stops being wages, recurs otherwise or starts later than the deduction.
 func EditBudgetItem(st *store.Store, rec *model.Record, id string, item model.BudgetItem, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		i, err := baseItem(next, id)

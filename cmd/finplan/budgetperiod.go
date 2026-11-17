@@ -247,7 +247,7 @@ func budgetedText(v model.PeriodView) string {
 	return formatDollars(v.Budgeted)
 }
 
-// depositNote is the sentence that tells that the amounts of a wages paycheck's period are the deposit that lands in the bank, net of tax and payroll deductions, not the gross; it is empty for the other items.
+// depositNote is the sentence saying that the amounts of a wages paycheck's period are the deposit that lands in the bank, net of tax and payroll deductions, not the gross; it is empty for the other items.
 func depositNote(v model.PeriodView) string {
 	if v.Gross == 0 {
 		return ""

@@ -75,7 +75,7 @@ func Deposits(rec *model.Record) func(it model.BudgetItem, d model.Date) (float6
 	return newDeposits(rec, cutoffs).deposit
 }
 
-// newDeposits is the household tax the engine books the base budget from, with the cutoffs of its items, so that the deposits it gives are the ones booked.
+// newDeposits returns the household tax the engine books the base budget from, with the cutoffs of its items, so that the deposits it gives are the ones booked.
 func newDeposits(rec *model.Record, cutoffs map[string]model.Date) *householdTax {
 	ht := newHouseholdTax(rec, rec.Budget.Items, nil, nil, rec.Globals[model.PropInflation], nil, nil, &Diagnostics{})
 	ht.cuts = cutoffs
