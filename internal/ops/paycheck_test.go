@@ -99,7 +99,7 @@ func TestAWagesItemThatNoLongerFitsReleasesItsDeductions(t *testing.T) {
 	}
 }
 
-func TestEndingAWagesItemEndsItsDeductions(t *testing.T) {
+func TestEndingAWagesItemLeavesItsDeductions(t *testing.T) {
 	st, rec := seed(t)
 	gig := sideGig(t, st, rec)
 	rec = reload(t, st)
@@ -108,22 +108,25 @@ func TestEndingAWagesItemEndsItsDeductions(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := res.Item.ID
+	linked := func(when string) {
+		t.Helper()
+		got, _ := reload(t, st).Budget.Item(id)
+		if got.Paycheck != gig.ID || got.End != nil {
+			t.Errorf("%s: the deduction is %+v, want it still taken from %s and open-ended", when, got, gig.ID)
+		}
+	}
 	end := model.D(2027, 6, 30)
 	res, err = EndBudgetItem(st, reload(t, st), gig.ID, end, Options{})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || len(res.Affected) != 0 {
+		t.Fatalf("end: %v, affected %v", err, res.Affected)
 	}
-	got, _ := reload(t, st).Budget.Item(id)
-	if got.Paycheck != gig.ID || got.End == nil || *got.End != end {
-		t.Errorf("the deduction is %+v, want it still taken from %s and ended on %v", got, gig.ID, end)
+	linked("after EndBudgetItem")
+
+	cur, _ := reload(t, st).Budget.Item(gig.ID)
+	cur.End = model.Ptr(model.D(2027, 3, 31))
+	res, err = EditBudgetItem(st, reload(t, st), gig.ID, cur, Options{})
+	if err != nil || len(res.Affected) != 0 {
+		t.Fatalf("edit: %v, affected %v", err, res.Affected)
 	}
-	if len(res.Affected) != 1 || res.Affected[0].Effect != EffectEnded {
-		t.Errorf("affected %+v, want the deduction listed as ended", res.Affected)
-	}
-	late := deductionOf(gig, demodata.K401)
-	late.End = model.Ptr(model.D(2028, 1, 15))
-	late.Paycheck = gig.ID
-	if err := CheckItem(reload(t, st), late); err == nil {
-		t.Error("a deduction that ends after its paycheck was accepted")
-	}
+	linked("after EditBudgetItem")
 }

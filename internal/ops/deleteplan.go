@@ -29,8 +29,6 @@ const (
 const (
 	EffectRemoved = "removed"
 	EffectDeleted = "deleted"
-	// EffectEnded is for a payroll deduction that ends with its paycheck.
-	EffectEnded = "ended"
 	// EffectOrphaned is for a modification that stays but targets nothing once its budget item is deleted.
 	EffectOrphaned = "orphaned"
 )

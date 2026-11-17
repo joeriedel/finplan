@@ -93,19 +93,19 @@ func TestRaisingAPayrollDeductionLowersTheDepositAndLeavesCheckingAlone(t *testi
 func TestWagesOverridesAreDepositsAndNotTaxedAgain(t *testing.T) {
 	rec, salary := depositRecord(t, 0)
 	paid := d(2026, time.January, 10)
-	want := deposit(t, rec, salary, d(2026, time.February, 10))
 	expected := 3000.0
 	occurrence(rec, "salary", paid, model.StatusPending, nil, &expected)
 	v := periodOf(t, rec, "salary")
 	if !near(v.Remaining, expected) || !near(*v.Expected, expected) {
 		t.Fatalf("the period is %+v, want 3000 still to deposit", v)
 	}
-	// What is still to come lands as the deposit, with no tax taken from it, and the projected deposit of the next paycheck stays the same.
+	// What is still to come lands as the deposit, with no tax taken from it, and the projected deposit of the next paycheck is what is booked for it, on the year's withholding as this paycheck leaves it.
 	if got := chkOn(t, rec, d(2026, time.January, 17)); !near(got, 5000+expected) {
 		t.Errorf("checking holds %v after the deposit, want %v", got, 5000+expected)
 	}
-	if got := deposit(t, rec, salary, d(2026, time.February, 10)); !near(got, want) {
-		t.Errorf("the next deposit is %v with the override, %v without", got, want)
+	feb := d(2026, time.February, 10)
+	if booked := chkOn(t, rec, feb) - chkOn(t, rec, feb.Add(-1)); !near(booked, deposit(t, rec, salary, feb)) {
+		t.Errorf("the next paycheck books %v, its deposit is %v", booked, deposit(t, rec, salary, feb))
 	}
 }
 
@@ -144,6 +144,45 @@ func TestEndingTheSalaryStopsItsDeduction(t *testing.T) {
 	}
 	if got := taxYear(t, rec, "", 2027).K401; got != 0 {
 		t.Errorf("deferrals %v in a year with no wages, want none", got)
+	}
+}
+
+func TestExtendingTheSalaryResumesItsDeduction(t *testing.T) {
+	rec, _ := depositRecord(t, 500)
+	end := d(2026, time.March, 31)
+	rec.Budget.Items[0].End = &end
+	k401 := func(date model.Date) float64 {
+		return sample(t, rec, "", model.DefaultAssetID("k401"), date).Amount
+	}
+	stopped := k401(d(2026, time.June, 30))
+	later := d(2026, time.May, 31)
+	rec.Budget.Items[0].End = &later
+	if got := k401(d(2026, time.June, 30)); !near(got, stopped+2*500) {
+		t.Errorf("the 401(k) holds %v after the salary was extended by 2 paychecks, want %v", got, stopped+2*500)
+	}
+	rec.Budget.Items[0].End = nil
+	if got := k401(d(2026, time.June, 30)); !near(got, stopped+3*500) {
+		t.Errorf("the 401(k) holds %v with the salary open-ended, want %v", got, stopped+3*500)
+	}
+}
+
+func TestDepositShownIsTheOneBookedAfterAnEarlierPaycheckPaidNothing(t *testing.T) {
+	rec, salary := depositRecord(t, 500)
+	occurrence(rec, "salary", d(2026, time.January, 10), model.StatusPending, nil, model.Ptr(0.0))
+	feb := d(2026, time.February, 10)
+	ps, err := Periods(rec, "", feb, 1)
+	must(t, err)
+	var shown float64
+	for _, p := range ps {
+		if p.Item.ID == "salary" {
+			shown = p.Current().Budgeted
+		}
+	}
+	if got := deposit(t, rec, salary, feb); !near(shown, got) {
+		t.Errorf("the period shows %v, the deposit is %v", shown, got)
+	}
+	if booked := chkOn(t, rec, feb) - chkOn(t, rec, feb.Add(-1)); !near(booked, shown) {
+		t.Errorf("February's paycheck books %v, the period shows %v", booked, shown)
 	}
 }
 

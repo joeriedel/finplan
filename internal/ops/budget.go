@@ -34,7 +34,7 @@ func AddBudgetItem(st *store.Store, rec *model.Record, item model.BudgetItem, o 
 	})
 }
 
-// EditBudgetItem replaces the base budget item with item, keeping its id; an item with another non-empty ID is refused. The same checks as AddItem apply, but an item whose start is absent may keep it absent. A payroll deduction taken from the item that it no longer fits, because it stopped being wages, recurs otherwise or starts later, becomes an ordinary transfer out of the item's account and is listed in the result's Affected.
+// EditBudgetItem replaces the base budget item with item, keeping its id; an item with another non-empty ID is refused. The same checks as AddItem apply, but an item whose start is absent may keep it absent. A payroll deduction taken from the item that it no longer fits, because it stopped being wages, recurs otherwise or starts later than it does, becomes an ordinary transfer out of the item's account and is listed in the result's Affected.
 func EditBudgetItem(st *store.Store, rec *model.Record, id string, item model.BudgetItem, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		i, err := baseItem(next, id)
@@ -55,7 +55,7 @@ func EditBudgetItem(st *store.Store, rec *model.Record, id string, item model.Bu
 	})
 }
 
-// EndBudgetItem makes the last date of the base budget item the given one. An end before the item's start is refused. The payroll deductions taken from a wages item end with it and are listed in the result's Affected.
+// EndBudgetItem makes the last date of the base budget item the given one. An end before the item's start is refused. The payroll deductions taken from a wages item are left as they are: the engine books them only on the dates the paycheck is booked.
 func EndBudgetItem(st *store.Store, rec *model.Record, id string, end model.Date, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		i, err := baseItem(next, id)
@@ -69,20 +69,7 @@ func EndBudgetItem(st *store.Store, rec *model.Record, id string, end model.Date
 			return Result{}, err
 		}
 		next.Budget.Items[i] = it
-		var ended []Affected
-		for j, d := range next.Budget.Items {
-			if d.Paycheck != id || d.End != nil && *d.End <= end {
-				continue
-			}
-			d.End = &end
-			d, err := checkItemAs(next, d, &next.Budget.Items[j])
-			if err != nil {
-				return Result{}, err
-			}
-			next.Budget.Items[j] = d
-			ended = append(ended, Affected{AffectedBudgetItem, "budget", itemDetail(d) + " payroll deduction", EffectEnded})
-		}
-		return Result{Item: &it, Affected: ended}, nil
+		return Result{Item: &it}, nil
 	})
 }
 

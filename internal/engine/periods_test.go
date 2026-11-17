@@ -266,7 +266,7 @@ func TestMatchedPaycheckShowsTheDepositAsPostedAndIsTaxedAtItsGross(t *testing.T
 	per, _ := salary.PeriodAt(d(2025, time.December, 15))
 	infl := rec.Globals[model.PropInflation]
 	ht := newHouseholdTax(rec, rec.Budget.Items, nil, nil, infl, nil, nil, &Diagnostics{})
-	v := periodView(rec, salary, per, d(2026, time.January, 1), ht, nil, nil, infl)
+	v := periodView(rec, salary, per, d(2026, time.January, 1), ht, false, nil, nil, infl)
 	if !v.Matched || v.Posted != 500 || v.Remaining != 0 {
 		t.Errorf("period posted %v remaining %v matched %v, want the deposit of 500 posted and nothing remaining", v.Posted, v.Remaining, v.Matched)
 	}

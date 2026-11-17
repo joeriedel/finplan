@@ -245,7 +245,7 @@ func (h *householdTax) amountIn(it model.BudgetItem, d model.Date, plain bool) (
 	net := amt
 	if wages {
 		var ok bool
-		if net, ok = h.deposit(it, d); !ok || net <= 0 {
+		if net, ok = h.depositIn(it, d, true); !ok || net <= 0 {
 			return amt, true
 		}
 	}
@@ -255,7 +255,7 @@ func (h *householdTax) amountIn(it model.BudgetItem, d model.Date, plain bool) (
 	}
 	if cutOK {
 		eval := func(per model.Period) model.PeriodView {
-			return periodView(h.rec, it, per, cut, h, h.amounts, h.growths, h.infl)
+			return periodView(h.rec, it, per, cut, h, true, h.amounts, h.growths, h.infl)
 		}
 		_, upTo := itemSpan(h.rec, it, cut, model.MaxDate)
 		for _, per := range remainderPeriods(h.rec, it, cut, upTo, eval) {
@@ -284,8 +284,13 @@ func (h *householdTax) sourceBooked(ded model.BudgetItem, d model.Date, plain bo
 	return ok && gross != 0
 }
 
-// deposit is the net deposit projected for the wages paycheck of the item on d, whatever its occurrence fact says: its gross, less what it withholds and what its payroll deductions take. It reports false when the item has no paycheck on d.
+// deposit is the net deposit projected for the wages paycheck of the item on d, whatever its occurrence fact says: its gross, less what it withholds and what its payroll deductions take, as the engine books the paycheck when it has no override. It reports false when the item has no paycheck on d.
 func (h *householdTax) deposit(it model.BudgetItem, d model.Date) (float64, bool) {
+	return h.depositIn(it, d, false)
+}
+
+// depositIn is deposit, or with plain set the deposit in the plain year, which does not depend on the occurrence facts of the wages paychecks. The year itself withholds from the paychecks as the facts leave them, so a paycheck whose own gross a fact or remainder changes is taken in the plain year too.
+func (h *householdTax) depositIn(it model.BudgetItem, d model.Date, plain bool) (float64, bool) {
 	if !it.IsWages() {
 		return 0, false
 	}
@@ -294,6 +299,12 @@ func (h *householdTax) deposit(it model.BudgetItem, d model.Date) (float64, bool
 		return 0, false
 	}
 	y, _, _ := d.YMD()
+	if !plain {
+		k := paycheckKey{it.ID, d}
+		if in := h.year(y); slices.Contains(in.paychecks, paycheck{it.ID, d, gross}) {
+			return gross - in.withheld[k] - h.deducted(it.ID, d, false), true
+		}
+	}
 	withheld, ok := h.plainYear(y).withheld[paycheckKey{it.ID, d}]
 	if !ok {
 		return 0, false

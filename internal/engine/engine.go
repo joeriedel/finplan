@@ -981,14 +981,14 @@ func (p *path) remainders(rec *model.Record, it model.BudgetItem, cutoff, upTo m
 		return
 	}
 	eval := func(per model.Period) model.PeriodView {
-		return periodView(rec, it, per, cutoff, p.ht, amounts, growths, infl)
+		return periodView(rec, it, per, cutoff, p.ht, false, amounts, growths, infl)
 	}
 	// The paycheck side writes off the remainder of a period it no longer books; the match on it is not booked either.
 	var payPeriods map[model.Date]bool
 	if matchOnly && paid {
 		payPeriods = map[model.Date]bool{}
 		payEval := func(per model.Period) model.PeriodView {
-			return periodView(rec, it, per, payCut, p.ht, amounts, growths, infl)
+			return periodView(rec, it, per, payCut, p.ht, false, amounts, growths, infl)
 		}
 		for _, per := range remainderPeriods(rec, it, payCut, upTo, payEval) {
 			payPeriods[per.Start] = true
@@ -1001,16 +1001,16 @@ func (p *path) remainders(rec *model.Record, it model.BudgetItem, cutoff, upTo m
 		v := eval(per)
 		counted := countedAmount(rec, it, per, v, cutoff)
 		if matchOnly && paid {
-			counted = countedAmount(rec, it, per, periodView(rec, it, per, payCut, p.ht, amounts, growths, infl), payCut)
+			counted = countedAmount(rec, it, per, periodView(rec, it, per, payCut, p.ht, false, amounts, growths, infl), payCut)
 		}
 		p.bookRemainder(rec, it, per, v, counted, cutoff, upTo)
 	}
 }
 
-// periodView evaluates the item's period against the cutoff with its budgeted amount and occurrence fact. A wages paycheck counts its projected net deposit, as the periods the user sees do.
-func periodView(rec *model.Record, it model.BudgetItem, per model.Period, cutoff model.Date, ht *householdTax, amounts, growths map[string]model.Schedule, infl model.Schedule) model.PeriodView {
+// periodView evaluates the item's period against the cutoff with its budgeted amount and occurrence fact. A wages paycheck counts its projected net deposit, as the periods the user sees do; with plain set it is the plain year's, for the tax inputs that the real year is built from.
+func periodView(rec *model.Record, it model.BudgetItem, per model.Period, cutoff model.Date, ht *householdTax, plain bool, amounts, growths map[string]model.Schedule, infl model.Schedule) model.PeriodView {
 	budgeted, _ := amountOn(rec, it, per.Start, amounts, growths, infl)
-	if net, ok := ht.deposit(it, per.Start); ok {
+	if net, ok := ht.depositIn(it, per.Start, plain); ok {
 		budgeted = net
 	}
 	var ov *model.Occurrence
