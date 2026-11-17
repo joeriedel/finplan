@@ -237,20 +237,25 @@ func TestDepositShownForTheCurrentPaycheckIsTheOneBooked(t *testing.T) {
 		gross := 3846.15 + 13.37*float64(i)
 		rec, _ := depositRecord(t, 0)
 		rec.Budget.Items[0].Amount = model.Constant(gross)
-		rec.Today = d(2026, time.August, 9)
+		rec.Today = d(2026, time.August, 16)
 		rec.Account("chk").AddSnapshot(rec.Today, 5000)
+		// An unrelated transaction makes the account tracked, so the Aug 10 paycheck is missing and its remainder is booked after the cutoff.
+		must(t, rec.Account("chk").AddTransaction(model.Transaction{Date: d(2026, time.August, 12), Amount: -30, Kind: model.TxExpense, Memo: "groceries"}))
 		occurrence(rec, "salary", d(2026, time.January, 10), model.StatusPending, nil, model.Ptr(0.0))
 		ps, err := Periods(rec, "", rec.Today, 1)
 		must(t, err)
-		var shown float64
+		var cur model.PeriodView
 		for _, p := range ps {
 			if p.Item.ID == "salary" {
-				shown = p.Current().Budgeted
+				cur = p.Current()
 			}
 		}
+		if !cur.Missing {
+			t.Errorf("gross %v: the current paycheck is not missing", gross)
+		}
 		booked := chkOn(t, rec, rec.Today.Add(1)) - chkOn(t, rec, rec.Today)
-		if !near(booked, shown) {
-			t.Errorf("gross %v: the paycheck books %v, the period shows %v", gross, booked, shown)
+		if !near(cur.Remaining, cur.Budgeted) || !near(booked, cur.Budgeted) {
+			t.Errorf("gross %v: the paycheck books %v, the period shows %v budgeted and %v remaining", gross, booked, cur.Budgeted, cur.Remaining)
 		}
 	}
 }
