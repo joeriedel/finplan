@@ -237,7 +237,7 @@ func TestDepositShownForTheCurrentPaycheckIsTheOneBooked(t *testing.T) {
 		gross := 3846.15 + 13.37*float64(i)
 		rec, _ := depositRecord(t, 0)
 		rec.Budget.Items[0].Amount = model.Constant(gross)
-		rec.Today = d(2026, time.August, 16)
+		rec.Today = d(2026, time.August, 9)
 		rec.Account("chk").AddSnapshot(rec.Today, 5000)
 		occurrence(rec, "salary", d(2026, time.January, 10), model.StatusPending, nil, model.Ptr(0.0))
 		ps, err := Periods(rec, "", rec.Today, 1)
