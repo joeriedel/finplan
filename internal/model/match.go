@@ -75,6 +75,9 @@ func (r *Record) InvalidateMatches() {
 
 // itemAccounts lists the accounts the item's transactions are recorded on, the source of a transfer first.
 func itemAccounts(it BudgetItem) []AccountID {
+	if it.Paycheck != "" {
+		return []AccountID{it.To}
+	}
 	if it.Kind == ItemTransfer {
 		if it.From == it.To {
 			return nil
@@ -103,7 +106,7 @@ func (b BudgetItem) matchesMemo(t Transaction) bool {
 // IsWages reports whether the item is a wages paycheck: an income item taxed as wages.
 func (b BudgetItem) IsWages() bool { return b.Kind == ItemIncome && b.Income() == IncomeWages }
 
-// NetDeposits, set by the engine, returns for the record a function giving the net deposit projected for the wages paycheck of an item on a date: the gross less what the paycheck withholds. It reports false when it knows none, as when the engine is not linked in; a paycheck is then compared at its gross.
+// NetDeposits, set by the engine, returns for the record a function giving the net deposit projected for the wages paycheck of an item on a date: the gross less what the paycheck withholds and its payroll deductions. It reports false when it knows none, as when the engine is not linked in; a paycheck is then compared at its gross.
 var NetDeposits func(r *Record) func(it BudgetItem, d Date) (float64, bool)
 
 func deriveMatches(r *Record) *Matches {
@@ -281,6 +284,10 @@ func (r *Record) periodMatch(it BudgetItem, p Period, cutoff Date, asOf bool) *P
 			pm.Amount += m.Transaction.Amount * it.receives(side)
 			pm.Matched = true
 		}
+	}
+	// A payroll deduction is taken from the paycheck and no bank transaction is due: unless one was recorded on the receiving account, the period reads as untracked and counts at its budgeted amount.
+	if it.Paycheck != "" && !pm.Matched {
+		return nil
 	}
 	return pm
 }

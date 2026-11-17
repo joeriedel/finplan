@@ -55,7 +55,7 @@ func TestCloseAndReopenAccount(t *testing.T) {
 		return CloseAccount(st, rec, demodata.TSP, model.D(2026, time.June, 29), Options{})
 	})
 	dataRefused(t, ErrInvalidValue, func(st *store.Store, rec *model.Record) (*Result, error) {
-		return CloseAccount(st, rec, demodata.TSP, model.D(2026, time.July, 31), Options{})
+		return CloseAccount(st, rec, demodata.Savings, model.D(2026, time.July, 31), Options{})
 	})
 
 	if _, err := ReopenAccount(st, rec, demodata.Checking, Options{}); !errors.Is(err, ErrNoChange) {

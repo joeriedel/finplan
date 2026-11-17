@@ -42,8 +42,8 @@ var periodWriteCommands = []*command{
 		Flags: []flagDef{
 			{Name: "period-start", Type: typeDate, Description: "a date in the period, or its start: " + dateNote + "; the period containing the record's today when omitted. Only that period and the one before it can be set"},
 			{Name: "status", Type: typeEnum, Choices: periodStatuses, Description: "auto leaves what has posted to the estimate, posted says the period's amount has posted, pending that what remains is still to come, even for a lump whose date has passed"},
-			{Name: "posted", Type: typeNumber, Description: "the amount posted in the period so far, which may exceed the budgeted amount; it replaces the estimate"},
-			{Name: "expected", Type: typeNumber, Description: "the amount expected for this period only, instead of the budgeted one"},
+			{Name: "posted", Type: typeNumber, Description: "the amount posted in the period so far, which may exceed the budgeted amount; it replaces the estimate. For a wages item it is the net deposit (see expected_deposit), not the gross"},
+			{Name: "expected", Type: typeNumber, Description: "the amount expected for this period only, instead of the budgeted one. For a wages item it is the net deposit (see expected_deposit), not the gross"},
 			{Name: "clear", Type: typeBool, Default: "false", Description: "void what was recorded for the period, so it is as if nothing was; cannot be combined with the other values"},
 			{Name: "note", Type: typeString, Description: "why, kept in budget period revisions"},
 		},

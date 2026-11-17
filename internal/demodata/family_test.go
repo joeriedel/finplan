@@ -231,15 +231,19 @@ func TestFamilyBreakdowns(t *testing.T) {
 		}
 	}
 
-	// Net worth contains every account, so no transfer, contribution or withdrawal remains: all cancel.
+	// Net worth contains every account, so no transfer or withdrawal remains: all cancel. The payroll deductions are the one contribution left, money that never reaches the paying account, and only ever add.
 	bd, err := engine.Breakdown(rec, ProjWithdraw, NetWorth, d(2026, time.January, 1), d(2028, time.January, 1))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, l := range bd.Lines {
 		switch l.Cause {
-		case engine.CauseTransfer, engine.CauseContribution, engine.CauseWithdrawal, engine.CauseDefault:
+		case engine.CauseTransfer, engine.CauseWithdrawal, engine.CauseDefault:
 			t.Errorf("net worth shows %+v", l)
+		case engine.CauseContribution:
+			if l.Actual != 0 || l.Projected <= 0 {
+				t.Errorf("net worth shows %+v, want only projected payroll deductions", l)
+			}
 		}
 	}
 	// The withdrawal's tax is real money leaving, in the projected column only, with the 2027 return in April 2028.

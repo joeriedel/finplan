@@ -34,7 +34,7 @@ func AddBudgetItem(st *store.Store, rec *model.Record, item model.BudgetItem, o 
 	})
 }
 
-// EditBudgetItem replaces the base budget item with item, keeping its id; an item with another non-empty ID is refused. The same checks as AddItem apply, but an item whose start is absent may keep it absent.
+// EditBudgetItem replaces the base budget item with item, keeping its id; an item with another non-empty ID is refused. The same checks as AddItem apply, but an item whose start is absent may keep it absent. A payroll deduction taken from the item that it no longer fits, because it stopped being wages, recurs otherwise or starts later, becomes an ordinary transfer out of the item's account and is listed in the result's Affected.
 func EditBudgetItem(st *store.Store, rec *model.Record, id string, item model.BudgetItem, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		i, err := baseItem(next, id)
@@ -49,8 +49,9 @@ func EditBudgetItem(st *store.Store, rec *model.Record, id string, item model.Bu
 			return Result{}, err
 		}
 		it.ID = id
+		released := releaseDeductions(next, id, next.Budget.Items[i].Account, &it)
 		next.Budget.Items[i] = it
-		return Result{Item: &it}, nil
+		return Result{Item: &it, Affected: released}, nil
 	})
 }
 
@@ -72,7 +73,7 @@ func EndBudgetItem(st *store.Store, rec *model.Record, id string, end model.Date
 	})
 }
 
-// DeleteBudgetItem deletes the base budget item. A modification of it in a projection is not refused: it is left pointing at nothing, which the engine skips and the editors show. The result's Item is the item as it was and Removed its id.
+// DeleteBudgetItem deletes the base budget item. A modification of it in a projection is not refused: it is left pointing at nothing, which the engine skips and the editors show. A payroll deduction taken from it becomes an ordinary transfer out of the account its paychecks were deposited into, and is listed in the result's Affected. The result's Item is the item as it was and Removed its id.
 func DeleteBudgetItem(st *store.Store, rec *model.Record, id string, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		i, err := baseItem(next, id)
@@ -80,7 +81,8 @@ func DeleteBudgetItem(st *store.Store, rec *model.Record, id string, o Options) 
 			return Result{}, err
 		}
 		it := next.Budget.Items[i]
+		released := releaseDeductions(next, id, it.Account, nil)
 		next.Budget.Items = slices.Delete(next.Budget.Items, i, i+1)
-		return Result{Item: &it, Removed: id}, nil
+		return Result{Item: &it, Removed: id, Affected: released}, nil
 	})
 }

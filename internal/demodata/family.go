@@ -157,6 +157,10 @@ func familyBudget() model.Budget {
 	transfer := func(id, name string, from, to model.AccountID, amount float64, day int) model.BudgetItem {
 		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemTransfer, Amount: model.Constant(amount), Recurrence: monthly(day), From: from, To: to, Timing: model.Lump}
 	}
+	// A deduction is taken from every paycheck of its salary, on the salary's schedule.
+	deduction := func(paycheck model.BudgetItem, id, name string, to model.AccountID, amount float64) model.BudgetItem {
+		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemTransfer, Amount: model.Constant(amount), Recurrence: paycheck.Recurrence, Start: paycheck.Start, To: to, Paycheck: paycheck.ID, Timing: model.Lump}
+	}
 	salaryA := income("salary-a", "Salary (Parent A)", 5000, model.Recurrence{Kind: model.Semimonthly, Day: 15, Day2: 31})
 	salaryA.MatchPercent, salaryA.MatchUpTo, salaryA.MatchAccount = 50, 6, K401
 	salaryB := income("salary-b", "Salary (Parent B)", 3700, model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2024, time.November, 8)})
@@ -195,8 +199,8 @@ func familyBudget() model.Budget {
 		spread(expense("transport", "Transportation", Checking, 600, monthly(8))),
 		expense("insurance", "Insurance", Checking, 700, monthly(20)),
 		expense("vacation", "Family vacation", Checking, 6000, model.Recurrence{Kind: model.Annual, Month: time.June, Day: 15}),
-		transfer("save-401k", "401k contribution", Checking, K401, 1000, 16),
-		transfer("save-tsp", "TSP contribution", Checking, TSP, 800, 16),
+		deduction(salaryA, "save-401k", "401k contribution", K401, 500),
+		deduction(salaryB, "save-tsp", "TSP contribution", TSP, 9600.0/26),
 		transfer("save-savings", "Savings deposit", Checking, Savings, 500, 25),
 		transfer("save-brokerage", "Brokerage deposit", Checking, Brokerage, 800, 25),
 		transfer("save-roth", "Roth IRA contribution", Checking, Roth, 500, 25),
@@ -251,7 +255,11 @@ func Family() *model.Record {
 				must(a.AddTransaction(d))
 			}
 		}
-		generateHistory(rec, a, s)
+	}
+	// The paychecks deposit what the budget projects, which depends on every account the budget touches.
+	deposit := paycheckDeposits(rec)
+	for _, s := range accountSpecs {
+		generateHistory(rec, rec.Account(s.id), s, deposit)
 	}
 	home := &model.Account{ID: Home, Name: "Home", Type: model.TypeProperty, Tax: model.Taxable, StatedRate: 0.03}
 	home.AddSnapshot(model.D(2024, time.December, 15), 520000)
@@ -350,12 +358,13 @@ func Family() *model.Record {
 // generateHistory fills an account with the transactions its budget items imply, from just after the
 // opening snapshot to the account's end, and with month-end snapshots that also include growth the
 // transactions do not explain.
-func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
+func generateHistory(rec *model.Record, a *model.Account, s accountSpec, deposit func(model.BudgetItem, model.Date) float64) {
 	end := s.end
 	if end == 0 {
 		end = FamilyToday
 	}
 	vary := seededFor(a.ID, "variation")
+	paid := seededFor(a.ID, "deposits")
 	for _, it := range append(slices.Clone(rec.Budget.Items), mortgagePayments()) {
 		if !it.Touches(a.ID) {
 			continue
@@ -390,7 +399,10 @@ func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
 			}
 			switch {
 			case it.Kind == model.ItemIncome:
-				t.Kind, t.Amount = model.TxIncome, amount*netPay(rec, d)
+				t.Kind, t.Amount = model.TxIncome, math.Round((deposit(it, d)+depositSwing*(2*paid.Float64()-1))*100)/100
+			case it.Paycheck != "":
+				// Taken from the paycheck: the account that receives it records it, and the paying account nothing.
+				t.Kind, t.Amount = model.TxIncome, amount
 			case it.Kind == model.ItemExpense:
 				t.Kind, t.Amount = model.TxExpense, -amount
 				if variable {
@@ -435,28 +447,19 @@ func generateHistory(rec *model.Record, a *model.Account, s accountSpec) {
 	}
 }
 
-// netPay is the share of gross pay that lands in an account on d: what remains after the year's tax on the budget's wages and 401k and TSP contributions, as the engine withholds it through the year.
-func netPay(rec *model.Record, d model.Date) float64 {
-	year, _, _ := d.YMD()
-	var earner tax.Earner
-	for _, it := range rec.Budget.Items {
-		for _, day := range it.Dates(model.D(year, time.January, 1).Add(-1), model.D(year, time.December, 31)) {
-			amount, ok := it.Amount.At(day)
-			switch {
-			case !ok:
-			case it.Kind == model.ItemIncome:
-				earner.Wages += amount
-			case it.To == K401 || it.To == TSP:
-				earner.K401 += amount
-			}
-		}
+// paycheckDeposits returns the amount the wages paycheck of an item deposits on a date: what the engine projects for it, a paycheck's gross less its withholding and payroll deductions. The engine is reached through model.NetDeposits, which it sets, because it cannot be imported here; where it is not linked in a paycheck deposits its gross.
+func paycheckDeposits(rec *model.Record) func(it model.BudgetItem, d model.Date) float64 {
+	net := func(model.BudgetItem, model.Date) (float64, bool) { return 0, false }
+	if model.NetDeposits != nil {
+		net = model.NetDeposits(rec)
 	}
-	res, err := tax.Compute(rec.Tax, tax.Input{
-		Year: year, Status: rec.Household.Filing, State: rec.Household.State,
-		Earners: []tax.Earner{earner}, DependentAges: rec.Household.DependentAges(year), Inflation: 0.025,
-	})
-	must(err)
-	return 1 - res.Total/earner.Wages
+	return func(it model.BudgetItem, d model.Date) float64 {
+		if v, ok := net(it, d); ok {
+			return v
+		}
+		v, _ := it.Amount.At(d)
+		return v
+	}
 }
 
 func sumAmounts(ts []model.Transaction) float64 {

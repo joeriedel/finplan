@@ -17,6 +17,8 @@ const (
 	noiseSeed = 20261108
 	// amountSwing is how far a variable expense strays from its budgeted amount, as a fraction of it.
 	amountSwing = 0.15
+	// depositSwing is how many dollars a paycheck's deposit strays from the net the budget projects for it, either way.
+	depositSwing = 3.0
 	// dateSwing is how many days either side of its date a lump bill may be paid.
 	dateSwing = 3
 )

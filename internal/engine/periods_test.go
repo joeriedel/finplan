@@ -162,21 +162,21 @@ func TestVarianceHistoryOfClosedPeriods(t *testing.T) {
 	}
 }
 
-func TestOccurrenceOverrideReachesTaxes(t *testing.T) {
+func TestWagesOverrideLeavesTheTaxedGrossAlone(t *testing.T) {
+	// The amounts of a wages period are deposits, which land net of the tax: the paycheck is still taxed at the gross the item states.
 	rec := fixture(t)
-	base := taxYear(t, rec, "", 2026).Wages
+	base := taxYear(t, rec, "", 2026)
 	june := d(2026, time.June, 15)
-	occurrence(rec, "salary", june, model.StatusAuto, model.Ptr(1500.0), nil)
-	if got := taxYear(t, rec, "", 2026).Wages; !near(got, base+500) {
-		t.Errorf("wages with an amount posted %v, want %v", got, base+500)
-	}
-	occurrence(rec, "salary", june, model.StatusAuto, nil, model.Ptr(1200.0))
-	if got := taxYear(t, rec, "", 2026).Wages; !near(got, base+200) {
-		t.Errorf("wages with an amount expected %v, want %v", got, base+200)
-	}
-	occurrence(rec, "salary", june, model.StatusPosted, nil, model.Ptr(1200.0))
-	if got := taxYear(t, rec, "", 2026).Wages; !near(got, base+200) {
-		t.Errorf("wages with the occurrence posted %v, want %v", got, base+200)
+	for i, set := range []func(){
+		func() { occurrence(rec, "salary", june, model.StatusAuto, model.Ptr(1500.0), nil) },
+		func() { occurrence(rec, "salary", june, model.StatusAuto, nil, model.Ptr(1200.0)) },
+		func() { occurrence(rec, "salary", june, model.StatusPosted, nil, model.Ptr(1200.0)) },
+		func() { occurrence(rec, "salary", june, model.StatusPending, nil, model.Ptr(1200.0)) },
+	} {
+		set()
+		if got := taxYear(t, rec, "", 2026); !near(got.Wages, base.Wages) || !near(got.WithheldPaychecks, base.WithheldPaychecks) {
+			t.Errorf("override %d: wages %v and withheld %v, want %v and %v", i, got.Wages, got.WithheldPaychecks, base.Wages, base.WithheldPaychecks)
+		}
 	}
 }
 
@@ -252,7 +252,9 @@ func TestMatchedPaycheckShowsTheDepositAsPostedAndIsTaxedAtItsGross(t *testing.T
 	rec := fixture(t)
 	salary, _ := rec.Budget.Item("salary")
 	per, _ := salary.PeriodAt(d(2025, time.December, 15))
-	v := periodView(rec, salary, per, d(2026, time.January, 1), nil, nil, rec.Globals[model.PropInflation])
+	infl := rec.Globals[model.PropInflation]
+	ht := newHouseholdTax(rec, rec.Budget.Items, nil, nil, infl, nil, nil, &Diagnostics{})
+	v := periodView(rec, salary, per, d(2026, time.January, 1), ht, nil, nil, infl)
 	if !v.Matched || v.Posted != 500 || v.Remaining != 0 {
 		t.Errorf("period posted %v remaining %v matched %v, want the deposit of 500 posted and nothing remaining", v.Posted, v.Remaining, v.Matched)
 	}
@@ -344,12 +346,12 @@ func TestMatchAfterTheMatchAccountsCutoffIgnoresThePaycheckFact(t *testing.T) {
 }
 
 func TestTaxCountsOnlyTheRemainderTheEngineBooks(t *testing.T) {
-	// The salary ends on November 5, before the cutoff of the 8th: nothing more of the November paycheck is booked, so the year counts the 5000 of October and the 2000 posted.
+	// The salary ends on November 5, before the cutoff of the 8th: nothing more of the November paycheck is booked, but a wages paycheck is taxed at its gross whatever deposit was posted, so the year counts the 5000 of October and of November.
 	rec := matchRecord(t)
 	rec.Budget.Items[0].End = model.Ptr(d(2026, time.November, 5))
 	occurrence(rec, "salary", d(2026, time.November, 1), model.StatusAuto, model.Ptr(2000.0), nil)
-	if got := taxYear(t, rec, "", 2026); !near(got.Wages, 7000) {
-		t.Errorf("wages %v, want 7000", got.Wages)
+	if got := taxYear(t, rec, "", 2026); !near(got.Wages, 10000) {
+		t.Errorf("wages %v, want 10000", got.Wages)
 	}
 }
 
@@ -400,7 +402,7 @@ func TestSpreadRemainderCutShortByTheItemsEndIsNotCapped(t *testing.T) {
 }
 
 func TestSpreadPeriodCutShortWithoutAFactBooksTaxAndMatchInTheShareOfWhatIsBooked(t *testing.T) {
-	// The salary ends on November 20 but its period is November's 30 days: 8 days, 1333.33 of its 5000 are in the balance on the 8th and 2000 are booked over the 12 days to the end, which leaves 1666.67 never booked. A lump expected to total 3333.33 with 1333.33 posted books the same 2000, so withholding and match are the same share of the paycheck's.
+	// The salary ends on November 20 but its period is November's 30 days: 8 days, 8/30 of its deposit net are in the balance on the 8th and 12/30 are booked over the 12 days to the end, which leaves 10/30 never booked. A lump expected to total 20/30 with 8/30 posted books the same 12/30, so the match is the same share of the paycheck's.
 	spread := matchRecord(t)
 	spread.Account("k401").AddSnapshot(d(2026, time.November, 8), 3000)
 	spread.Budget.Items[0].Timing = model.Spread
@@ -408,7 +410,11 @@ func TestSpreadPeriodCutShortWithoutAFactBooksTaxAndMatchInTheShareOfWhatIsBooke
 	lump := matchRecord(t)
 	lump.Account("k401").AddSnapshot(d(2026, time.November, 8), 3000)
 	lump.Budget.Items[0].End = model.Ptr(d(2026, time.November, 20))
-	occurrence(lump, "salary", d(2026, time.November, 1), model.StatusAuto, model.Ptr(5000.0*8/30), model.Ptr(5000.0*20/30))
+	net, ok := Deposits(lump)(lump.Budget.Items[0], d(2026, time.November, 1))
+	if !ok {
+		t.Fatal("no paycheck on November 1")
+	}
+	occurrence(lump, "salary", d(2026, time.November, 1), model.StatusAuto, model.Ptr(net*8/30), model.Ptr(net*20/30))
 	end := []model.Date{d(2026, time.November, 20)}
 	for _, id := range []model.AccountID{"chk", "k401"} {
 		got, err := Balances(spread, "", model.DefaultAssetID(id), end)

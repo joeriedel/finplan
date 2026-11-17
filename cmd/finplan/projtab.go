@@ -1205,8 +1205,10 @@ func (t *projTab) itemFields(id string, f itemForm, live bool, set func(field, t
 		choose(field, label, itemAccountPreview(rec, ids, names, cur), em*12, ids[from:], names[from:], string(cur))
 	}
 	if f.kind == model.ItemTransfer {
-		account("from", "from", f.from)
-		imgui.SameLine()
+		if f.paycheck == "" {
+			account("from", "from", f.from)
+			imgui.SameLine()
+		}
 		account("to", "to", f.to)
 	} else {
 		account("account", "account", f.account)

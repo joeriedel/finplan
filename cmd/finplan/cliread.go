@@ -153,6 +153,8 @@ type jbudgetItem struct {
 	Timing string `json:"timing"`
 	// Match is the employer match of a wages income item; null for an item without one.
 	Match *jmatch `json:"match"`
+	// DeductedFrom is the id of the wages item a payroll deduction is taken from; null for an ordinary item.
+	DeductedFrom *string `json:"deducted_from"`
 }
 
 // jmatch is an employer match: the percent of the employee's contributions to the account that the employer deposits, up to up_to percent of each paycheck's gross.
@@ -197,7 +199,7 @@ func budgetItemJSON(it model.BudgetItem, today model.Date) jbudgetItem {
 		ID: it.ID, Name: it.Name, Kind: string(it.Kind), Amount: amount, AmountSch: scheduleJSONOut(it.Amount), Recurrence: jr,
 		Start: jdp(it.Start), End: jdp(it.End), Indexed: it.Indexed, Growth: growth, GrowthSch: scheduleJSONOut(it.Growth),
 		Account: nullable(string(it.Account)), From: nullable(string(it.From)), To: nullable(string(it.To)),
-		IncomeType: incomeTypeJSON(it), Timing: string(it.EffectiveTiming()), Match: matchJSON(it),
+		IncomeType: incomeTypeJSON(it), Timing: string(it.EffectiveTiming()), Match: matchJSON(it), DeductedFrom: nullable(it.Paycheck),
 	}
 }
 

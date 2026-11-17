@@ -19,7 +19,7 @@ type ItemPeriods struct {
 	Periods []model.PeriodView
 }
 
-// periodViews evaluates the n periods of the item up to the one containing d against the cutoff. A wages paycheck is budgeted at its projected net deposit, which is what lands in the bank, with its gross kept in the view's Gross; the engine's own period views stay at the gross, which is what it taxes.
+// periodViews evaluates the n periods of the item up to the one containing d against the cutoff. A wages paycheck is budgeted at its projected net deposit, which is what lands in the bank, with its gross kept in the view's Gross, as the engine's own period views count it.
 func periodViews(rec *model.Record, it model.BudgetItem, d model.Date, n int, cutoff model.Date, match func(model.Period) *model.PeriodMatch) []model.PeriodView {
 	gross := func(p model.Period) float64 {
 		v, _ := BudgetedAmount(rec, it, p.Start)
@@ -66,24 +66,10 @@ func Periods(rec *model.Record, projection string, asOf model.Date, n int) ([]It
 	return out, nil
 }
 
-// Deposits returns a function giving the net deposit projected for the wages paycheck of the base budget item on d: its gross as BudgetedAmount counts it, less the income tax and payroll tax the engine withholds from that paycheck, which already reflect its pre-tax deferrals. It reports false when the item has no paycheck on d. The function keeps what it computed, so it should be made once for a batch of lookups.
+// Deposits returns a function giving the net deposit projected for the wages paycheck of the base budget item on d: its gross as BudgetedAmount counts it, less the income tax and payroll tax the engine withholds from that paycheck, which already reflect its pre-tax deferrals, and less the payroll deductions taken from it. It reports false when the item has no paycheck on d. The function keeps what it computed, so it should be made once for a batch of lookups.
 func Deposits(rec *model.Record) func(it model.BudgetItem, d model.Date) (float64, bool) {
 	ht := newHouseholdTax(rec, rec.Budget.Items, nil, nil, rec.Globals[model.PropInflation], nil, nil, &Diagnostics{})
-	return func(it model.BudgetItem, d model.Date) (float64, bool) {
-		if !it.IsWages() {
-			return 0, false
-		}
-		gross, ok := BudgetedAmount(rec, it, d)
-		if !ok {
-			return 0, false
-		}
-		y, _, _ := d.YMD()
-		withheld, ok := ht.year(y).withheld[paycheckKey{it.ID, d}]
-		if !ok {
-			return 0, false
-		}
-		return gross - withheld, true
-	}
+	return ht.deposit
 }
 
 func init() { model.NetDeposits = Deposits }

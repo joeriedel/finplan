@@ -61,6 +61,12 @@ func (t *budgetTab) setField(id, field, text string) bool {
 	}
 	f := formOf(old, t.a.rec.Today)
 	f.set(field, text)
+	if field == "paycheck" && text == "" && f.from == "" {
+		// A transfer that is no longer deducted draws from the account the paycheck was deposited into.
+		if src, ok := t.a.rec.Budget.Item(old.Paycheck); ok {
+			f.from = src.Account
+		}
+	}
 	if field == "every" && (f.every == model.OneTime || f.every == model.Biweekly) && strings.TrimSpace(f.date) == "" {
 		f.date = t.a.rec.Today.String()
 	}
@@ -283,6 +289,7 @@ func (t *budgetTab) editor(id string) {
 	if imgui.Checkbox("rises with inflation##"+prefix, &indexed) {
 		t.setField(id, "indexed", boolText(indexed))
 	}
+	t.paycheckField(prefix, formOf(it, t.a.rec.Today), func(field, text string) { t.setField(id, field, text) })
 	imgui.AlignTextToFramePadding()
 	disabledText("timing")
 	imgui.SameLine()
@@ -305,6 +312,43 @@ func (t *budgetTab) editor(id string) {
 	t.timelineEditor(id)
 }
 
+// paycheckField draws, for a transfer into a 401k or TSP account, the checkbox that deducts it from the paychecks of a wages item and, when it is checked, the choice of that item. It draws nothing for a transfer that cannot be deducted.
+func (t *budgetTab) paycheckField(prefix string, f itemForm, set func(field, text string)) {
+	choices := paycheckChoices(t.a.rec, f)
+	if len(choices) == 0 && f.paycheck == "" {
+		return
+	}
+	imgui.SameLine()
+	deducted := f.paycheck != ""
+	if imgui.Checkbox("deducted from paycheck##"+prefix+"deducted", &deducted) {
+		if deducted {
+			set("paycheck", choices[0].ID)
+		} else {
+			set("paycheck", "")
+		}
+	}
+	tooltipOn("Take this contribution from the paychecks of a wages item before they are deposited, as a payroll deduction: it does not leave the paying account, and the paycheck's deposit is lower by it. Its tax, limit and match treatment are unchanged. It must recur on the same schedule as the wages item and not start before it.")
+	if !deducted {
+		return
+	}
+	names := make([]string, len(choices))
+	sel := -1
+	for i, w := range choices {
+		names[i] = w.Name
+		if w.ID == f.paycheck {
+			sel = i
+		}
+	}
+	preview := f.paycheck
+	if w, ok := t.a.rec.Budget.Item(f.paycheck); ok {
+		preview = w.Name
+	}
+	imgui.SameLine()
+	if k := pick(prefix+"paycheck", preview, imgui.FontSize()*14, names, sel); k >= 0 {
+		set("paycheck", choices[k].ID)
+	}
+}
+
 func boolText(b bool) string {
 	if b {
 		return "true"
@@ -318,5 +362,6 @@ func (t *budgetTab) addForm() {
 	if imgui.Checkbox("rises with inflation##newitem", &indexed) {
 		t.addItem.set("indexed", boolText(indexed))
 	}
+	t.paycheckField("newitem", t.addItem, t.addItem.set)
 	formButton("Add##newitem", itemProblem(t.a.rec, t.addItem), t.addItem.untouched(), func() { t.addNewItem() })
 }

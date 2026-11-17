@@ -247,6 +247,14 @@ func budgetedText(v model.PeriodView) string {
 	return formatDollars(v.Budgeted)
 }
 
+// depositNote is the sentence that tells that the amounts of a wages paycheck's period are the deposit that lands in the bank, net of tax and payroll deductions, not the gross; it is empty for the other items.
+func depositNote(v model.PeriodView) string {
+	if v.Gross == 0 {
+		return ""
+	}
+	return ". For a wages paycheck enter the deposit, net of tax and payroll deductions, not the gross"
+}
+
 // recentText is the variance of each recent period of the item, oldest first.
 func recentText(r engine.ItemPeriods) string {
 	var recent []string
@@ -325,7 +333,7 @@ func (t *budgetTab) periods() {
 		if imgui.InputTextWithHint("##expected", formatDollars(v.Budgeted), &expected, 0, nil) {
 			s.expect[id] = expected
 		}
-		tooltipOn("The amount expected for this period only, instead of the budgeted one")
+		tooltipOn("The amount expected for this period only, instead of the budgeted one" + depositNote(v))
 
 		imgui.TableSetColumnIndex(5)
 		posted := s.posted[id]
@@ -337,7 +345,7 @@ func (t *budgetTab) periods() {
 		if imgui.InputTextWithHint("##posted", hint, &posted, 0, nil) {
 			s.posted[id] = posted
 		}
-		tooltipOn("The amount posted in this period so far; it may be more than the budgeted amount")
+		tooltipOn("The amount posted in this period so far; it may be more than the budgeted amount" + depositNote(v))
 
 		imgui.TableSetColumnIndex(6)
 		var names, values []string

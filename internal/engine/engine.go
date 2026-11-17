@@ -981,14 +981,14 @@ func (p *path) remainders(rec *model.Record, it model.BudgetItem, cutoff, upTo m
 		return
 	}
 	eval := func(per model.Period) model.PeriodView {
-		return periodView(rec, it, per, cutoff, amounts, growths, infl)
+		return periodView(rec, it, per, cutoff, p.ht, amounts, growths, infl)
 	}
 	// The paycheck side writes off the remainder of a period it no longer books; the match on it is not booked either.
 	var payPeriods map[model.Date]bool
 	if matchOnly && paid {
 		payPeriods = map[model.Date]bool{}
 		payEval := func(per model.Period) model.PeriodView {
-			return periodView(rec, it, per, payCut, amounts, growths, infl)
+			return periodView(rec, it, per, payCut, p.ht, amounts, growths, infl)
 		}
 		for _, per := range remainderPeriods(rec, it, payCut, upTo, payEval) {
 			payPeriods[per.Start] = true
@@ -1001,15 +1001,18 @@ func (p *path) remainders(rec *model.Record, it model.BudgetItem, cutoff, upTo m
 		v := eval(per)
 		counted := countedAmount(rec, it, per, v, cutoff)
 		if matchOnly && paid {
-			counted = countedAmount(rec, it, per, periodView(rec, it, per, payCut, amounts, growths, infl), payCut)
+			counted = countedAmount(rec, it, per, periodView(rec, it, per, payCut, p.ht, amounts, growths, infl), payCut)
 		}
 		p.bookRemainder(rec, it, per, v, counted, cutoff, upTo)
 	}
 }
 
-// periodView evaluates the item's period against the cutoff with its budgeted amount and occurrence fact.
-func periodView(rec *model.Record, it model.BudgetItem, per model.Period, cutoff model.Date, amounts, growths map[string]model.Schedule, infl model.Schedule) model.PeriodView {
+// periodView evaluates the item's period against the cutoff with its budgeted amount and occurrence fact. A wages paycheck counts its projected net deposit, as the periods the user sees do.
+func periodView(rec *model.Record, it model.BudgetItem, per model.Period, cutoff model.Date, ht *householdTax, amounts, growths map[string]model.Schedule, infl model.Schedule) model.PeriodView {
 	budgeted, _ := amountOn(rec, it, per.Start, amounts, growths, infl)
+	if net, ok := ht.deposit(it, per.Start); ok {
+		budgeted = net
+	}
 	var ov *model.Occurrence
 	if o, found := rec.Occurrences.Get(it.ID, per.Start); found {
 		ov = &o
@@ -1055,10 +1058,6 @@ func remainderBooked(per model.Period, v model.PeriodView, cutoff, upTo model.Da
 func countedAmount(rec *model.Record, it model.BudgetItem, per model.Period, v model.PeriodView, cutoff model.Date) float64 {
 	after, upTo := itemSpan(rec, it, cutoff, model.MaxDate)
 	amt := v.Posted
-	if v.Matched && it.Kind == model.ItemIncome && it.Income() == model.IncomeWages {
-		// Wages are taxed at the gross the item states; the deposit that matched is the net of it.
-		amt = v.Budgeted
-	}
 	if upTo > after {
 		amt += remainderBooked(per, v, after, upTo)
 	}
@@ -1075,12 +1074,12 @@ func (p *path) bookRemainder(rec *model.Record, it model.BudgetItem, per model.P
 	}
 	first := max(per.Start, cutoff+1)
 	if v.Timing == model.Lump || per.End <= cutoff {
-		p.flowsFrom(rec, it, first, v.Remaining, per.Start, share)
+		p.flowsFrom(rec, it, first, v.Remaining, per.Start, share, it.IsWages())
 		return
 	}
 	days := float64(per.End-first) + 1
 	for d := first; d <= min(per.End, upTo); d++ {
-		p.flowsFrom(rec, it, d, v.Remaining/days, per.Start, share/days)
+		p.flowsFrom(rec, it, d, v.Remaining/days, per.Start, share/days, it.IsWages())
 	}
 }
 
@@ -1344,20 +1343,23 @@ func (p *path) settleLegs(from model.Date, keep int) {
 }
 
 func (p *path) flows(rec *model.Record, it model.BudgetItem, d model.Date, amt float64) {
-	p.flowsFrom(rec, it, d, amt, d, 1)
+	p.flowsFrom(rec, it, d, amt, d, 1, false)
 }
 
-// flowsFrom books amt of the item on d as part of its occurrence on sched: a wages paycheck's withholding and the employer match are those of sched, times share.
-func (p *path) flowsFrom(rec *model.Record, it model.BudgetItem, d model.Date, amt float64, sched model.Date, share float64) {
+// flowsFrom books amt of the item on d as part of its occurrence on sched: the employer match of a wages paycheck is that of sched, times share. A wages paycheck's amt is its gross, from which the withholding and payroll deductions of sched, times share, are taken; with deposit set it is already the net deposit, as a remainder is.
+func (p *path) flowsFrom(rec *model.Record, it model.BudgetItem, d model.Date, amt float64, sched model.Date, share float64, deposit bool) {
 	add := func(rank int, cause Cause, amount float64, counter model.AccountID) {
 		p.changes = append(p.changes, change{date: d, cause: cause, amount: amount, counter: counter, rank: rank})
 	}
 	switch it.Kind {
 	case model.ItemIncome:
 		if it.Account == p.acct.ID {
-			add(rankIncome, p.ht.incomeCause(it.ID), amt, "")
-			if it.Income() == model.IncomeWages {
+			wages := it.Income() == model.IncomeWages
+			if wages && !deposit {
+				add(rankIncome, p.ht.incomeCause(it.ID), amt-p.ht.deducted(it.ID, sched)*share, "")
 				add(rankIncome, CauseTax, -p.ht.paycheckTax(it.ID, sched)*share, "")
+			} else {
+				add(rankIncome, p.ht.incomeCause(it.ID), amt, "")
 			}
 		}
 		if it.MatchAccount == p.acct.ID && !p.acct.ClosedOn(d) {

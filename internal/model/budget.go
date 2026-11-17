@@ -211,6 +211,8 @@ type BudgetItem struct {
 	// MatchPercent, MatchUpTo and MatchAccount are the employer match of a wages item: on each paycheck the employer deposits MatchPercent percent of the employee's contributions to MatchAccount, up to MatchUpTo percent of the paycheck's gross. Zero or an empty account means no match.
 	MatchPercent, MatchUpTo float64
 	MatchAccount            AccountID
+	// Paycheck is the id of the wages item whose paychecks a transfer into a 401k or TSP account is deducted from: each occurrence comes out of that paycheck before its deposit, and the transfer has no source account. Empty is an ordinary item.
+	Paycheck string
 	// Timing says when the item's amount is spent within a period; empty reads as the item's default (see EffectiveTiming).
 	Timing Timing
 }
@@ -230,6 +232,11 @@ func (b BudgetItem) Dates(after, upTo Date) []Date {
 		r.Anchor = *b.Start
 	}
 	return r.Between(after, upTo)
+}
+
+// DeductibleFrom reports whether every occurrence of the item is a paycheck of src, so that the item can be deducted from it: src is a wages income item, the item recurs as it does, and it does not start before it.
+func (b BudgetItem) DeductibleFrom(src BudgetItem) bool {
+	return src.IsWages() && b.Recurrence == src.Recurrence && (src.Start == nil || b.Start != nil && *b.Start >= *src.Start)
 }
 
 // Touches reports whether the item changes the account's balance.

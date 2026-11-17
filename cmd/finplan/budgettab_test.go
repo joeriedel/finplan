@@ -56,7 +56,7 @@ func TestBudgetTabGroupsRowsAndTotals(t *testing.T) {
 	if r := byID["salary-b"]; r.Schedule != "every 2 weeks from 2024-11-08" || r.Monthly != "$8,016.67" {
 		t.Errorf("salary-b row %+v", r)
 	}
-	if r := byID["save-401k"]; r.Accounts != accountName(a.rec, demodata.Checking)+" to "+accountName(a.rec, demodata.K401) || r.Monthly != "$1,000" || r.Growth != "" {
+	if r := byID["save-401k"]; r.Accounts != "paycheck of Salary (Parent A) to "+accountName(a.rec, demodata.K401) || r.Monthly != "$1,000" || r.Growth != "" {
 		t.Errorf("transfer row %+v", r)
 	}
 

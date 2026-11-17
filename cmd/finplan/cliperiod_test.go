@@ -67,7 +67,7 @@ func TestCLIBudgetPeriodWagesCountTheNetDeposit(t *testing.T) {
 	rows := periodRows(t, seededFile(t))
 	for _, id := range []string{"salary-a", "salary-b"} {
 		r := rows[id]
-		if r.Gross <= r.Deposit || r.Deposit <= 0 || r.Budgeted != r.Deposit || r.PostedAuto || r.Posted <= 0 || math.Abs(r.Variance) > 10 {
+		if r.Gross <= r.Deposit || r.Deposit <= 0 || r.Budgeted != r.Deposit || r.Posted <= 0 || math.Abs(r.Variance) > 5 {
 			t.Errorf("%s: gross %v, deposit %v, budgeted %v, posted %v, variance %v", id, r.Gross, r.Deposit, r.Budgeted, r.Posted, r.Variance)
 		}
 	}

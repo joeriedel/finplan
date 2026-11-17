@@ -351,7 +351,10 @@ func TestCLITaxYearMatchesBreakdown(t *testing.T) {
 	if y27.Reconciliation.Date != "2028-04-15" || y27.Reconciliation.Account == nil || *y27.Reconciliation.Account != "checking" {
 		t.Errorf("reconciliation = %+v", y27.Reconciliation)
 	}
-	nearTo(t, "withheld total", y27.Withheld.Total, y27.Withheld.Paychecks+y27.Withheld.Vests)
+	// Each figure is rounded to the cent on its own, so the parts may stray a cent from the total.
+	if math.Abs(y27.Withheld.Total-(y27.Withheld.Paychecks+y27.Withheld.Vests)) > 0.015 {
+		t.Errorf("withheld total = %v, want %v", y27.Withheld.Total, y27.Withheld.Paychecks+y27.Withheld.Vests)
+	}
 	if math.Abs(y27.Due-(y27.Tax.Total-y27.Withheld.Total)) > 0.02 || y27.Reconciliation.Amount != y27.Due {
 		t.Errorf("due %v, tax %v, withheld %v, reconciliation %v", y27.Due, y27.Tax.Total, y27.Withheld.Total, y27.Reconciliation.Amount)
 	}

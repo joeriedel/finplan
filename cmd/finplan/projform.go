@@ -100,8 +100,10 @@ type itemForm struct {
 	// matchPercent and matchUpTo are the texts of the employer match of a wages income item, and matchAccount the account it goes into.
 	matchPercent, matchUpTo string
 	matchAccount            model.AccountID
-	amountSched             bool
-	growthSched             bool
+	// paycheck is the id of the wages item a transfer is deducted from, empty for an ordinary one.
+	paycheck    string
+	amountSched bool
+	growthSched bool
 }
 
 // isPlain reports whether the schedule is a single number that always holds, or empty: what a plain number field can show and write without losing anything.
@@ -131,7 +133,7 @@ func valueNow(s model.Schedule, today model.Date) float64 {
 // formOf returns the form that shows the item as it is on today.
 func formOf(it model.BudgetItem, today model.Date) itemForm {
 	r := it.Recurrence
-	f := itemForm{kind: it.Kind, name: it.Name, amount: trimFloat(valueNow(it.Amount, today)), every: r.Kind, unit: r.Unit, account: it.Account, from: it.From, to: it.To, indexed: it.Indexed, income: it.IncomeType, timing: it.Timing, matchAccount: it.MatchAccount, amountSched: !isPlain(it.Amount), growthSched: !isPlain(it.Growth)}
+	f := itemForm{kind: it.Kind, name: it.Name, amount: trimFloat(valueNow(it.Amount, today)), every: r.Kind, unit: r.Unit, account: it.Account, from: it.From, to: it.To, indexed: it.Indexed, income: it.IncomeType, timing: it.Timing, matchAccount: it.MatchAccount, paycheck: it.Paycheck, amountSched: !isPlain(it.Amount), growthSched: !isPlain(it.Growth)}
 	switch {
 	case r.Kind == model.OneTime || r.Kind == model.Biweekly:
 		f.date = r.Anchor.String()
@@ -165,7 +167,7 @@ func formOf(it model.BudgetItem, today model.Date) itemForm {
 	return f
 }
 
-// set changes one field: kind, name, amount, growth, every, date, day, day2, month, count, unit, end, account, from, to, income (an income type), timing or indexed (text "true" or "false").
+// set changes one field: kind, name, amount, growth, every, date, day, day2, month, count, unit, end, account, from, to, income (an income type), timing, paycheck (the id of the wages item a transfer is deducted from) or indexed (text "true" or "false").
 func (f *itemForm) set(field, text string) {
 	switch field {
 	case "kind":
@@ -182,6 +184,8 @@ func (f *itemForm) set(field, text string) {
 		f.matchUpTo = text
 	case "matchaccount":
 		f.matchAccount = model.AccountID(text)
+	case "paycheck":
+		f.paycheck = text
 	case "name":
 		f.name = text
 	case "amount":
@@ -317,7 +321,12 @@ func (f itemForm) item(today model.Date) (model.BudgetItem, error) {
 			return it, errors.New("pick an account")
 		}
 	case model.ItemTransfer:
-		if f.from == "" || f.to == "" {
+		if f.paycheck != "" {
+			if f.to == "" {
+				return it, errors.New("pick the account the money moves to")
+			}
+			it.Paycheck = f.paycheck
+		} else if f.from == "" || f.to == "" {
 			return it, errors.New("pick the accounts the money moves from and to")
 		}
 	}
@@ -411,6 +420,24 @@ func needInt(s, what string) (int, error) {
 		return 0, fmt.Errorf("enter %s as a whole number", what)
 	}
 	return n, nil
+}
+
+// paycheckChoices lists the wages items of rec a transfer into the form's account can be deducted from: it must be a transfer into a tax-deferred 401k or TSP account, and the wages item must be one the form's item recurs with. Where the form does not yet describe an item, every wages item is offered and ops says what does not fit.
+func paycheckChoices(rec *model.Record, f itemForm) []model.BudgetItem {
+	if f.kind != model.ItemTransfer {
+		return nil
+	}
+	if a := rec.Account(f.to); a == nil || a.Type != model.Type401k && a.Type != model.TypeTSP || a.Tax != model.TaxDeferred {
+		return nil
+	}
+	it, err := f.item(rec.Today)
+	var out []model.BudgetItem
+	for _, w := range rec.Budget.Items {
+		if w.IsWages() && (err != nil || it.DeductibleFrom(w)) {
+			out = append(out, w)
+		}
+	}
+	return out
 }
 
 // itemProblem says why the budget item the form describes cannot be added, or "" if it can.

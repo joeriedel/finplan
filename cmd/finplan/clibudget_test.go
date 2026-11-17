@@ -29,6 +29,8 @@ func TestCLIBudgetListAndTotals(t *testing.T) {
 		Account    *string
 		From, To   *string
 		Recurrence struct{ Kind string }
+
+		DeductedFrom *string `json:"deducted_from"`
 	}
 	cliJSON(t, &items, "--demo", "budget", "list")
 	kinds := map[string]int{}
@@ -40,7 +42,7 @@ func TestCLIBudgetListAndTotals(t *testing.T) {
 		if it.ID == "salary-a" && (it.Recurrence.Kind != "semimonthly" || it.Amount != 5000 || !it.Indexed || it.Account == nil || *it.Account != "checking") {
 			t.Errorf("salary-a = %+v", it)
 		}
-		if it.ID == "save-401k" && (it.Kind != "transfer" || it.From == nil || it.To == nil || it.Account != nil) {
+		if it.ID == "save-401k" && (it.Kind != "transfer" || it.From != nil || it.To == nil || it.Account != nil || it.DeductedFrom == nil || *it.DeductedFrom != "salary-a") {
 			t.Errorf("save-401k = %+v", it)
 		}
 	}

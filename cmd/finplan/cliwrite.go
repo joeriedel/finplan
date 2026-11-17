@@ -78,6 +78,7 @@ func itemFlags(forAdd bool) []flagDef {
 		{Name: "match-percent", Type: typeNumber, Description: "employer match of a wages income item: the percent of the employee's contributions to --match-account the employer deposits, 100 for dollar for dollar (0 for none)"},
 		{Name: "match-up-to", Type: typeNumber, Description: "employer match of a wages income item: the match counts contributions up to this percent of each paycheck's gross, 0 to 100"},
 		{Name: "match-account", Type: typeString, Description: "employer match of a wages income item: the 401k or TSP account the match is deposited into and whose contributions it matches; none removes it"},
+		{Name: "deducted-from", Type: typeString, Description: "a transfer into a 401k or TSP account is taken from the paychecks of this wages income item, by id or name, before they are deposited, and has no --from; it must recur on the same schedule as the wages item and not start before it. Its tax and limit treatment are those of the contribution; none makes it an ordinary transfer again"},
 		{Name: "growth", Type: typeNumber, Description: "annual raise as a fraction, 0.03 for 3%: the amount steps up by it on each anniversary of the item's start (0 for none); a schedule of raises comes as JSON input"},
 	}
 	if forAdd {
@@ -1183,10 +1184,12 @@ type itemInput struct {
 	// Timing is lump or spread; empty for the item's default.
 	Timing string `json:"timing"`
 	// Match is the employer match of a wages income item; absent or null for none.
-	Match   *matchInput `json:"match"`
-	Account string      `json:"account"`
-	From    string      `json:"from"`
-	To      string      `json:"to"`
+	Match *matchInput `json:"match"`
+	// DeductedFrom is the id or name of the wages item a transfer is deducted from; empty for an ordinary item.
+	DeductedFrom string `json:"deducted_from"`
+	Account      string `json:"account"`
+	From         string `json:"from"`
+	To           string `json:"to"`
 
 	// A schedule, when present, is used; an Amount or Growth given with it must agree with it. An empty GrowthSchedule is no growth.
 	AmountSchedule []segInput `json:"amount_schedule"`
@@ -1246,6 +1249,11 @@ func (c *call) itemJSON(base *model.BudgetItem) (model.BudgetItem, error) {
 	_, rec, err := c.open()
 	if err != nil {
 		return it, err
+	}
+	if in.DeductedFrom != "" {
+		if it.Paycheck, err = c.itemRef(in.DeductedFrom); err != nil {
+			return it, err
+		}
 	}
 	if in.AmountSchedule != nil {
 		it.Amount, err = scheduleOf(in.AmountSchedule)
@@ -1416,6 +1424,16 @@ func (c *call) itemFromFlags(base *model.BudgetItem) (model.BudgetItem, error) {
 				return it, err
 			}
 			it.MatchAccount = id
+		}
+	}
+	if c.set["deducted-from"] {
+		it.Paycheck = ""
+		if c.str("deducted-from") != "none" {
+			id, err := c.itemRef(c.str("deducted-from"))
+			if err != nil {
+				return it, err
+			}
+			it.Paycheck = id
 		}
 	}
 	if v, ok, err := c.number("growth"); err != nil {

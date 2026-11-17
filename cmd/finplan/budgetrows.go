@@ -60,7 +60,13 @@ func budgetGroups(rec *model.Record) []budgetGroup {
 // budgetRowOf describes the item for the Budget tab.
 func budgetRowOf(rec *model.Record, it model.BudgetItem) budgetRow {
 	row := budgetRow{ID: it.ID, Name: it.Name, Schedule: scheduleText(it.Recurrence), Amount: formatDollars(valueNow(it.Amount, rec.Today)), Start: "-", End: "-"}
-	if it.Kind == model.ItemTransfer {
+	if it.Paycheck != "" {
+		from := it.Paycheck
+		if w, ok := rec.Budget.Item(it.Paycheck); ok {
+			from = w.Name
+		}
+		row.Accounts = "paycheck of " + from + " to " + budgetAccountName(rec, it.To)
+	} else if it.Kind == model.ItemTransfer {
 		row.Accounts = budgetAccountName(rec, it.From) + " to " + budgetAccountName(rec, it.To)
 	} else {
 		row.Accounts = budgetAccountName(rec, it.Account)

@@ -212,15 +212,19 @@ func (h *householdTax) dates(it model.BudgetItem, year int) []model.Date {
 	return it.Dates(after, upTo)
 }
 
-// amountOn is the amount of the occurrence of the item on d that counts for tax: the budgeted one, or, if the occurrence has a fact for its period, what the fact says (see model.Occurrence.Counted). Where the engine books a remainder for the period, with or without a fact, the occurrence counts what has posted plus the part of that remainder it books; that span ends with the item and its accounts, not with the horizon, so the tax inputs do not depend on the query.
+// amountOn is the amount of the occurrence of the item on d that counts for tax: the budgeted one, or, except for a wages paycheck, if the occurrence has a fact for its period, what the fact says (see model.Occurrence.Counted). Where the engine books a remainder for the period, with or without a fact, the occurrence counts what has posted plus the part of that remainder it books; that span ends with the item and its accounts, not with the horizon, so the tax inputs do not depend on the query.
 func (h *householdTax) amountOn(it model.BudgetItem, d model.Date) (float64, bool) {
 	amt, ok := amountOn(h.rec, it, d, h.amounts, h.growths, h.infl)
+	if it.IsWages() {
+		// The facts of a wages period are deposits, which land net of the tax: the paycheck is taxed at the gross the item states.
+		return amt, ok
+	}
 	if o, found := h.rec.Occurrences.Get(it.ID, d); ok && found {
 		amt = o.Counted(amt)
 	}
 	if cut, ok := h.cuts[it.ID]; ok {
 		eval := func(per model.Period) model.PeriodView {
-			return periodView(h.rec, it, per, cut, h.amounts, h.growths, h.infl)
+			return periodView(h.rec, it, per, cut, h, h.amounts, h.growths, h.infl)
 		}
 		_, upTo := itemSpan(h.rec, it, cut, model.MaxDate)
 		for _, per := range remainderPeriods(h.rec, it, cut, upTo, eval) {
@@ -230,6 +234,38 @@ func (h *householdTax) amountOn(it model.BudgetItem, d model.Date) (float64, boo
 		}
 	}
 	return amt, ok
+}
+
+// deposit is the net deposit of the wages paycheck of the item on d: its gross, less what it withholds and what its payroll deductions take. It reports false when the item has no paycheck on d.
+func (h *householdTax) deposit(it model.BudgetItem, d model.Date) (float64, bool) {
+	if !it.IsWages() {
+		return 0, false
+	}
+	gross, ok := amountOn(h.rec, it, d, h.amounts, h.growths, h.infl)
+	if !ok {
+		return 0, false
+	}
+	y, _, _ := d.YMD()
+	withheld, ok := h.year(y).withheld[paycheckKey{it.ID, d}]
+	if !ok {
+		return 0, false
+	}
+	return gross - withheld - h.deducted(it.ID, d), true
+}
+
+// deducted is what the payroll deductions of the paycheck of the wages item on d take: the amount of each deduction occurring on d, as far as the 401(k) limit lets it move.
+func (h *householdTax) deducted(paycheck string, d model.Date) float64 {
+	y, _, _ := d.YMD()
+	total := 0.0
+	for _, ded := range h.items {
+		if ded.Paycheck != paycheck || !slices.Contains(h.dates(ded, y), d) {
+			continue
+		}
+		if amt, ok := amountOn(h.rec, ded, d, h.amounts, h.growths, h.infl); ok {
+			total += h.moved(ded, d, amt)
+		}
+	}
+	return total
 }
 
 // earlyOn reports whether a withdrawal on d is before the household's earner is 59 and a half. Without an earner none is.

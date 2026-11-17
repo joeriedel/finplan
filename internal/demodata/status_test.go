@@ -40,6 +40,10 @@ func TestStatusInAPastMonth(t *testing.T) {
 		t.Errorf("groceries: %+v", l)
 	}
 	for id, l := range got {
+		// A payroll deduction touches only the TSP account, whose records end earlier.
+		if id == "save-tsp" {
+			continue
+		}
 		if l.Cutoff != d {
 			t.Errorf("%s is evaluated as of %s, not %s", id, l.Cutoff, d)
 		}

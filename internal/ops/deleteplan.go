@@ -204,6 +204,15 @@ func unlinkAccount(next *model.Record, id model.AccountID) []Affected {
 		out = append(out, Affected{AffectedBudgetItem, "budget", itemDetail(it), EffectDeleted})
 		return true
 	})
+	// A payroll deduction goes with the paycheck it is taken from.
+	next.Budget.Items = slices.DeleteFunc(next.Budget.Items, func(it model.BudgetItem) bool {
+		if it.Paycheck == "" || !gone[it.Paycheck] {
+			return false
+		}
+		gone[it.ID] = true
+		out = append(out, Affected{AffectedBudgetItem, "budget", itemDetail(it), EffectDeleted})
+		return true
+	})
 	for _, p := range next.Projections {
 		p.Mods = slices.DeleteFunc(p.Mods, func(m model.Modification) bool {
 			if m.Item == nil || !uses(*m.Item) {

@@ -45,11 +45,17 @@ func checkItemAs(rec *model.Record, it model.BudgetItem, existing *model.BudgetI
 		}
 		it.From, it.To = "", ""
 	case model.ItemTransfer:
-		if it.From == "" || it.To == "" || it.From == it.To {
+		switch {
+		case it.Paycheck != "":
+			// A deduction comes out of a paycheck, not an account.
+			it.From = ""
+			if it.To == "" {
+				return it, refuse(ErrInvalidValue, "a transfer deducted from a paycheck needs the account it goes into")
+			}
+		case it.From == "" || it.To == "" || it.From == it.To:
 			return it, refuse(ErrInvalidValue, "a transfer needs two different accounts, from and to")
-		}
-		// An account of a transfer may be outside the record, but not both.
-		if rec.Account(it.From) == nil && rec.Account(it.To) == nil {
+		case rec.Account(it.From) == nil && rec.Account(it.To) == nil:
+			// An account of a transfer may be outside the record, but not both.
 			return it, refuse(ErrUnknownTarget, "a transfer needs at least one of %q and %q to be an account of the record", it.From, it.To)
 		}
 		it.Account = ""
@@ -112,6 +118,10 @@ func checkItemAs(rec *model.Record, it model.BudgetItem, existing *model.BudgetI
 	if r.Kind != model.Custom {
 		it.Recurrence.Count, it.Recurrence.Unit = 0, ""
 	}
+	it.Start = start
+	if err := checkDeduction(rec, it); err != nil {
+		return it, err
+	}
 	effective := start
 	if effective == nil && r.Anchor != 0 {
 		effective = &r.Anchor
@@ -147,6 +157,42 @@ func checkMatch(rec *model.Record, it model.BudgetItem) error {
 		return refuse(ErrInvalidValue, "the match account %q must be a 401k or TSP account", it.MatchAccount)
 	}
 	return nil
+}
+
+// checkDeduction refuses a payroll deduction that cannot be: one that is not a transfer into a 401k or TSP account, or whose paycheck is not a wages income item of the base budget that every occurrence of the deduction is a paycheck of (see DeductibleFrom). An item with no paycheck is not a deduction.
+func checkDeduction(rec *model.Record, it model.BudgetItem) error {
+	if it.Paycheck == "" {
+		return nil
+	}
+	if it.Kind != model.ItemTransfer {
+		return refuse(ErrInvalidValue, "only a transfer can be deducted from a paycheck")
+	}
+	if a := rec.Account(it.To); a == nil || a.Type != model.Type401k && a.Type != model.TypeTSP || a.Tax != model.TaxDeferred {
+		return refuse(ErrInvalidValue, "a transfer deducted from a paycheck must go into a tax-deferred 401k or TSP account")
+	}
+	src, ok := rec.Budget.Item(it.Paycheck)
+	switch {
+	case !ok:
+		return refuse(ErrUnknownTarget, "there is no budget item %q to deduct from", it.Paycheck)
+	case !src.IsWages():
+		return refuse(ErrInvalidValue, "%q is not a wages income item, so nothing can be deducted from it", it.Paycheck)
+	case !it.DeductibleFrom(src):
+		return refuse(ErrInvalidValue, "a transfer deducted from the paychecks of %q must recur on the same schedule and not start before it", it.Paycheck)
+	}
+	return nil
+}
+
+// releaseDeductions turns the payroll deductions of the wages item id into ordinary transfers out of account, the one its paychecks were deposited into, when next, the item as it becomes (nil for its deletion), is no longer a paycheck every one of them is taken from: the money keeps moving as it did. It returns what it changed.
+func releaseDeductions(rec *model.Record, id string, account model.AccountID, next *model.BudgetItem) []Affected {
+	var out []Affected
+	for i, d := range rec.Budget.Items {
+		if d.Paycheck != id || next != nil && d.DeductibleFrom(*next) {
+			continue
+		}
+		rec.Budget.Items[i].Paycheck, rec.Budget.Items[i].From = "", account
+		out = append(out, Affected{AffectedBudgetItem, "budget", itemDetail(d) + " payroll deduction", EffectRemoved})
+	}
+	return out
 }
 
 // CheckItem returns the reason AddItem would refuse the item, nil if it would not. It is the check AddItem and EditItem make, for editors that show why an input cannot be added. Pass rec.For(projection) to check an item of a projection that defines accounts.
