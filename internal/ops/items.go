@@ -159,7 +159,7 @@ func checkMatch(rec *model.Record, it model.BudgetItem) error {
 	return nil
 }
 
-// checkDeduction refuses a payroll deduction that cannot be: one that is not a transfer into a 401k or TSP account, or whose paycheck is not a wages income item of the base budget that every occurrence of the deduction is a paycheck of (see DeductibleFrom). An item with no paycheck is not a deduction.
+// checkDeduction refuses a payroll deduction that cannot be: one that is not a transfer into a 401k or TSP account, or whose paycheck is not a wages income item of the base budget that it recurs with and starts no earlier than (see DeductibleFrom). An item with no paycheck is not a deduction.
 func checkDeduction(rec *model.Record, it model.BudgetItem) error {
 	if it.Paycheck == "" {
 		return nil
@@ -182,7 +182,7 @@ func checkDeduction(rec *model.Record, it model.BudgetItem) error {
 	return nil
 }
 
-// releaseDeductions turns the payroll deductions of the wages item id into ordinary transfers out of account, the one its paychecks were deposited into, when next, the item as it becomes (nil for its deletion), is no longer a paycheck every one of them is taken from: the money keeps moving as it did. It returns what it changed.
+// releaseDeductions turns the payroll deductions of the wages item id into ordinary transfers out of account, the one its paychecks were deposited into, when next, the item as it becomes (nil for its deletion), is no longer a paycheck they can be deducted from (see DeductibleFrom): the money keeps moving as it did. It returns what it changed.
 func releaseDeductions(rec *model.Record, id string, account model.AccountID, next *model.BudgetItem) []Affected {
 	var out []Affected
 	for i, d := range rec.Budget.Items {

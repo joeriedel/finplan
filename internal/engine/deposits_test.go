@@ -213,3 +213,52 @@ func TestOverriddenDeductionIsWhatTheDepositAndTheAccountSee(t *testing.T) {
 		}
 	}
 }
+
+func TestDepositShownForTheCurrentPaycheckIsTheOneBooked(t *testing.T) {
+	// The gross of the current paycheck is rebuilt from its remainder, which is not bit for bit its budgeted gross for every amount.
+	for i := range 24 {
+		gross := 3846.15 + 13.37*float64(i)
+		rec, _ := depositRecord(t, 0)
+		rec.Budget.Items[0].Amount = model.Constant(gross)
+		rec.Today = d(2026, time.August, 16)
+		rec.Account("chk").AddSnapshot(rec.Today, 5000)
+		occurrence(rec, "salary", d(2026, time.January, 10), model.StatusPending, nil, model.Ptr(0.0))
+		ps, err := Periods(rec, "", rec.Today, 1)
+		must(t, err)
+		var shown float64
+		for _, p := range ps {
+			if p.Item.ID == "salary" {
+				shown = p.Current().Budgeted
+			}
+		}
+		booked := chkOn(t, rec, rec.Today.Add(1)) - chkOn(t, rec, rec.Today)
+		if !near(booked, shown) {
+			t.Errorf("gross %v: the paycheck books %v, the period shows %v", gross, booked, shown)
+		}
+	}
+}
+
+func TestDeductionOfAnEndedPaycheckHasNoPeriod(t *testing.T) {
+	rec, _ := depositRecord(t, 500)
+	end := d(2026, time.December, 31)
+	rec.Budget.Items[0].End = &end
+	has := func(date model.Date) (periods, status bool) {
+		ps, err := Periods(rec, "", date, 1)
+		must(t, err)
+		for _, p := range ps {
+			periods = periods || p.Item.ID == "save"
+		}
+		st, err := StatusAsOf(rec, date)
+		must(t, err)
+		for _, l := range st.Lines {
+			status = status || l.Item.ID == "save"
+		}
+		return
+	}
+	if p, s := has(d(2026, time.December, 12)); !p || !s {
+		t.Errorf("the deduction has periods %v and status %v while its paycheck runs, want both", p, s)
+	}
+	if p, s := has(d(2027, time.January, 12)); p || s {
+		t.Errorf("the deduction has periods %v and status %v after its paycheck ended, want neither", p, s)
+	}
+}

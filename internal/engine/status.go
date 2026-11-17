@@ -60,16 +60,17 @@ func StatusAsOf(rec *model.Record, d model.Date) (StatusView, error) {
 	}
 	asOf := min(d, rec.Today)
 	out := StatusView{Date: d}
+	ht := newDeposits(rec, cutoffs)
 	for _, it := range rec.Budget.Items {
 		cur, ok := it.PeriodAt(d)
-		if !ok || it.End != nil && *it.End < cur.Start {
+		if !ok || it.End != nil && *it.End < cur.Start || it.Paycheck != "" && !ht.sourceBooked(it, cur.Start, false) {
 			continue
 		}
 		cutoff := asOf
 		if c, ok := cutoffs[it.ID]; ok {
 			cutoff = min(cutoff, c)
 		}
-		hist := periodViews(rec, it, d, 1, cutoff, func(p model.Period) *model.PeriodMatch { return rec.PeriodMatchAsOf(it, p, cutoff) })
+		hist := periodViews(rec, ht, it, d, 1, cutoff, func(p model.Period) *model.PeriodMatch { return rec.PeriodMatchAsOf(it, p, cutoff) })
 		ls := LineStatus{Item: it, View: hist[0], Cutoff: cutoff}
 		ls.classify()
 		for _, m := range rec.Matches().Item(it.ID) {

@@ -234,7 +234,7 @@ func (b BudgetItem) Dates(after, upTo Date) []Date {
 	return r.Between(after, upTo)
 }
 
-// DeductibleFrom reports whether every occurrence of the item is a paycheck of src, so that the item can be deducted from it: src is a wages income item, the item recurs as it does, and it does not start before it nor end after it.
+// DeductibleFrom reports whether the item can be deducted from src: src is a wages income item, the item recurs as it does and starts no earlier than it. The engine takes the deduction only on the dates of the paycheck.
 func (b BudgetItem) DeductibleFrom(src BudgetItem) bool {
 	return src.IsWages() && b.Recurrence == src.Recurrence &&
 		(src.Start == nil || b.Start != nil && *b.Start >= *src.Start)

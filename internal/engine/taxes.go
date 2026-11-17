@@ -105,6 +105,8 @@ type paycheck struct {
 	item  string
 	date  model.Date
 	gross float64
+	// changed is set when a fact or remainder moved the paycheck's own gross off its budgeted one.
+	changed bool
 }
 
 type paycheckKey struct {
@@ -221,16 +223,22 @@ func (h *householdTax) amountOn(it model.BudgetItem, d model.Date) (float64, boo
 
 // amountIn is amountOn, or with plain set the amount with every wages paycheck at its budgeted gross.
 func (h *householdTax) amountIn(it model.BudgetItem, d model.Date, plain bool) (float64, bool) {
+	amt, _, ok := h.grossIn(it, d, plain)
+	return amt, ok
+}
+
+// grossIn is amountIn, and whether the amount of a wages paycheck differs from its budgeted gross because of an occurrence fact or a booked remainder.
+func (h *householdTax) grossIn(it model.BudgetItem, d model.Date, plain bool) (float64, bool, bool) {
 	amt, ok := amountOn(h.rec, it, d, h.amounts, h.growths, h.infl)
 	if !ok {
-		return amt, false
+		return amt, false, false
 	}
 	if it.Paycheck != "" && !h.sourceBooked(it, d, plain) {
-		return 0, false
+		return 0, false, false
 	}
 	wages := it.IsWages()
 	if wages && plain {
-		return amt, true
+		return amt, false, true
 	}
 	o, found := h.rec.Occurrences.Get(it.ID, d)
 	cut, cutOK := h.cuts[it.ID]
@@ -240,13 +248,13 @@ func (h *householdTax) amountIn(it model.BudgetItem, d model.Date, plain bool) (
 		cutOK = ok && d <= cur.End
 	}
 	if !found && !cutOK {
-		return amt, true
+		return amt, false, true
 	}
 	net := amt
 	if wages {
 		var ok bool
 		if net, ok = h.depositIn(it, d, true); !ok || net <= 0 {
-			return amt, true
+			return amt, false, true
 		}
 	}
 	counted := net
@@ -265,9 +273,12 @@ func (h *householdTax) amountIn(it model.BudgetItem, d model.Date, plain bool) (
 		}
 	}
 	if wages {
-		return amt * counted / net, true
+		if counted == net {
+			return amt, false, true
+		}
+		return amt * counted / net, true, true
 	}
-	return counted, true
+	return counted, false, true
 }
 
 // sourceBooked reports whether the paycheck the payroll deduction is taken from is booked on d: it recurs then, within its own span, and counts for something.
@@ -289,7 +300,7 @@ func (h *householdTax) deposit(it model.BudgetItem, d model.Date) (float64, bool
 	return h.depositIn(it, d, false)
 }
 
-// depositIn is deposit, or with plain set the deposit in the plain year, which does not depend on the occurrence facts of the wages paychecks. The year itself withholds from the paychecks as the facts leave them, so a paycheck whose own gross a fact or remainder changes is taken in the plain year too.
+// depositIn is deposit, or with plain set the deposit in the plain year, which does not depend on the occurrence facts of the wages paychecks. The year itself withholds from the paychecks as the facts leave them, so a paycheck whose own gross a fact or remainder changes, or that the year leaves out, is taken in the plain year too.
 func (h *householdTax) depositIn(it model.BudgetItem, d model.Date, plain bool) (float64, bool) {
 	if !it.IsWages() {
 		return 0, false
@@ -301,7 +312,7 @@ func (h *householdTax) depositIn(it model.BudgetItem, d model.Date, plain bool) 
 	y, _, _ := d.YMD()
 	if !plain {
 		k := paycheckKey{it.ID, d}
-		if in := h.year(y); slices.Contains(in.paychecks, paycheck{it.ID, d, gross}) {
+		if in := h.year(y); slices.Contains(in.paychecks, paycheck{it.ID, d, gross, false}) {
 			return gross - in.withheld[k] - h.deducted(it.ID, d, false), true
 		}
 	}
@@ -372,12 +383,12 @@ func (h *householdTax) build(y int, plain bool) *yearInputs {
 				continue
 			}
 			for _, d := range h.dates(it, y) {
-				amt, ok := h.amountIn(it, d, plain)
+				amt, changed, ok := h.grossIn(it, d, plain)
 				if !ok {
 					continue
 				}
 				if it.Income() == model.IncomeWages {
-					in.paychecks = append(in.paychecks, paycheck{it.ID, d, amt})
+					in.paychecks = append(in.paychecks, paycheck{it.ID, d, amt, changed})
 					in.wages += amt
 				} else if k, ok := h.benefits[it.ID]; ok && k.socialSecurity() {
 					in.benefits += amt
