@@ -157,6 +157,8 @@ type householdTax struct {
 	years    map[int]*yearInputs
 	results  map[int]*TaxYear
 	reported map[string]bool
+	// plains are the years computed with every wages paycheck at its budgeted gross, whatever its occurrence fact says: the projected deposits come from them.
+	plains map[int]*yearInputs
 	// savers are the savings and checking paths whose interest is taxed.
 	savers []*path
 	// lots are the paths of taxable investment accounts, whose sales realize gains.
@@ -174,7 +176,7 @@ type householdTax struct {
 func newHouseholdTax(rec *model.Record, items []model.BudgetItem, amounts, growths map[string]model.Schedule, infl model.Schedule, plans []*equityPlan, hypothetical map[string]model.Date, diag *Diagnostics) *householdTax {
 	return &householdTax{
 		rec: rec, items: items, amounts: amounts, growths: growths, infl: infl, plans: plans, hypothetical: hypothetical, diag: diag,
-		years: map[int]*yearInputs{}, results: map[int]*TaxYear{}, reported: map[string]bool{},
+		years: map[int]*yearInputs{}, plains: map[int]*yearInputs{}, results: map[int]*TaxYear{}, reported: map[string]bool{},
 	}
 }
 
@@ -212,57 +214,103 @@ func (h *householdTax) dates(it model.BudgetItem, year int) []model.Date {
 	return it.Dates(after, upTo)
 }
 
-// amountOn is the amount of the occurrence of the item on d that counts for tax: the budgeted one, or, except for a wages paycheck, if the occurrence has a fact for its period, what the fact says (see model.Occurrence.Counted). Where the engine books a remainder for the period, with or without a fact, the occurrence counts what has posted plus the part of that remainder it books; that span ends with the item and its accounts, not with the horizon, so the tax inputs do not depend on the query.
+// amountOn is the amount of the occurrence of the item on d that counts for tax: the budgeted one, or, if the occurrence has a fact for its period, what the fact says (see model.Occurrence.Counted). Where the engine books a remainder for the period, with or without a fact, the occurrence counts what has posted plus the part of that remainder it books; that span ends with the item and its accounts, not with the horizon, so the tax inputs do not depend on the query. The facts of a wages period are deposits, which land net of the tax: the paycheck counts its gross in the proportion the deposit is of its projected net deposit, so that a deposit as projected taxes the whole gross and no deposit none. A payroll deduction counts only on the dates its paycheck does.
 func (h *householdTax) amountOn(it model.BudgetItem, d model.Date) (float64, bool) {
+	return h.amountIn(it, d, false)
+}
+
+// amountIn is amountOn, or with plain set the amount with every wages paycheck at its budgeted gross.
+func (h *householdTax) amountIn(it model.BudgetItem, d model.Date, plain bool) (float64, bool) {
 	amt, ok := amountOn(h.rec, it, d, h.amounts, h.growths, h.infl)
-	if it.IsWages() {
-		// The facts of a wages period are deposits, which land net of the tax: the paycheck is taxed at the gross the item states.
-		return amt, ok
+	if !ok {
+		return amt, false
 	}
-	if o, found := h.rec.Occurrences.Get(it.ID, d); ok && found {
-		amt = o.Counted(amt)
+	if it.Paycheck != "" && !h.sourceBooked(it, d, plain) {
+		return 0, false
 	}
-	if cut, ok := h.cuts[it.ID]; ok {
+	wages := it.IsWages()
+	if wages && plain {
+		return amt, true
+	}
+	o, found := h.rec.Occurrences.Get(it.ID, d)
+	cut, cutOK := h.cuts[it.ID]
+	if cutOK && !found {
+		// Without a fact only the period of the cutoff and the one before it have a remainder.
+		cur, ok := it.PeriodAt(cut)
+		cutOK = ok && d <= cur.End
+	}
+	if !found && !cutOK {
+		return amt, true
+	}
+	net := amt
+	if wages {
+		var ok bool
+		if net, ok = h.deposit(it, d); !ok || net <= 0 {
+			return amt, true
+		}
+	}
+	counted := net
+	if found {
+		counted = o.Counted(net)
+	}
+	if cutOK {
 		eval := func(per model.Period) model.PeriodView {
 			return periodView(h.rec, it, per, cut, h, h.amounts, h.growths, h.infl)
 		}
 		_, upTo := itemSpan(h.rec, it, cut, model.MaxDate)
 		for _, per := range remainderPeriods(h.rec, it, cut, upTo, eval) {
 			if per.Start == d {
-				amt = countedAmount(h.rec, it, per, eval(per), cut)
+				counted = countedAmount(h.rec, it, per, eval(per), cut)
 			}
 		}
 	}
-	return amt, ok
+	if wages {
+		return amt * counted / net, true
+	}
+	return counted, true
 }
 
-// deposit is the net deposit of the wages paycheck of the item on d: its gross, less what it withholds and what its payroll deductions take. It reports false when the item has no paycheck on d.
+// sourceBooked reports whether the paycheck the payroll deduction is taken from is booked on d: it recurs then, within its own span, and counts for something.
+func (h *householdTax) sourceBooked(ded model.BudgetItem, d model.Date, plain bool) bool {
+	i := slices.IndexFunc(h.items, func(it model.BudgetItem) bool { return it.ID == ded.Paycheck })
+	if i < 0 {
+		return false
+	}
+	y, _, _ := d.YMD()
+	if !slices.Contains(h.dates(h.items[i], y), d) {
+		return false
+	}
+	gross, ok := h.amountIn(h.items[i], d, plain)
+	return ok && gross != 0
+}
+
+// deposit is the net deposit projected for the wages paycheck of the item on d, whatever its occurrence fact says: its gross, less what it withholds and what its payroll deductions take. It reports false when the item has no paycheck on d.
 func (h *householdTax) deposit(it model.BudgetItem, d model.Date) (float64, bool) {
 	if !it.IsWages() {
 		return 0, false
 	}
-	gross, ok := amountOn(h.rec, it, d, h.amounts, h.growths, h.infl)
+	gross, ok := h.amountIn(it, d, true)
 	if !ok {
 		return 0, false
 	}
 	y, _, _ := d.YMD()
-	withheld, ok := h.year(y).withheld[paycheckKey{it.ID, d}]
+	withheld, ok := h.plainYear(y).withheld[paycheckKey{it.ID, d}]
 	if !ok {
 		return 0, false
 	}
-	return gross - withheld - h.deducted(it.ID, d), true
+	return gross - withheld - h.deducted(it.ID, d, true), true
 }
 
-// deducted is what the payroll deductions of the paycheck of the wages item on d take: the amount of each deduction occurring on d, as far as the 401(k) limit lets it move.
-func (h *householdTax) deducted(paycheck string, d model.Date) float64 {
+// deducted is what the payroll deductions of the paycheck of the wages item on d take: the amount each deduction occurring on d counts, as far as the 401(k) limit lets it move, which is what its account receives.
+func (h *householdTax) deducted(paycheck string, d model.Date, plain bool) float64 {
 	y, _, _ := d.YMD()
 	total := 0.0
 	for _, ded := range h.items {
 		if ded.Paycheck != paycheck || !slices.Contains(h.dates(ded, y), d) {
 			continue
 		}
-		if amt, ok := amountOn(h.rec, ded, d, h.amounts, h.growths, h.infl); ok {
-			total += h.moved(ded, d, amt)
+		if amt, ok := h.amountIn(ded, d, plain); ok {
+			total += h.movedIn(ded, d, amt, plain)
 		}
 	}
 	return total
@@ -286,13 +334,22 @@ func (h *householdTax) earlyOn(d model.Date) bool {
 }
 
 // year returns the year's inputs, computing the withholding of its paychecks on first use.
-func (h *householdTax) year(y int) *yearInputs {
-	if in, ok := h.years[y]; ok {
+func (h *householdTax) year(y int) *yearInputs { return h.build(y, false) }
+
+// plainYear is the year's inputs with every wages paycheck at its budgeted gross.
+func (h *householdTax) plainYear(y int) *yearInputs { return h.build(y, true) }
+
+func (h *householdTax) build(y int, plain bool) *yearInputs {
+	cache := h.years
+	if plain {
+		cache = h.plains
+	}
+	if in, ok := cache[y]; ok {
 		return in
 	}
 	in := &yearInputs{contrib529: map[model.AccountID]float64{}, withheld: map[paycheckKey]float64{}, moved: map[paycheckKey]float64{}, gross: map[paycheckKey]float64{}, refused: map[model.AccountID]float64{}, matches: map[paycheckKey]float64{}}
 	var contribs []contribution
-	h.years[y] = in
+	cache[y] = in
 	unsheltered := func(id model.AccountID) bool {
 		a := h.rec.Account(id)
 		return a == nil || !a.Tax.Sheltered()
@@ -304,7 +361,7 @@ func (h *householdTax) year(y int) *yearInputs {
 				continue
 			}
 			for _, d := range h.dates(it, y) {
-				amt, ok := h.amountOn(it, d)
+				amt, ok := h.amountIn(it, d, plain)
 				if !ok {
 					continue
 				}
@@ -320,7 +377,7 @@ func (h *householdTax) year(y int) *yearInputs {
 		case model.ItemTransfer:
 			src, dst := h.rec.Account(it.From), h.rec.Account(it.To)
 			for _, d := range h.dates(it, y) {
-				amt, ok := h.amountOn(it, d)
+				amt, ok := h.amountIn(it, d, plain)
 				if !ok {
 					continue
 				}
@@ -416,8 +473,13 @@ func (h *householdTax) limit(y int, in *yearInputs, contribs []contribution) {
 
 // moved is the amount of amt, the part booked of the occurrence of the transfer item scheduled on sched that is moved: the amount, less what the year's 401(k) limit refuses of a contribution to a limited account. A refusal is noted once for the account and year.
 func (h *householdTax) moved(it model.BudgetItem, sched model.Date, amt float64) float64 {
+	return h.movedIn(it, sched, amt, false)
+}
+
+// movedIn is moved in the plain year or, with plain unset, the year itself; the plain one notes nothing.
+func (h *householdTax) movedIn(it model.BudgetItem, sched model.Date, amt float64, plain bool) float64 {
 	y, _, _ := sched.YMD()
-	in := h.year(y)
+	in := h.build(y, plain)
 	moved, ok := in.moved[paycheckKey{it.ID, sched}]
 	if !ok {
 		return amt
@@ -427,7 +489,9 @@ func (h *householdTax) moved(it model.BudgetItem, sched model.Date, amt float64)
 		return amt
 	}
 	a := h.rec.Account(it.To)
-	h.note("the %d 401(k) limit of %.2f refuses %.2f of the contributions to %s (%s): they are capped at the limit and the rest stays in the paying account", y, in.limit, in.refused[a.ID], a.Name, a.ID)
+	if !plain {
+		h.note("the %d 401(k) limit of %.2f refuses %.2f of the contributions to %s (%s): they are capped at the limit and the rest stays in the paying account", y, in.limit, in.refused[a.ID], a.Name, a.ID)
+	}
 	return amt * moved / gross
 }
 

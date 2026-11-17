@@ -1058,6 +1058,10 @@ func remainderBooked(per model.Period, v model.PeriodView, cutoff, upTo model.Da
 func countedAmount(rec *model.Record, it model.BudgetItem, per model.Period, v model.PeriodView, cutoff model.Date) float64 {
 	after, upTo := itemSpan(rec, it, cutoff, model.MaxDate)
 	amt := v.Posted
+	if v.Matched && it.Kind == model.ItemIncome && it.Income() == model.IncomeWages {
+		// A wages deposit that matched counts its projected net, which taxes the whole gross.
+		amt = v.Budgeted
+	}
 	if upTo > after {
 		amt += remainderBooked(per, v, after, upTo)
 	}
@@ -1356,7 +1360,7 @@ func (p *path) flowsFrom(rec *model.Record, it model.BudgetItem, d model.Date, a
 		if it.Account == p.acct.ID {
 			wages := it.Income() == model.IncomeWages
 			if wages && !deposit {
-				add(rankIncome, p.ht.incomeCause(it.ID), amt-p.ht.deducted(it.ID, sched)*share, "")
+				add(rankIncome, p.ht.incomeCause(it.ID), amt-p.ht.deducted(it.ID, sched, false)*share, "")
 				add(rankIncome, CauseTax, -p.ht.paycheckTax(it.ID, sched)*share, "")
 			} else {
 				add(rankIncome, p.ht.incomeCause(it.ID), amt, "")
@@ -1374,6 +1378,9 @@ func (p *path) flowsFrom(rec *model.Record, it model.BudgetItem, d model.Date, a
 		}
 		add(rankExpense, CauseExpense, -amt, "")
 	case model.ItemTransfer:
+		if it.Paycheck != "" && !p.ht.sourceBooked(it, sched, false) {
+			return
+		}
 		amt = p.ht.moved(it, sched, amt)
 		if amt == 0 {
 			return

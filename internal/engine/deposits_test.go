@@ -4,6 +4,7 @@
 package engine
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -99,12 +100,12 @@ func TestWagesOverridesAreDepositsAndNotTaxedAgain(t *testing.T) {
 	if !near(v.Remaining, expected) || !near(*v.Expected, expected) {
 		t.Fatalf("the period is %+v, want 3000 still to deposit", v)
 	}
-	// What is still to come lands as the deposit, with no tax taken from it, and the other paychecks are taxed as before.
+	// What is still to come lands as the deposit, with no tax taken from it, and the projected deposit of the next paycheck stays the same.
 	if got := chkOn(t, rec, d(2026, time.January, 17)); !near(got, 5000+expected) {
 		t.Errorf("checking holds %v after the deposit, want %v", got, 5000+expected)
 	}
 	if got := deposit(t, rec, salary, d(2026, time.February, 10)); !near(got, want) {
-		t.Errorf("the next deposit is %v with the override, %v without: the tax of a paycheck stays at its gross", got, want)
+		t.Errorf("the next deposit is %v with the override, %v without", got, want)
 	}
 }
 
@@ -121,5 +122,55 @@ func TestWagesLumpTieIsBrokenByTheNetDeposit(t *testing.T) {
 	ms := rec.Matches().Item("salary")
 	if len(ms) != 1 || ms[0].Transaction.Date != d(2026, time.January, 12) {
 		t.Errorf("matched %+v, want the deposit of the 12th", ms)
+	}
+}
+
+func TestEndingTheSalaryStopsItsDeduction(t *testing.T) {
+	rec, _ := depositRecord(t, 500)
+	end := d(2026, time.March, 31)
+	rec.Budget.Items[0].End = &end
+	k401 := func(date model.Date) float64 {
+		return sample(t, rec, "", model.DefaultAssetID("k401"), date).Amount
+	}
+	// The paychecks of February and March are still to come; with the salary over nothing more is taken.
+	if got := k401(end); !near(got, 3000+2*500) {
+		t.Errorf("the 401(k) holds %v on %v, want 3000 plus the 2 deductions still to come", got, end)
+	}
+	if got := k401(d(2027, time.June, 30)); !near(got, k401(end)) {
+		t.Errorf("the 401(k) holds %v after the salary ended, want %v", got, k401(end))
+	}
+	if got := taxYear(t, rec, "", 2026).K401; !near(got, 3*500) {
+		t.Errorf("deferrals %v, want those of the 3 paychecks of the year", got)
+	}
+	if got := taxYear(t, rec, "", 2027).K401; got != 0 {
+		t.Errorf("deferrals %v in a year with no wages, want none", got)
+	}
+}
+
+func TestOverriddenDeductionIsWhatTheDepositAndTheAccountSee(t *testing.T) {
+	rec, salary := depositRecord(t, 500)
+	paid := d(2026, time.June, 10)
+	after := d(2026, time.June, 11)
+	// The deposits of the paychecks still to come until the 11th: the deduction also changes the withholding of each a little.
+	deposits := func() (sum float64) {
+		for month := time.February; month <= time.June; month++ {
+			sum += deposit(t, rec, salary, d(2026, month, 10))
+		}
+		return sum
+	}
+	base := deposit(t, rec, salary, paid)
+	sum0, chk0, k0 := deposits(), chkOn(t, rec, after), sample(t, rec, "", model.DefaultAssetID("k401"), after).Amount
+	for _, c := range []struct{ expected, diff float64 }{{0, -500}, {1000, 500}} {
+		occurrence(rec, "save", paid, model.StatusAuto, nil, model.Ptr(c.expected))
+		dep := deposit(t, rec, salary, paid)
+		if c.diff < 0 && dep <= base || c.diff > 0 && dep >= base || math.Abs(dep-base+c.diff) > 250 {
+			t.Errorf("deduction expected %v: deposit %v, want about %v", c.expected, dep, base-c.diff)
+		}
+		if got, want := chkOn(t, rec, after)-chk0, deposits()-sum0; !near(got, want) {
+			t.Errorf("deduction expected %v: checking changed by %v, want the deposits' %v", c.expected, got, want)
+		}
+		if got := sample(t, rec, "", model.DefaultAssetID("k401"), after).Amount - k0; !near(got, c.diff) {
+			t.Errorf("deduction expected %v: the 401(k) changed by %v, want %v", c.expected, got, c.diff)
+		}
 	}
 }

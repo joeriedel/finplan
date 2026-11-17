@@ -162,20 +162,32 @@ func TestVarianceHistoryOfClosedPeriods(t *testing.T) {
 	}
 }
 
-func TestWagesOverrideLeavesTheTaxedGrossAlone(t *testing.T) {
-	// The amounts of a wages period are deposits, which land net of the tax: the paycheck is still taxed at the gross the item states.
-	rec := fixture(t)
+func TestWagesOverrideReachesTaxThroughTheNetDeposit(t *testing.T) {
+	// The facts of a wages period are deposits: the paycheck is taxed at its gross in the proportion the deposit is of its projected net.
+	rec, salary := depositRecord(t, 0)
+	june := d(2026, time.June, 10)
+	net := deposit(t, rec, salary, june)
 	base := taxYear(t, rec, "", 2026)
-	june := d(2026, time.June, 15)
-	for i, set := range []func(){
-		func() { occurrence(rec, "salary", june, model.StatusAuto, model.Ptr(1500.0), nil) },
-		func() { occurrence(rec, "salary", june, model.StatusAuto, nil, model.Ptr(1200.0)) },
-		func() { occurrence(rec, "salary", june, model.StatusPosted, nil, model.Ptr(1200.0)) },
-		func() { occurrence(rec, "salary", june, model.StatusPending, nil, model.Ptr(1200.0)) },
+	for _, c := range []struct {
+		name  string
+		set   func()
+		share float64
+	}{
+		{"expected as projected", func() { occurrence(rec, "salary", june, model.StatusAuto, nil, model.Ptr(net)) }, 1},
+		{"posted with no amount", func() { occurrence(rec, "salary", june, model.StatusPosted, nil, nil) }, 1},
+		{"expected half", func() { occurrence(rec, "salary", june, model.StatusAuto, nil, model.Ptr(net/2)) }, 0.5},
+		{"expected nothing", func() { occurrence(rec, "salary", june, model.StatusAuto, nil, model.Ptr(0.0)) }, 0},
 	} {
-		set()
-		if got := taxYear(t, rec, "", 2026); !near(got.Wages, base.Wages) || !near(got.WithheldPaychecks, base.WithheldPaychecks) {
-			t.Errorf("override %d: wages %v and withheld %v, want %v and %v", i, got.Wages, got.WithheldPaychecks, base.Wages, base.WithheldPaychecks)
+		c.set()
+		got := taxYear(t, rec, "", 2026)
+		if want := base.Wages - 5000*(1-c.share); !near(got.Wages, want) {
+			t.Errorf("%s: wages %v, want %v", c.name, got.Wages, want)
+		}
+		if c.share == 1 && !near(got.WithheldPaychecks, base.WithheldPaychecks) {
+			t.Errorf("%s: withheld %v, want %v", c.name, got.WithheldPaychecks, base.WithheldPaychecks)
+		}
+		if c.share < 1 && got.WithheldPaychecks >= base.WithheldPaychecks {
+			t.Errorf("%s: withheld %v, want less than %v", c.name, got.WithheldPaychecks, base.WithheldPaychecks)
 		}
 	}
 }
@@ -259,7 +271,11 @@ func TestMatchedPaycheckShowsTheDepositAsPostedAndIsTaxedAtItsGross(t *testing.T
 		t.Errorf("period posted %v remaining %v matched %v, want the deposit of 500 posted and nothing remaining", v.Posted, v.Remaining, v.Matched)
 	}
 	full := fixture(t)
-	occurrence(full, "salary", d(2025, time.December, 15), model.StatusAuto, model.Ptr(1000.0), nil)
+	net, ok := Deposits(full)(salary, d(2025, time.December, 15))
+	if !ok {
+		t.Fatal("no paycheck on December 15")
+	}
+	occurrence(full, "salary", d(2025, time.December, 15), model.StatusAuto, nil, model.Ptr(net))
 	want, got := taxYear(t, full, "", 2025), taxYear(t, rec, "", 2025)
 	if !near(got.Wages, want.Wages) || !near(got.WithheldPaychecks, want.WithheldPaychecks) {
 		t.Errorf("wages %v and withheld %v, want %v and %v", got.Wages, got.WithheldPaychecks, want.Wages, want.WithheldPaychecks)
@@ -346,12 +362,16 @@ func TestMatchAfterTheMatchAccountsCutoffIgnoresThePaycheckFact(t *testing.T) {
 }
 
 func TestTaxCountsOnlyTheRemainderTheEngineBooks(t *testing.T) {
-	// The salary ends on November 5, before the cutoff of the 8th: nothing more of the November paycheck is booked, but a wages paycheck is taxed at its gross whatever deposit was posted, so the year counts the 5000 of October and of November.
+	// The salary ends on November 5, before the cutoff of the 8th: nothing more of the November paycheck is booked, so the year counts the 5000 of October and the gross of the deposit of 2000 posted, in the proportion it is of the paycheck's projected net.
 	rec := matchRecord(t)
 	rec.Budget.Items[0].End = model.Ptr(d(2026, time.November, 5))
 	occurrence(rec, "salary", d(2026, time.November, 1), model.StatusAuto, model.Ptr(2000.0), nil)
-	if got := taxYear(t, rec, "", 2026); !near(got.Wages, 10000) {
-		t.Errorf("wages %v, want 10000", got.Wages)
+	net, ok := Deposits(rec)(rec.Budget.Items[0], d(2026, time.November, 1))
+	if !ok {
+		t.Fatal("no paycheck on November 1")
+	}
+	if want := 5000 + 5000*2000/net; !near(taxYear(t, rec, "", 2026).Wages, want) {
+		t.Errorf("wages %v, want %v", taxYear(t, rec, "", 2026).Wages, want)
 	}
 }
 

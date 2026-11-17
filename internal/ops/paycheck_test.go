@@ -98,3 +98,32 @@ func TestAWagesItemThatNoLongerFitsReleasesItsDeductions(t *testing.T) {
 		t.Errorf("save-tsp after its paycheck was deleted: %+v", it)
 	}
 }
+
+func TestEndingAWagesItemEndsItsDeductions(t *testing.T) {
+	st, rec := seed(t)
+	gig := sideGig(t, st, rec)
+	rec = reload(t, st)
+	res, err := AddBudgetItem(st, rec, deductionOf(gig, demodata.K401), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := res.Item.ID
+	end := model.D(2027, 6, 30)
+	res, err = EndBudgetItem(st, reload(t, st), gig.ID, end, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := reload(t, st).Budget.Item(id)
+	if got.Paycheck != gig.ID || got.End == nil || *got.End != end {
+		t.Errorf("the deduction is %+v, want it still taken from %s and ended on %v", got, gig.ID, end)
+	}
+	if len(res.Affected) != 1 || res.Affected[0].Effect != EffectEnded {
+		t.Errorf("affected %+v, want the deduction listed as ended", res.Affected)
+	}
+	late := deductionOf(gig, demodata.K401)
+	late.End = model.Ptr(model.D(2028, 1, 15))
+	late.Paycheck = gig.ID
+	if err := CheckItem(reload(t, st), late); err == nil {
+		t.Error("a deduction that ends after its paycheck was accepted")
+	}
+}

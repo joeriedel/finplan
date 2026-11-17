@@ -55,7 +55,7 @@ func EditBudgetItem(st *store.Store, rec *model.Record, id string, item model.Bu
 	})
 }
 
-// EndBudgetItem makes the last date of the base budget item the given one. An end before the item's start is refused.
+// EndBudgetItem makes the last date of the base budget item the given one. An end before the item's start is refused. The payroll deductions taken from a wages item end with it and are listed in the result's Affected.
 func EndBudgetItem(st *store.Store, rec *model.Record, id string, end model.Date, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		i, err := baseItem(next, id)
@@ -69,7 +69,20 @@ func EndBudgetItem(st *store.Store, rec *model.Record, id string, end model.Date
 			return Result{}, err
 		}
 		next.Budget.Items[i] = it
-		return Result{Item: &it}, nil
+		var ended []Affected
+		for j, d := range next.Budget.Items {
+			if d.Paycheck != id || d.End != nil && *d.End <= end {
+				continue
+			}
+			d.End = &end
+			d, err := checkItemAs(next, d, &next.Budget.Items[j])
+			if err != nil {
+				return Result{}, err
+			}
+			next.Budget.Items[j] = d
+			ended = append(ended, Affected{AffectedBudgetItem, "budget", itemDetail(d) + " payroll deduction", EffectEnded})
+		}
+		return Result{Item: &it, Affected: ended}, nil
 	})
 }
 
