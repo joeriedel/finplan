@@ -32,9 +32,10 @@ type marketsTab struct {
 
 // Tooltips of the Markets tab.
 const (
-	returnTip      = "Average yearly return assumed for projections."
-	volatilityTip  = "How much the yearly return swings: its standard deviation. 16% means about two years in three land within 16 points of the expected return. Used only by Monte Carlo."
-	correlationTip = "How two classes move together: 1 always together, 0 unrelated, -1 opposite. Used only by Monte Carlo."
+	returnTip          = "Average yearly return assumed for projections."
+	volatilityTip      = "How much the yearly return swings: its standard deviation. 16% means about two years in three land within 16 points of the expected return. Used only by Monte Carlo."
+	stockVolatilityTip = "How much the stock's price swings over a year: its standard deviation. 35% is assumed while none is set; clear the field to unset it. Used only by Monte Carlo."
+	correlationTip     = "How two classes move together: 1 always together, 0 unrelated, -1 opposite. Used only by Monte Carlo."
 )
 
 func (t *marketsTab) reset() {
@@ -67,6 +68,8 @@ func (t *marketsTab) draw() {
 		t.addForm()
 		imgui.Spacing()
 		t.correlations()
+		imgui.Spacing()
+		t.stocks()
 	}
 	imgui.EndChild()
 	imgui.SameLine()
@@ -156,6 +159,82 @@ func (t *marketsTab) editClass(id, field, text string) {
 	}
 	if !t.a.edit("change market class", func() (*ops.Result, error) {
 		return ops.EditClass(t.a.st, t.a.rec, id, ch, ops.Options{})
+	}) {
+		if t.a.unchanged {
+			delete(t.bufs, fid)
+			delete(t.errs, fid)
+		}
+	}
+}
+
+// stocks draws the Stocks table: each stock the record knows with its volatility, edited in place; a stock with none set shows the default as a hint.
+func (t *marketsTab) stocks() {
+	em := imgui.FontSize()
+	imgui.SeparatorText("Stocks")
+	tooltipOn(stockVolatilityTip)
+	symbols := t.rec.Symbols()
+	if len(symbols) == 0 {
+		disabledText("No stocks yet: a grant or a price names one.")
+		return
+	}
+	if !imgui.BeginTableV("##stocks", 2, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
+		return
+	}
+	defer imgui.EndTable()
+	imgui.TableSetupColumnV("Stock", 0, 2, 0)
+	imgui.TableSetupColumnV("Volatility", imgui.TableColumnFlagsWidthFixed, em*9, 0)
+	imgui.TableNextRowV(imgui.TableRowFlagsHeaders, 0)
+	for i, tip := range []string{"", stockVolatilityTip} {
+		imgui.TableSetColumnIndex(int32(i))
+		imgui.TableHeader(imgui.TableGetColumnNameIntV(int32(i)))
+		if tip != "" {
+			tooltipOn(tip)
+		}
+	}
+	for _, s := range symbols {
+		imgui.PushIDStr("stock" + s)
+		imgui.TableNextRowV(0, 0)
+		imgui.TableSetColumnIndex(0)
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted(s)
+		imgui.TableSetColumnIndex(1)
+		if text, done := t.fieldTip("stockvol"+s, formatPercentText(model.DefaultStockVolatility), stockVolatilityText(t.rec, s), stockVolatilityTip, em*8); done {
+			t.editStockVolatility(s, text)
+		}
+		imgui.PopID()
+	}
+}
+
+// stockVolatilityText is the volatility set for the stock as a percent, blank while none is set.
+func stockVolatilityText(rec *model.Record, symbol string) string {
+	if v, ok := rec.StockVolatility[symbol]; ok {
+		return formatPercentText(v)
+	}
+	return ""
+}
+
+// stockVolatility reads the text typed into a stock's volatility field: blank clears the setting, which the nil result stands for.
+func stockVolatility(text string) (*float64, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, nil
+	}
+	v, err := parsePercentText(text)
+	if err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+// editStockVolatility changes the volatility of the stock through ops.SetStockVolatility; a refusal is told to the user.
+func (t *marketsTab) editStockVolatility(symbol, text string) {
+	fid := "stockvol" + symbol
+	v, err := stockVolatility(text)
+	if err != nil {
+		t.errs[fid] = err.Error()
+		return
+	}
+	if !t.a.edit("change stock volatility", func() (*ops.Result, error) {
+		return ops.SetStockVolatility(t.a.st, t.a.rec, symbol, v, ops.Options{})
 	}) {
 		if t.a.unchanged {
 			delete(t.bufs, fid)

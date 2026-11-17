@@ -4,6 +4,7 @@
 package graph
 
 import (
+	"slices"
 	"time"
 
 	"github.com/joeriedel/finplan/internal/model"
@@ -108,4 +109,22 @@ func (b RangeButton) Span(today, dataStart model.Date) (from, to model.Date) {
 		return from, add(12 * HorizonYears)
 	}
 	return add(-max(b.Years, 1)), add(12 * b.Years)
+}
+
+// LifespanAge is the age of the household's first earner that the lifespan range reaches.
+const LifespanAge = 95
+
+// LifespanSpan returns the visible dates for the lifespan range, a month before today to the day the household's first earner (the first member with the earner role and a birth date) turns LifespanAge, and that earner's name. It reports false when there is no such earner or they are already that age.
+func LifespanSpan(h model.Household, today model.Date) (from, to model.Date, name string, ok bool) {
+	i := slices.IndexFunc(h.Members, func(m model.HouseholdMember) bool { return m.Role == model.RoleEarner && m.Birth != 0 })
+	if i < 0 {
+		return 0, 0, "", false
+	}
+	y, m, d := h.Members[i].Birth.YMD()
+	to = model.D(y+LifespanAge, m, d)
+	if to <= today {
+		return 0, 0, "", false
+	}
+	t := today.Time()
+	return model.D(t.Year(), t.Month()-1, t.Day()), to, h.Members[i].Name, true
 }

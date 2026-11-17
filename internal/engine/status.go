@@ -67,10 +67,12 @@ func StatusAsOf(rec *model.Record, d model.Date) (StatusView, error) {
 			continue
 		}
 		cutoff := asOf
-		if c, ok := cutoffs[it.ID]; ok {
+		if c, ok := cutoffs[cutoffID(rec, it)]; ok {
 			cutoff = min(cutoff, c)
 		}
-		hist := periodViews(rec, ht, it, d, 1, cutoff, func(p model.Period) *model.PeriodMatch { return rec.PeriodMatchAsOf(it, p, cutoff) })
+		hist := periodViews(rec, ht, it, d, 1, cutoff, func(it model.BudgetItem, p model.Period) *model.PeriodMatch {
+			return rec.PeriodMatchAsOf(it, p, cutoff)
+		})
 		ls := LineStatus{Item: it, View: hist[0], Cutoff: cutoff}
 		ls.classify()
 		for _, m := range rec.Matches().Item(it.ID) {

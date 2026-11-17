@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/AllenDang/cimgui-go/implot"
@@ -276,6 +277,11 @@ func (g *graphTab) bandViews(views []lineView) []bandView {
 
 func (g *graphTab) setRange(b graph.RangeButton) {
 	from, to := b.Span(g.rec.Today, g.dataStart)
+	g.setSpan(from, to)
+}
+
+// setSpan shows the dates from..to.
+func (g *graphTab) setSpan(from, to model.Date) {
 	g.xMin, g.xMax = float64(from)*secondsPerDay, float64(to)*secondsPerDay
 	g.applyX, g.fitY = true, true
 }
@@ -346,6 +352,13 @@ func (g *graphTab) toolbar() {
 		if imgui.Button(b.Label) {
 			g.setRange(b)
 		}
+	}
+	if from, to, name, ok := graph.LifespanSpan(g.rec.Household, g.rec.Today); ok {
+		imgui.SameLine()
+		if imgui.Button("Age " + strconv.Itoa(graph.LifespanAge)) {
+			g.setSpan(from, to)
+		}
+		tooltipOn("Show the range up to " + name + " turning " + strconv.Itoa(graph.LifespanAge) + ", on " + to.String())
 	}
 }
 

@@ -18,7 +18,7 @@ import (
 
 func stateTaxRow(t *testing.T, a *app, year int) string {
 	t.Helper()
-	return taxRowValue(t, taxViewOf(a.rec, demodata.ProjBase, year), "State tax (VA)")
+	return taxRowValue(t, taxViewOf(a.rec, demodata.ProjBase, year), "Virginia tax")
 }
 
 func setStateTable(t *testing.T, a *app, s tax.State) {
@@ -109,7 +109,7 @@ func TestNewStateTableFlatRate(t *testing.T) {
 	if want := 0.04 * ty.Result.StateTaxable; ty.Result.StateTax == 0 || math.Abs(ty.Result.StateTax-want) > 0.01 {
 		t.Errorf("state tax %v, want %v", ty.Result.StateTax, want)
 	}
-	if got := taxRowValue(t, taxViewOf(a.rec, demodata.ProjBase, year), "State tax (FLAT)"); got == base {
+	if got := taxRowValue(t, taxViewOf(a.rec, demodata.ProjBase, year), "FLAT tax"); got == base {
 		t.Errorf("state tax stayed %s", base)
 	}
 }

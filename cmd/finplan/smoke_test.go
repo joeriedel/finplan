@@ -240,3 +240,20 @@ func hasTwoColours(img image.Image) bool {
 	}
 	return false
 }
+
+// The --open help names the tab of every state, and says that about is the Graph tab's.
+func TestOpenHelpNamesTheTabOfEachState(t *testing.T) {
+	help := openHelp()
+	for _, n := range openNames {
+		if !strings.Contains(help, n.name+" ("+n.tab+" tab") {
+			t.Errorf("the help does not give the tab of %s", n.name)
+		}
+	}
+	if !strings.Contains(help, "about (Graph tab") || strings.Contains(help, "any tab") {
+		t.Errorf("help %q", help)
+	}
+	_, err := newShotOptions("x.png", "Graph", 1, "1280x800", "", "nothing")
+	if err == nil || !strings.Contains(err.Error(), "about (Graph tab") {
+		t.Errorf("the unknown state error is %v", err)
+	}
+}

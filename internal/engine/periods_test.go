@@ -449,3 +449,68 @@ func TestSpreadPeriodCutShortWithoutAFactBooksTaxAndMatchInTheShareOfWhatIsBooke
 		t.Errorf("wages %v and withheld %v, want %v and %v", got.Wages, got.WithheldPaychecks, want.Wages, want.WithheldPaychecks)
 	}
 }
+
+// deductionRecord is a monthly paycheck on the 10th, the paycheck's checking account holding the given transactions, and a payroll deduction from it into a 401k; both accounts' data end on 2026-01-16.
+func deductionRecord(t *testing.T, txs ...model.Transaction) *model.Record {
+	t.Helper()
+	rec := model.NewRecord(d(2026, time.January, 16))
+	chk := &model.Account{ID: "chk", Type: model.TypeChecking, Tax: model.Taxable}
+	k := &model.Account{ID: "k401", Type: model.Type401k, Tax: model.TaxDeferred}
+	for _, a := range []*model.Account{chk, k} {
+		a.AddSnapshot(d(2025, time.November, 1), 5000)
+		a.AddSnapshot(d(2026, time.January, 16), 5000)
+		must(t, rec.AddAccount(a))
+	}
+	for _, tx := range txs {
+		must(t, chk.AddTransaction(tx))
+	}
+	monthly := model.Recurrence{Kind: model.Monthly, Day: 10}
+	rec.Budget.Items = []model.BudgetItem{
+		{ID: "pay", Name: "Pay", Kind: model.ItemIncome, Amount: model.Constant(5000), Recurrence: monthly, Start: model.Ptr(d(2025, time.November, 1)), Account: "chk", IncomeType: model.IncomeWages, Timing: model.Lump},
+		{ID: "ded", Name: "Deduction", Kind: model.ItemTransfer, Amount: model.Constant(300), Recurrence: monthly, Start: model.Ptr(d(2025, time.November, 1)), To: "k401", Paycheck: "pay", Timing: model.Lump},
+	}
+	return rec
+}
+
+func lineOf(t *testing.T, rec *model.Record, id string, date model.Date) LineStatus {
+	t.Helper()
+	view, err := StatusAsOf(rec, date)
+	must(t, err)
+	for _, l := range view.Lines {
+		if l.Item.ID == id {
+			return l
+		}
+	}
+	t.Fatalf("no line %s on %s", id, date)
+	return LineStatus{}
+}
+
+// A payroll deduction is matched or missing as its paycheck is, never judged as a transfer needing a transaction of its own.
+func TestDeductionStandsAsItsPaycheckDoes(t *testing.T) {
+	rec := deductionRecord(t,
+		model.Transaction{Date: d(2025, time.December, 10), Amount: 4000, Kind: model.TxIncome, Item: "pay"},
+		model.Transaction{Date: d(2026, time.January, 20), Amount: -50, Kind: model.TxExpense, Memo: "other"},
+		model.Transaction{Date: d(2026, time.January, 5), Amount: -50, Kind: model.TxExpense, Memo: "other"})
+	rec.Today = d(2026, time.January, 16)
+	if l := lineOf(t, rec, "ded", d(2025, time.December, 15)); l.State != StateMatched || l.Amount != 300 || l.Variance != 0 {
+		t.Errorf("beside a matched paycheck: %+v", l)
+	}
+	if l := lineOf(t, rec, "pay", d(2026, time.January, 12)); l.State != StateMissing {
+		t.Fatalf("paycheck: %+v", l)
+	}
+	if l := lineOf(t, rec, "ded", d(2026, time.January, 12)); l.State != StateMissing {
+		t.Errorf("beside a missing paycheck: %+v", l)
+	}
+	ps, err := Periods(rec, "", d(2025, time.December, 15), 1)
+	must(t, err)
+	for _, p := range ps {
+		if v := p.Current(); p.Item.ID == "ded" && (!v.Matched || v.Posted != 300) {
+			t.Errorf("period view: %+v", v)
+		}
+	}
+	posted := 120.0
+	occurrence(rec, "ded", d(2025, time.December, 10), model.StatusAuto, &posted, nil)
+	if l := lineOf(t, rec, "ded", d(2025, time.December, 15)); l.Amount != 120 {
+		t.Errorf("an override of the deduction itself: %+v", l)
+	}
+}

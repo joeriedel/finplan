@@ -235,3 +235,50 @@ func TestNewClassProblem(t *testing.T) {
 		}
 	}
 }
+
+// A stock's volatility is typed in percent, blank unsets it, undo restores it, and a bad one is not taken.
+func TestMarketsEditStockVolatility(t *testing.T) {
+	a := marketsApp(t)
+	symbols := a.rec.Symbols()
+	if len(symbols) == 0 {
+		t.Fatal("the demo has no stocks")
+	}
+	sym := symbols[0]
+	was, wasSet := a.rec.StockVolatility[sym]
+	a.markets.editStockVolatility(sym, "50")
+	if got := a.rec.StockVolatilityOf(sym); got != 0.5 {
+		t.Fatalf("volatility %v; notices %v", got, a.notices)
+	}
+	if stockVolatilityText(a.rec, sym) != "50" {
+		t.Errorf("shown as %q", stockVolatilityText(a.rec, sym))
+	}
+	a.markets.editStockVolatility(sym, "x")
+	if a.markets.errs["stockvol"+sym] == "" {
+		t.Error("a volatility that is not a number was taken")
+	}
+	a.markets.editStockVolatility(sym, "")
+	if _, set := a.rec.StockVolatility[sym]; set || a.rec.StockVolatilityOf(sym) != model.DefaultStockVolatility {
+		t.Errorf("a blank field left %v", a.rec.StockVolatility)
+	}
+	a.undo()
+	if got := a.rec.StockVolatilityOf(sym); got != 0.5 {
+		t.Errorf("undo of the clear left %v", got)
+	}
+	a.undo()
+	if got, set := a.rec.StockVolatility[sym]; set != wasSet || set && got != was {
+		t.Errorf("undo left %v, %v; was %v, %v", got, set, was, wasSet)
+	}
+	a.redo()
+	if got := a.rec.StockVolatilityOf(sym); got != 0.5 {
+		t.Errorf("redo left %v", got)
+	}
+	saved, err := a.st.Load()
+	if err != nil || saved.StockVolatilityOf(sym) != 0.5 {
+		t.Errorf("not saved: %v", err)
+	}
+	a.notices = nil
+	a.markets.editStockVolatility(sym, "100000")
+	if len(a.notices) == 0 {
+		t.Error("a volatility out of range was taken")
+	}
+}

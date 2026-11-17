@@ -990,7 +990,7 @@ func firstObject(rec *model.Record, kind model.ObjectKind, proj string, index in
 
 // ---- The pickers, which the rows and the Add form share.
 
-var objectKinds = []model.ObjectKind{model.KindAccount, model.KindAsset, model.KindBudgetItem, model.KindStock, model.KindGlobal}
+var objectKinds = []model.ObjectKind{model.KindAccount, model.KindAsset, model.KindBudgetItem, model.KindStock, model.KindClass, model.KindGlobal}
 
 // pick draws a combo previewing preview with an entry for each label and returns the index of the one chosen, else -1. A width of -1 fills the cell.
 func pick(id, preview string, width float32, labels []string, selected int) int {
@@ -1347,6 +1347,18 @@ func formButton(label, problem string, untouched bool, do func()) {
 	imgui.EndDisabled()
 	if problem != "" && !untouched {
 		errorBeside("Not yet: " + problem)
+	}
+}
+
+// buttonWithTip is actionButton with the reason a tooltip on the disabled button instead of red text beside it.
+func buttonWithTip(label, problem string, do func()) {
+	imgui.BeginDisabledV(problem != "")
+	if imgui.Button(label) {
+		do()
+	}
+	imgui.EndDisabled()
+	if problem != "" && imgui.IsItemHoveredV(imgui.HoveredFlagsAllowWhenDisabled) {
+		tooltipText(problem)
 	}
 }
 

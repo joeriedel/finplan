@@ -691,7 +691,7 @@ func (t *acctTab) grantCorrect(g *model.Grant) {
 		})
 	})
 	t.label("")
-	formButton("Void##grant", u.problems[2].get(key, func() string { return grantVoidProblem(a.st, a.rec, g.ID) }), untouched, func() {
+	buttonWithTip("Void##grant", u.problems[2].get(key, func() string { return grantVoidProblem(a.st, a.rec, g.ID) }), func() {
 		u.confirm.ask("Void grant?", fmt.Sprintf("Void the %s grant of %s (%d shares)? It leaves the record, along with its planned vests, and the account's balance no longer counts its shares. It has no recorded vests, so nothing else changes. It stays in the history.", g.Symbol, g.Date, g.Shares), func() {
 			a.addEntry("void grant", func() (*ops.Result, error) {
 				return ops.VoidGrant(a.st, a.rec, g.ID, d.note, ops.Options{})

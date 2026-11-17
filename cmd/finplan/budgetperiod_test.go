@@ -83,7 +83,7 @@ func TestParseDrift(t *testing.T) {
 	}
 }
 
-// The table has no Over or under column, and a wages row shows its gross with the deposit expected.
+// The table has no Over or under column, and a wages row shows the deposit expected with its gross in the tooltip.
 func TestPeriodTableColumnsAndWagesText(t *testing.T) {
 	for _, c := range periodColumns {
 		if c.header == "Over or under" {
@@ -95,9 +95,12 @@ func TestPeriodTableColumnsAndWagesText(t *testing.T) {
 	s.load(a.rec, a.rec.Today)
 	for _, r := range s.rows {
 		v := r.Current()
-		text := budgetedText(v)
-		if wages := r.Item.IsWages(); wages != strings.HasPrefix(text, "Gross ") || wages != strings.Contains(text, " · deposit "+formatDollars(v.Budgeted)) {
+		text, tip := budgetedText(v), budgetedTip(v)
+		if text != formatDollars(v.Budgeted) {
 			t.Errorf("%s: budgeted text %q", r.Item.ID, text)
+		}
+		if wages := r.Item.IsWages(); wages != strings.HasPrefix(tip, "Gross ") || wages != strings.Contains(tip, " · deposit "+formatDollars(v.Budgeted)) {
+			t.Errorf("%s: budgeted tip %q", r.Item.ID, tip)
 		}
 	}
 }
@@ -108,5 +111,29 @@ func TestFullTextTipShowsTheWholeTextOnlyWhenClipped(t *testing.T) {
 	}
 	if got := fullTextTip("matched $5,000, $12 under", true, "hint"); got != "matched $5,000, $12 under\n\nhint" {
 		t.Errorf("clipped: %q", got)
+	}
+}
+
+// A payroll deduction stands as its paycheck does: the demo's deductions are matched, at their amounts, beside their matched paychecks.
+func TestPeriodDeductionFollowsItsPaycheck(t *testing.T) {
+	a := demoApp(t)
+	s := &a.budget.period
+	s.load(a.rec, pastCursorDate)
+	checked := 0
+	for _, l := range s.standing {
+		if l.Item.Paycheck == "" {
+			continue
+		}
+		pay, ok := s.standing[l.Item.Paycheck]
+		if !ok || pay.State != engine.StateMatched {
+			continue
+		}
+		checked++
+		if l.State != engine.StateMatched || l.Amount != l.View.Budgeted || l.Variance != 0 {
+			t.Errorf("%s: %+v beside its matched paycheck", l.Item.ID, l)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no deduction beside a matched paycheck")
 	}
 }

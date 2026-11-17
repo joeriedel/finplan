@@ -93,19 +93,26 @@ type tagQueue struct {
 	tags []pendingTag
 }
 
-// crosshair queues the value tags (in the y-axis gutter, against the plot's left edge) of the points that lie in the plot's y range, and the date tag (in the x-axis area, below the plot) of day, which is queued only if some series has a value there, that is, if pts is not empty. The tags are our own rather than ImPlot's, which would resize the axis gutters as the pointer moves.
+// crosshair queues the value tags (in the y-axis gutter, against the plot's left edge, stacked so that none overlaps another) of the points that lie in the plot's y range, and the date tag (in the x-axis area, below the plot) of day, which is queued only if some series has a value there, that is, if pts is not empty. The tags are our own rather than ImPlot's, which would resize the axis gutters as the pointer moves.
 func (q *tagQueue) crosshair(p plotGeom, day model.Date, pts []crosshairPoint) {
 	if len(pts) == 0 {
 		return
 	}
 	plotPos := graph.Pt{X: p.pos.X, Y: p.pos.Y}
 	plotSize := graph.Pt{X: p.size.X, Y: p.size.Y}
+	var ys []float32
+	var sizes []graph.Pt
+	var texts []string
+	var cols []imgui.Vec4
 	for _, pt := range pts {
 		if !graph.InRange(pt.amount, p.yMin, p.yMax) {
 			continue
 		}
 		text := graph.FormatTagMoney(pt.amount)
-		q.tags = append(q.tags, pendingTag{graph.ValueTagPos(p.toPx(0, pt.amount).Y, tagSize(text), plotPos, plotSize), lineColor(pt.color, 1), text})
+		ys, sizes, texts, cols = append(ys, p.toPx(0, pt.amount).Y), append(sizes, tagSize(text)), append(texts, text), append(cols, lineColor(pt.color, 1))
+	}
+	for i, at := range graph.StackValueTags(ys, sizes, uiScale, plotPos, plotSize) {
+		q.tags = append(q.tags, pendingTag{at, cols[i], texts[i]})
 	}
 	dateText := graph.FormatDate(day)
 	dx := p.toPx(float64(day)*secondsPerDay, 0).X

@@ -19,7 +19,7 @@ import (
 var periodColumns = []struct {
 	header string
 	weight float32
-}{{"Item", 1.8}, {"Period", 2.2}, {"Timing", 0.8}, {"Budgeted", 2.4}, {"Expected", 1.1}, {"Posted", 1.1}, {"Status", 1.1}, {"Remaining", 1}, {"Standing", 2.6}, {"Recent periods", 2}, {"", 1.6}}
+}{{"Item", 1.8}, {"Period", 2.2}, {"Timing", 0.8}, {"Budgeted", 1.3}, {"Expected", 1.1}, {"Posted", 1.1}, {"Status", 1.1}, {"Remaining", 1}, {"Standing", 2.6}, {"Recent periods", 2}, {"", 1.6}}
 
 // periodsShown is how many periods of each item the This period view keeps variance for: the current one and the five before it.
 const periodsShown = 6
@@ -147,10 +147,10 @@ func overUnder(v float64) string {
 	return s + " under"
 }
 
-// setPeriod records the values the user typed for the item's current period through ops.SetOccurrence. Occurrences are facts, which are never undone, only corrected or cleared.
+// setPeriod records the values the user typed for the item's current period through ops.SetOccurrence. An occurrence is a fact: undo corrects or voids it, so its history stays.
 func (t *budgetTab) setPeriod(r engine.ItemPeriods, ch ops.OccurrenceChange) bool {
 	start := r.Current().Period.Start
-	return t.a.addEntry("set budget period", func() (*ops.Result, error) {
+	return t.a.recordOccurrence("set budget period", r.Item.ID, start, func() (*ops.Result, error) {
 		return ops.SetOccurrence(t.a.st, t.a.rec, r.Item.ID, start, t.a.rec.Today, ch, "", ops.Options{})
 	})
 }
@@ -158,7 +158,7 @@ func (t *budgetTab) setPeriod(r engine.ItemPeriods, ch ops.OccurrenceChange) boo
 // clearPeriod voids what was recorded for the item's current period through ops.ClearOccurrence.
 func (t *budgetTab) clearPeriod(r engine.ItemPeriods) bool {
 	start := r.Current().Period.Start
-	return t.a.addEntry("clear budget period", func() (*ops.Result, error) {
+	return t.a.recordOccurrence("clear budget period", r.Item.ID, start, func() (*ops.Result, error) {
 		return ops.ClearOccurrence(t.a.st, t.a.rec, r.Item.ID, start, t.a.rec.Today, "", ops.Options{})
 	})
 }
@@ -239,12 +239,15 @@ func fullTextTip(text string, clipped bool, hint string) string {
 	return hint
 }
 
-// budgetedText is the budgeted amount of the period, and for a wages paycheck its gross with the deposit it is expected to bring.
-func budgetedText(v model.PeriodView) string {
-	if v.Gross != 0 {
-		return "Gross " + formatDollars(v.Gross) + " · deposit " + formatDollars(v.Budgeted)
+// budgetedText is the budgeted amount of the period; for a wages paycheck it is the deposit it is expected to bring.
+func budgetedText(v model.PeriodView) string { return formatDollars(v.Budgeted) }
+
+// budgetedTip is the tooltip of the budgeted amount: for a wages paycheck its gross with the deposit, empty for the other items.
+func budgetedTip(v model.PeriodView) string {
+	if v.Gross == 0 {
+		return ""
 	}
-	return formatDollars(v.Budgeted)
+	return "Gross " + formatDollars(v.Gross) + " · deposit " + formatDollars(v.Budgeted)
 }
 
 // depositNote is the sentence saying that the amounts of a wages paycheck's period are the deposit that lands in the bank, net of tax and payroll deductions, not the gross; it is empty for the other items.
@@ -326,6 +329,9 @@ func (t *budgetTab) periods() {
 		cell(1, v.Period.Start.String()+" to "+v.Period.End.String())
 		cell(2, string(v.Timing))
 		cell(3, budgetedText(v))
+		if tip := budgetedTip(v); tip != "" && imgui.IsItemHovered() {
+			tooltipText(tip)
+		}
 
 		imgui.TableSetColumnIndex(4)
 		expected := s.expect[id]

@@ -5,6 +5,7 @@ package graph
 
 import (
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -32,6 +33,39 @@ func clampSpan(v, lo, hi float32) float32 { return max(min(v, hi), lo) }
 // extent.
 func ValueTagPos(y float32, size, plotPos, plotSize Pt) Pt {
 	return Pt{X: plotPos.X - size.X, Y: clampSpan(y-size.Y/2, plotPos.Y, plotPos.Y+plotSize.Y-size.Y)}
+}
+
+// StackValueTags returns the top-left corner of each value tag, in the order of ys and sizes, like ValueTagPos but with no two tags overlapping: tags are sorted by pixel row and pushed apart, each at least gap below the one above, and the pile is pushed up as far as the bottom of the plot needs. If the tags together are taller than the plot they start at its top and run past the bottom.
+func StackValueTags(ys []float32, sizes []Pt, gap float32, plotPos, plotSize Pt) []Pt {
+	n := len(ys)
+	out := make([]Pt, n)
+	order := make([]int, n)
+	for i := range order {
+		order[i] = i
+		out[i] = ValueTagPos(ys[i], sizes[i], plotPos, plotSize)
+	}
+	sort.SliceStable(order, func(a, b int) bool { return out[order[a]].Y < out[order[b]].Y })
+	for k := 1; k < n; k++ {
+		prev, i := order[k-1], order[k]
+		out[i].Y = max(out[i].Y, out[prev].Y+sizes[prev].Y+gap)
+	}
+	if n > 0 {
+		bottom := plotPos.Y + plotSize.Y
+		last := order[n-1]
+		out[last].Y = min(out[last].Y, bottom-sizes[last].Y)
+		for k := n - 2; k >= 0; k-- {
+			i, next := order[k], order[k+1]
+			out[i].Y = min(out[i].Y, out[next].Y-sizes[i].Y-gap)
+		}
+		first := order[0]
+		if out[first].Y < plotPos.Y {
+			shift := plotPos.Y - out[first].Y
+			for _, i := range order {
+				out[i].Y += shift
+			}
+		}
+	}
+	return out
 }
 
 // DateTagPos returns the top-left corner of a date tag of the given size for a cursor at pixel column x: just

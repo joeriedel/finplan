@@ -19,14 +19,43 @@ type ItemPeriods struct {
 	Periods []model.PeriodView
 }
 
-// periodViews evaluates the n periods of the item up to the one containing d against the cutoff. A wages paycheck is budgeted at its projected net deposit, which is what lands in the bank, with its gross kept in the view's Gross, as the engine's own period views count it.
-func periodViews(rec *model.Record, ht *householdTax, it model.BudgetItem, d model.Date, n int, cutoff model.Date, match func(model.Period) *model.PeriodMatch) []model.PeriodView {
+// cutoffID is the id of the item whose cutoff a budget line is judged by: a payroll deduction follows its paycheck, a line with no paycheck its own.
+func cutoffID(rec *model.Record, it model.BudgetItem) string {
+	if _, ok := rec.Budget.Item(it.Paycheck); ok {
+		return it.Paycheck
+	}
+	return it.ID
+}
+
+// deductionMatch is what the matches say of a period of a payroll deduction: that of its paycheck in the same period. A matched or posted paycheck makes the deduction matched at the amount, a missing one makes it missing, and otherwise nothing is known. No transaction of the deduction's own is due.
+func deductionMatch(rec *model.Record, ht *householdTax, src model.BudgetItem, p model.Period, amount float64, cutoff model.Date, match func(model.BudgetItem, model.Period) *model.PeriodMatch) *model.PeriodMatch {
+	if sp, ok := src.PeriodAt(p.Start); !ok || sp.Start != p.Start {
+		return nil
+	}
+	v := periodViews(rec, ht, src, p.Start, 1, cutoff, match)[0]
+	switch {
+	case v.Matched, v.Overridden && (v.Override.Posted != nil || v.Status == model.StatusPosted):
+		return &model.PeriodMatch{Matched: true, Amount: amount}
+	case v.Missing:
+		return &model.PeriodMatch{}
+	}
+	return nil
+}
+
+// periodViews evaluates the n periods of the item up to the one containing d against the cutoff, with match giving what the transaction matches say of a period of an item. A payroll deduction stands as its paycheck does (see deductionMatch). A wages paycheck is budgeted at its projected net deposit, which is what lands in the bank, with its gross kept in the view's Gross, as the engine's own period views count it.
+func periodViews(rec *model.Record, ht *householdTax, it model.BudgetItem, d model.Date, n int, cutoff model.Date, match func(model.BudgetItem, model.Period) *model.PeriodMatch) []model.PeriodView {
 	gross := func(p model.Period) float64 {
 		v, _ := BudgetedAmount(rec, it, p.Start)
 		return v
 	}
+	if src, ok := rec.Budget.Item(it.Paycheck); ok {
+		return model.PeriodHistory(it, d, n, rec.Occurrences, cutoff, gross, func(p model.Period) *model.PeriodMatch {
+			return deductionMatch(rec, ht, src, p, gross(p), cutoff, match)
+		})
+	}
+	itemMatch := func(p model.Period) *model.PeriodMatch { return match(it, p) }
 	if !it.IsWages() {
-		return model.PeriodHistory(it, d, n, rec.Occurrences, cutoff, gross, match)
+		return model.PeriodHistory(it, d, n, rec.Occurrences, cutoff, gross, itemMatch)
 	}
 	net := func(p model.Period) float64 {
 		if v, ok := ht.deposit(it, p.Start); ok {
@@ -34,7 +63,7 @@ func periodViews(rec *model.Record, ht *householdTax, it model.BudgetItem, d mod
 		}
 		return gross(p)
 	}
-	views := model.PeriodHistory(it, d, n, rec.Occurrences, cutoff, net, match)
+	views := model.PeriodHistory(it, d, n, rec.Occurrences, cutoff, net, itemMatch)
 	for i := range views {
 		views[i].Gross = gross(views[i].Period)
 	}
@@ -57,11 +86,11 @@ func Periods(rec *model.Record, projection string, asOf model.Date, n int) ([]It
 		if !ok || it.End != nil && *it.End < cur.Start || it.Paycheck != "" && !ht.sourceBooked(it, cur.Start, false) {
 			continue
 		}
-		cutoff, ok := cutoffs[it.ID]
+		cutoff, ok := cutoffs[cutoffID(rec, it)]
 		if !ok {
 			cutoff = asOf
 		}
-		out = append(out, ItemPeriods{it, cutoff, periodViews(rec, ht, it, asOf, n, cutoff, func(p model.Period) *model.PeriodMatch { return rec.PeriodMatch(it, p, cutoff) })})
+		out = append(out, ItemPeriods{it, cutoff, periodViews(rec, ht, it, asOf, n, cutoff, func(it model.BudgetItem, p model.Period) *model.PeriodMatch { return rec.PeriodMatch(it, p, cutoff) })})
 	}
 	return out, nil
 }

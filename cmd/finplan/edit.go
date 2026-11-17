@@ -30,6 +30,14 @@ type editStep struct {
 	presetsBefore, presetsAfter []store.Preset
 	// facts is set for the step of a recorded vest: undo voids what it stored and redo restores it, instead of restoring documents or projections.
 	facts *vestFacts
+	// occ is set for the step of a period override: undo and redo correct or void its fact, instead of restoring documents or projections.
+	occ *occurrenceStep
+}
+
+// occurrenceStep is a change of the occurrence fact of one period of a budget item: its id and the occurrence before and after, nil for none (a new override has no before, a cleared one no after).
+type occurrenceStep struct {
+	id            int64
+	before, after *model.Occurrence
 }
 
 // vestFacts are the ids of the facts recording a vest stored: the vest and, when the recording created them, its deposit entry and price observation; 0 for none. voided is which of them (in that order) undo voided and redo has not restored yet: redo restores only those, so a fact the user voided on their own stays void.
@@ -38,7 +46,7 @@ type vestFacts struct {
 	voided             [3]bool
 }
 
-// edit is the one way an editor tab changes the record. do makes the edit through internal/ops against the live record, which validates and saves it; only if that works does the new record replace the live one, the Graph tab see it and the history get a step named label. If do fails the live record stays as it was and the user is told why; an edit that changed nothing says nothing and sets a.unchanged. Record entries and equity facts (past history) are not edited this way: they are append-only, and an added, corrected or voided one is made with addEntry, which leaves no undo step; recordVest is the one exception. It reports whether the edit was made.
+// edit is the one way an editor tab changes the record. do makes the edit through internal/ops against the live record, which validates and saves it; only if that works does the new record replace the live one, the Graph tab see it and the history get a step named label. If do fails the live record stays as it was and the user is told why; an edit that changed nothing says nothing and sets a.unchanged. Record entries and equity facts (past history) are not edited this way: they are append-only, and an added, corrected or voided one is made with addEntry, which leaves no undo step; recordVest and recordOccurrence are the exceptions. It reports whether the edit was made.
 func (a *app) edit(label string, do func() (*ops.Result, error)) bool {
 	a.unchanged = false
 	res, err := do()
@@ -54,7 +62,8 @@ func (a *app) edit(label string, do func() (*ops.Result, error)) bool {
 	a.install(res)
 	step := editStep{before: old.Projections, after: res.Record.Projections, rename: res.Rename, switchBefore: switchBefore, switchAfter: a.graph.lines.Switcher()}
 	if !reflect.DeepEqual(old.Accounts, res.Record.Accounts) || !reflect.DeepEqual(old.Assets, res.Record.Assets) || !reflect.DeepEqual(old.Budget, res.Record.Budget) || !reflect.DeepEqual(old.Calendars, res.Record.Calendars) ||
-		!reflect.DeepEqual(old.Classes, res.Record.Classes) || !reflect.DeepEqual(old.Correlations, res.Record.Correlations) || !reflect.DeepEqual(old.Household, res.Record.Household) || !reflect.DeepEqual(old.Tax, res.Record.Tax) {
+		!reflect.DeepEqual(old.Classes, res.Record.Classes) || !reflect.DeepEqual(old.Correlations, res.Record.Correlations) || !reflect.DeepEqual(old.Household, res.Record.Household) || !reflect.DeepEqual(old.Tax, res.Record.Tax) ||
+		!reflect.DeepEqual(old.StockGrowth, res.Record.StockGrowth) || !reflect.DeepEqual(old.StockVolatility, res.Record.StockVolatility) {
 		step.docsBefore, step.docsAfter = old, res.Record
 	}
 	for _, c := range res.Pruned {
@@ -72,6 +81,62 @@ func (a *app) addEntry(label string, do func() (*ops.Result, error)) bool {
 		return false
 	}
 	a.install(res)
+	return true
+}
+
+// recordOccurrence makes a change of the period override of item through internal/ops and installs the result like addEntry, but pushes an undo step: undo voids a new override, corrects a changed one back to its values and restores a cleared one; redo repeats it. All of it is fact corrections, so the history of the fact stays. A change that changes nothing says nothing and sets a.unchanged. It reports whether the change was made.
+func (a *app) recordOccurrence(label, item string, period model.Date, do func() (*ops.Result, error)) bool {
+	a.unchanged = false
+	before := occurrenceOf(a.rec, item, period)
+	res, err := do()
+	if err != nil {
+		if errors.Is(err, ops.ErrNoChange) {
+			a.unchanged = true
+		} else {
+			a.notifyFailed(label, err)
+		}
+		return false
+	}
+	a.install(res)
+	after := occurrenceOf(res.Record, item, period)
+	id := res.Occurrence.ID
+	sw := a.graph.lines.Switcher()
+	a.history.Push(label, editStep{before: res.Record.Projections, after: res.Record.Projections, switchBefore: sw, switchAfter: sw, occ: &occurrenceStep{id: id, before: before, after: after}})
+	return true
+}
+
+// occurrenceOf returns a copy of the record's occurrence of the period, or nil for none.
+func occurrenceOf(rec *model.Record, item string, period model.Date) *model.Occurrence {
+	o, ok := rec.Occurrences.Get(item, period)
+	if !ok {
+		return nil
+	}
+	c := o.Clone()
+	return &c
+}
+
+// restoreOccurrence undoes or redoes the step of a period override: the fact is set to the occurrence the step left (after) or found (before), or voided where that is none. A fact already as asked is skipped. It reports whether it was done.
+func (a *app) restoreOccurrence(label string, s *occurrenceStep, undo bool) bool {
+	to := s.after
+	if undo {
+		to = s.before
+	}
+	var res *ops.Result
+	var err error
+	if to == nil {
+		res, err = ops.VoidOccurrence(a.st, a.rec, s.id, label, ops.Options{})
+	} else {
+		res, err = ops.CorrectOccurrence(a.st, a.rec, s.id, *to, label, ops.Options{})
+	}
+	if errors.Is(err, ops.ErrNoChange) {
+		return true
+	}
+	if err != nil {
+		a.notifyFailed(label, err)
+		return false
+	}
+	a.install(res)
+	a.generation++
 	return true
 }
 
@@ -202,6 +267,12 @@ func (a *app) restore(label string, ps []*model.Projection, rename *ops.Rename, 
 // undo reverts the latest step through the same save as an edit; if that fails the history stays where it is.
 func (a *app) undo() {
 	s, ok := a.history.PeekUndo()
+	if ok && s.Data.occ != nil {
+		if a.restoreOccurrence("undo "+s.Label, s.Data.occ, true) {
+			a.history.Undo()
+		}
+		return
+	}
 	if ok && s.Data.facts != nil {
 		if a.restoreFacts("undo "+s.Label, s.Data.facts, false) {
 			a.history.Undo()
@@ -219,6 +290,12 @@ func (a *app) undo() {
 // redo repeats the latest undone step; if the save fails the history stays where it is.
 func (a *app) redo() {
 	s, ok := a.history.PeekRedo()
+	if ok && s.Data.occ != nil {
+		if a.restoreOccurrence("redo "+s.Label, s.Data.occ, false) {
+			a.history.Redo()
+		}
+		return
+	}
 	if ok && s.Data.facts != nil {
 		if a.restoreFacts("redo "+s.Label, s.Data.facts, true) {
 			a.history.Redo()
@@ -233,19 +310,30 @@ func (a *app) redo() {
 	}
 }
 
-// setRecord switches the Graph tab to a record that differs from the current one in its editable documents, keeping
-// the lines, the preset and the visible range. The first accounts added to an empty record, with no lines and no preset, get the default lines. A switcher naming a projection that is gone moves to the first one.
-func (g *graphTab) setRecord(rec *model.Record) {
-	seed := false
-	if len(g.rec.Accounts) == 0 && len(rec.Accounts) > 0 && g.preset < 0 {
-		// Lines left from accounts that were undone or deleted name assets the incoming record lacks.
-		for _, l := range g.lines.All() {
-			if rec.Asset(l.Asset) == nil {
-				g.lines.Remove(l.ID)
+// hasAsset reports whether the record has the asset, or a projection has it as the default asset of one of its hypothetical accounts.
+func hasAsset(rec *model.Record, id model.AssetID) bool {
+	if rec.Asset(id) != nil {
+		return true
+	}
+	for _, p := range rec.Projections {
+		for _, a := range p.Accounts {
+			if model.DefaultAssetID(a.ID) == id {
+				return true
 			}
 		}
-		seed = len(g.lines.All()) == 0
 	}
+	return false
+}
+
+// setRecord switches the Graph tab to a record that differs from the current one in its editable documents, keeping
+// the preset and the visible range and the lines whose asset the record still has: a line of an account or asset that was deleted, or undone, goes. The first accounts added to an empty record, with no lines and no preset, get the default lines. A switcher naming a projection that is gone moves to the first one.
+func (g *graphTab) setRecord(rec *model.Record) {
+	for _, l := range g.lines.All() {
+		if !hasAsset(rec, l.Asset) {
+			g.lines.Remove(l.ID)
+		}
+	}
+	seed := len(g.rec.Accounts) == 0 && len(rec.Accounts) > 0 && g.preset < 0 && len(g.lines.All()) == 0
 	g.rec, g.cache, g.mc, g.dataStart = rec, newDataCache(rec), newMCCache(rec), graph.DataStart(rec)
 	if seed {
 		for _, id := range defaultLines(rec, g.demo) {

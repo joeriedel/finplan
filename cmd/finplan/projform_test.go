@@ -628,3 +628,27 @@ func TestScheduledModKeepsSegmentsOnPropertyAndMode(t *testing.T) {
 	}
 	same("property")
 }
+
+// The Add form offers market classes as a kind and adds a growth modification of one.
+func TestAddFormAddsAClassModification(t *testing.T) {
+	if !slices.Contains(addKinds, model.KindClass) {
+		t.Fatal("the Add form does not offer the class kind")
+	}
+	a := demoApp(t)
+	pt := a.proj
+	name := newChild(t, a, demodata.ProjBase)
+	if got := objectsFor(a.rec, model.KindClass, name, 0); len(got) == 0 || got[0].id != a.rec.Classes[0].ID {
+		t.Fatalf("class choices %+v", got)
+	}
+	pt.addKind, pt.addObj, pt.addProp, pt.addMode, pt.addValue = model.KindClass, model.ClassLargeCap, model.PropGrowth, model.ModeSet, "2"
+	if !pt.addMod(name) {
+		t.Fatalf("not added: %v", a.notices)
+	}
+	m := a.rec.Projection(name).Mods[0]
+	if m.Target != (model.ObjectRef{Kind: model.KindClass, ID: model.ClassLargeCap}) || m.Property != model.PropGrowth {
+		t.Errorf("modification %+v", m)
+	}
+	if v, _, ok := constantOf(m.Values); !ok || v != 0.02 {
+		t.Errorf("value %v, %v", v, ok)
+	}
+}

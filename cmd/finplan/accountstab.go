@@ -491,14 +491,14 @@ func (t *acctTab) detail(acct *model.Account) {
 	if k := pick("type", accountTypeName(acct.Type), em*16, accountTypeLabels, slices.Index(accountTypes, string(acct.Type))); k >= 0 {
 		t.editAttr(id, "type", accountTypes[k])
 	}
-	t.label("Tax treatment")
-	if k := pick("tax", taxName(acct.Tax), em*16, taxLabels, slices.Index(taxTreatments, string(acct.Tax))); k >= 0 {
-		t.editAttr(id, "tax", taxTreatments[k])
-	}
 	if acct.Type == model.TypeEquity {
 		t.equity(acct)
 		t.lifecycle(acct)
 		return
+	}
+	t.label("Tax treatment")
+	if k := pick("tax", taxName(acct.Tax), em*16, taxLabels, slices.Index(taxTreatments, string(acct.Tax))); k >= 0 {
+		t.editAttr(id, "tax", taxTreatments[k])
 	}
 	t.label("Rate per year")
 	if s, done := t.field(string(id)+"rate", "percent, e.g. 3", formatValue(model.PropGrowth, model.ModeSet, acct.StatedRate), em*8); done {

@@ -88,6 +88,45 @@ var openNames = []openState{
 	{"class-add", "Markets", "", false},
 }
 
+// openNotes say more of the states whose name does not say what they show.
+var openNotes = map[string]string{
+	"cursor-lock":        "the cursor locked two years after today, with the pointer away",
+	"about":              "the Help > About finplan dialog",
+	"new-item":           "the Add form for a new budget item",
+	"budget-item":        "the first item's editor",
+	"budget-delete":      "the confirmation for deleting the first item",
+	"budget-taxes":       "the Taxes view",
+	"budget-period":      "the This period view",
+	"budget-period-past": "the This period view with the Graph's cursor locked on a day in a past month",
+	"projection-drift":   "the selected projection's drift setting, which Base with drift sets",
+	"tax-tables":         "the Taxes view with the tax tables editor shown on the household's state table",
+	"tax-tables-federal": "the same on the federal table",
+	"timeline":           "the strip editor of the projection's first modification with a schedule",
+	"asset-timeline":     "the strip editor of the asset's growth, which must have growth; the demo's 529 accounts has a schedule",
+	"asset-delete":       "the confirmation for deleting the asset; the demo's Net worth is in a saved view preset",
+	"account-delete":     "the same for an account; with --demo it first adds a deletable account, Brokerage 2, shown in a new saved view preset, and ignores the selection, since every demo account has history; with --db it opens the selected account's and creates nothing",
+	"ledger":             "the account's ledger panel folded out",
+	"member-benefits":    "the household editor scrolled into view with each member's Benefits section folded out",
+	"equity-grants":      "the equity account's detail scrolled to its Grants table; the equity states want the demo's equity account selected (Acme RSUs)",
+	"class-add":          "the Add class form filled in",
+}
+
+// openHelp lists the states --open can show, each with the tab it works with, whether it needs --select and what it shows where the name does not say.
+func openHelp() string {
+	parts := make([]string, len(openNames))
+	for i, n := range openNames {
+		how := n.tab + " tab"
+		if n.needsSel {
+			how += ", needs --select"
+		}
+		if note := openNotes[n.name]; note != "" {
+			how += "; " + note
+		}
+		parts[i] = n.name + " (" + how + ")"
+	}
+	return strings.Join(parts, ", ")
+}
+
 // openRequest is the id of the picker the screenshot asks to be shown open; the tab that draws it opens it on the first frame it does and clears the request.
 var openRequest string
 
@@ -153,11 +192,7 @@ func newShotOptions(out, tab string, frames int, size, sel, open string) (*shotO
 			}
 		}
 		if o.open == "" {
-			names := make([]string, len(openNames))
-			for i, n := range openNames {
-				names[i] = n.name
-			}
-			return nil, fmt.Errorf("unknown state %q for --open; the states are %s", open, strings.Join(names, ", "))
+			return nil, fmt.Errorf("unknown state %q for --open; the states are %s", open, openHelp())
 		}
 		if o.openName().needsSel && sel == "" {
 			return nil, fmt.Errorf("--open %s needs --select", o.open)
@@ -209,7 +244,7 @@ func (o *shotOptions) applyOpen(a *app) error {
 			if ln.Asset == demodata.NetWorth {
 				a.graph.lines.Select(ln.ID)
 				if o.open != "breakdown-line" {
-					a.graph.iv.setWindow(yearAt(a.rec.Today.Add(-365)))
+					a.graph.iv.setWindow(yearAt(a.rec.Today.Add(365)))
 				}
 				a.graph.bk.openFirst = o.open == "breakdown-expand"
 				return nil

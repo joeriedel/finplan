@@ -133,3 +133,48 @@ func TestBudgetItemTimingIsChecked(t *testing.T) {
 		t.Errorf("bad timing: %v", err)
 	}
 }
+
+func TestVoidAndCorrectOccurrenceByFactKeepHistory(t *testing.T) {
+	st, rec := seed(t)
+	pending := model.StatusPending
+	res, err := SetOccurrence(st, rec, "dining", nov6, today, OccurrenceChange{Status: &pending, Expected: model.Ptr(1000.0)}, "", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := res.Occurrence.ID
+	first := *res.Occurrence
+
+	res, err = VoidOccurrence(st, res.Record, id, "undo", Options{})
+	if err != nil {
+		t.Fatalf("void: %v", err)
+	}
+	if _, ok := res.Record.Occurrences.Get("dining", nov6); ok {
+		t.Error("a voided occurrence is still in the record")
+	}
+	if _, err := VoidOccurrence(st, res.Record, id, "", Options{}); !errors.Is(err, ErrNoChange) {
+		t.Errorf("void again: %v", err)
+	}
+	res, err = CorrectOccurrence(st, res.Record, id, first, "redo", Options{})
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if o, ok := res.Record.Occurrences.Get("dining", nov6); !ok || o.ID != id || o.Status != pending || *o.Expected != 1000 {
+		t.Errorf("restored %+v, %v", o, ok)
+	}
+	if _, err := CorrectOccurrence(st, res.Record, id, first, "", Options{}); !errors.Is(err, ErrNoChange) {
+		t.Errorf("same values: %v", err)
+	}
+	res, err = CorrectOccurrence(st, res.Record, id, model.Occurrence{Status: model.StatusPosted, Posted: model.Ptr(5.0)}, "", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o, _ := res.Record.Occurrences.Get("dining", nov6); o.Status != model.StatusPosted || *o.Posted != 5 || o.Expected != nil {
+		t.Errorf("corrected %+v", o)
+	}
+	if _, err := CorrectOccurrence(st, res.Record, id, model.Occurrence{Status: "done"}, "", Options{}); !errors.Is(err, ErrInvalidValue) {
+		t.Errorf("bad status: %v", err)
+	}
+	if revs, err := FactHistory(st, id, store.FactOccurrence); err != nil || len(revs) != 4 {
+		t.Errorf("history %d revisions, %v", len(revs), err)
+	}
+}

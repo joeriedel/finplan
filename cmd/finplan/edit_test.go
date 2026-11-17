@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/joeriedel/finplan/internal/demodata"
+	"github.com/joeriedel/finplan/internal/engine"
 	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/ops"
@@ -406,5 +407,82 @@ func TestGraphSamplesFollowEditUndoRedoWithoutReload(t *testing.T) {
 	a.redo()
 	if got := netWorthSamples(t, a); !reflect.DeepEqual(got, edited) {
 		t.Error("redo did not re-apply the edited values")
+	}
+}
+
+// periodRowOf is the current period of the budget item, as the This period table gives it to setPeriod.
+func periodRowOf(t *testing.T, a *app, item string) engine.ItemPeriods {
+	t.Helper()
+	it, ok := a.rec.Budget.Item(item)
+	if !ok {
+		t.Fatalf("no item %s", item)
+	}
+	p, ok := it.PeriodAt(a.rec.Today)
+	if !ok {
+		t.Fatalf("%s has no period today", item)
+	}
+	return engine.ItemPeriods{Item: it, Periods: []model.PeriodView{{Period: p}}}
+}
+
+// A period override is undone by voiding it or correcting it back, and redone by correcting it, always as fact corrections that keep the fact's history.
+func TestPeriodOverrideUndoRedoKeepsTheFactHistory(t *testing.T) {
+	a := demoApp(t)
+	row := periodRowOf(t, a, "dining")
+	start := row.Current().Period.Start
+	if _, ok := a.rec.Occurrences.Get("dining", start); ok {
+		t.Fatal("the demo already overrides the period")
+	}
+	posted := func(v float64) ops.OccurrenceChange { return ops.OccurrenceChange{Posted: &v} }
+	got := func() *float64 {
+		o, ok := a.rec.Occurrences.Get("dining", start)
+		if !ok {
+			return nil
+		}
+		return o.Posted
+	}
+
+	if !a.budget.setPeriod(row, posted(100)) || got() == nil || *got() != 100 {
+		t.Fatalf("set: %v", a.notices)
+	}
+	o, _ := a.rec.Occurrences.Get("dining", start)
+	if !a.budget.setPeriod(row, posted(250)) || *got() != 250 {
+		t.Fatalf("correct: %v", a.notices)
+	}
+	if a.budget.setPeriod(row, posted(250)) || !a.unchanged {
+		t.Error("the same values were not left unchanged")
+	}
+
+	a.undo()
+	if got() == nil || *got() != 100 {
+		t.Fatalf("undo of a correction: %v", got())
+	}
+	a.undo()
+	if got() != nil {
+		t.Fatalf("undo of a new override left %v", *got())
+	}
+	if saved, err := a.st.Load(); err != nil {
+		t.Fatal(err)
+	} else if _, ok := saved.Occurrences.Get("dining", start); ok {
+		t.Error("undo was not saved")
+	}
+	a.redo()
+	a.redo()
+	if got() == nil || *got() != 250 {
+		t.Fatalf("redo: %v", got())
+	}
+	if !a.budget.clearPeriod(row) || got() != nil {
+		t.Fatalf("clear: %v", a.notices)
+	}
+	a.undo()
+	if got() == nil || *got() != 250 {
+		t.Fatalf("undo of a clear: %v", got())
+	}
+	a.redo()
+	if got() != nil {
+		t.Fatal("redo of a clear left the override")
+	}
+	revs, err := a.st.FactHistory(o.ID)
+	if err != nil || len(revs) != 9 {
+		t.Errorf("the fact has %d revisions, %v", len(revs), err)
 	}
 }

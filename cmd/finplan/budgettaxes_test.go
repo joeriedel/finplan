@@ -32,7 +32,7 @@ func TestTaxViewShowsDemoYears(t *testing.T) {
 		if v.Err != "" {
 			t.Fatalf("%d: %s", year, v.Err)
 		}
-		for _, label := range []string{"Wages", "Federal tax", "State tax (VA)", "FICA", "Withheld", "Federal taxable income"} {
+		for _, label := range []string{"Wages", "Federal tax", "Virginia tax", "FICA", "Withheld", "Federal taxable income"} {
 			if got := taxRowValue(t, v, label); got == "$0" {
 				t.Errorf("%d %s is $0", year, label)
 			}
@@ -138,5 +138,19 @@ func TestTaxSelectionFollowsProjectionRename(t *testing.T) {
 	a.budget.tax.view(a.rec)
 	if got := a.budget.tax.projection; got != "Renamed" {
 		t.Errorf("selection after rename: %q", got)
+	}
+}
+
+// The state rows are named by the state's full name, and by its key when it is not a state's postal code.
+func TestTaxRowsNameTheState(t *testing.T) {
+	if stateName("VA") != "Virginia" || stateName("DC") != "District of Columbia" || stateName("FLAT") != "FLAT" || stateName("") != "" {
+		t.Errorf("names: %q %q %q", stateName("VA"), stateName("DC"), stateName("FLAT"))
+	}
+	v := taxViewOf(demoApp(t).rec, demodata.ProjBase, 2026)
+	if v.Err != "" {
+		t.Fatal(v.Err)
+	}
+	for _, label := range []string{"Virginia taxable income", "Virginia tax"} {
+		taxRowValue(t, v, label)
 	}
 }

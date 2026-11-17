@@ -259,22 +259,26 @@ func (t *acctTab) calendarsSection(acct *model.Account) {
 	if cal != nil && !d.isNew {
 		imgui.SameLine()
 		_, err := ops.DeleteCalendar(a.st, a.rec, cal.Name, ops.Options{DryRun: true})
-		actionButton("Delete calendar", reasonOf(err), func() {
+		buttonWithTip("Delete calendar", reasonOf(err), func() {
 			a.edit("delete vest calendar", func() (*ops.Result, error) { return ops.DeleteCalendar(a.st, a.rec, cal.Name, ops.Options{}) })
 		})
 	}
 }
 
-// ruleTable draws one row for each rule of the draft: month, how the day is chosen, the day or weekday and a button that removes the rule.
+// ruleTable draws one row for each rule of the draft: month, how the day is chosen, the day or weekday, a button that removes the rule and its next date. The first four columns are fixed so that the last, which takes what is left, shows its text on one line.
 func (t *acctTab) ruleTable(d *calDraft) {
 	em := imgui.FontSize()
 	if !imgui.BeginTableV("##rules", 5, imgui.TableFlagsBordersInnerV|imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
 		return
 	}
 	defer imgui.EndTable()
-	for _, h := range []string{"Month", "Day", "On", "", "Next"} {
-		imgui.TableSetupColumnV(h, 0, 1, 0)
+	for _, c := range []struct {
+		header string
+		width  float32
+	}{{"Month", em * 9}, {"Day", em * 12}, {"On", em * 9}, {"", em * 2.5}} {
+		imgui.TableSetupColumnV(c.header, imgui.TableColumnFlagsWidthFixed, c.width, 0)
 	}
+	imgui.TableSetupColumnV("Next", imgui.TableColumnFlagsWidthStretch, 1, 0)
 	imgui.TableHeadersRow()
 	remove := -1
 	for i := range d.rules {

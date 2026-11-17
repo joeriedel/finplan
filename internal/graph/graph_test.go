@@ -702,3 +702,81 @@ func TestLaneAt(t *testing.T) {
 		t.Error("LaneAt with no lanes or no pitch should miss")
 	}
 }
+
+func TestStackValueTags(t *testing.T) {
+	pos, sz, size := Pt{100, 50}, Pt{200, 200}, Pt{60, 16}
+	overlap := func(got []Pt, sizes []Pt) bool {
+		for i := range got {
+			for j := range got {
+				if i != j && got[i].Y < got[j].Y+sizes[j].Y && got[j].Y < got[i].Y+sizes[i].Y {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	same := func(n int) []Pt {
+		s := make([]Pt, n)
+		for i := range s {
+			s[i] = size
+		}
+		return s
+	}
+	// Apart already: as ValueTagPos puts them, in the order given.
+	got := StackValueTags([]float32{200, 100}, same(2), 2, pos, sz)
+	if got[0] != ValueTagPos(200, size, pos, sz) || got[1] != ValueTagPos(100, size, pos, sz) {
+		t.Errorf("tags apart moved: %v", got)
+	}
+	// Level tags are pushed apart, the first by its place in the order given.
+	ys := []float32{150, 150, 152, 149}
+	got = StackValueTags(ys, same(4), 2, pos, sz)
+	if overlap(got, same(4)) {
+		t.Errorf("overlapping tags: %v", got)
+	}
+	for _, p := range got {
+		if p.X != 40 || p.Y < pos.Y || p.Y+size.Y > pos.Y+sz.Y {
+			t.Errorf("tag %v outside the gutter or the plot", p)
+		}
+	}
+	// A pile at the bottom is pushed up, one at the top down, in order.
+	got = StackValueTags([]float32{250, 250, 250}, same(3), 2, pos, sz)
+	if overlap(got, same(3)) || got[0].Y+size.Y > pos.Y+sz.Y || got[1].Y+size.Y > pos.Y+sz.Y || got[2].Y+size.Y > pos.Y+sz.Y {
+		t.Errorf("bottom pile: %v", got)
+	}
+	got = StackValueTags([]float32{50, 50, 50}, same(3), 2, pos, sz)
+	if overlap(got, same(3)) || got[0].Y < pos.Y {
+		t.Errorf("top pile: %v", got)
+	}
+	// Too many tags for the plot start at its top.
+	got = StackValueTags([]float32{100, 100}, []Pt{{60, 150}, {60, 150}}, 0, pos, sz)
+	if got[0].Y != pos.Y && got[1].Y != pos.Y {
+		t.Errorf("tags taller than the plot: %v", got)
+	}
+	if len(StackValueTags(nil, nil, 2, pos, sz)) != 0 {
+		t.Error("no tags gave tags")
+	}
+}
+
+func TestLifespanSpan(t *testing.T) {
+	today := model.D(2026, time.November, 8)
+	h := model.Household{Members: []model.HouseholdMember{
+		{Name: "Kid", Birth: model.D(2015, time.May, 1), Role: model.RoleDependent},
+		{Name: "Spouse", Birth: model.D(1980, time.January, 1), Role: model.RoleSpouse},
+		{Name: "Pat", Birth: model.D(1985, time.March, 20), Role: model.RoleEarner},
+		{Name: "Lee", Birth: model.D(1970, time.March, 20), Role: model.RoleEarner},
+	}}
+	from, to, name, ok := LifespanSpan(h, today)
+	if !ok || name != "Pat" || from != model.D(2026, time.October, 8) || to != model.D(2080, time.March, 20) {
+		t.Errorf("span %v..%v for %q, %v", from, to, name, ok)
+	}
+	if _, _, _, ok := LifespanSpan(model.Household{Members: h.Members[:2]}, today); ok {
+		t.Error("a household with no earner has a lifespan range")
+	}
+	if _, _, _, ok := LifespanSpan(model.Household{}, today); ok {
+		t.Error("an empty household has a lifespan range")
+	}
+	old := model.Household{Members: []model.HouseholdMember{{Name: "Old", Birth: model.D(1930, time.January, 1), Role: model.RoleEarner}}}
+	if _, _, _, ok := LifespanSpan(old, today); ok {
+		t.Error("an earner past 95 has a lifespan range")
+	}
+}

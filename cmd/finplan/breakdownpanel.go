@@ -23,7 +23,7 @@ type bkUI struct {
 
 // breakdownPanelHeight is the height of the breakdown panel below the plot, with avail the height of the area it shares with the plot.
 func breakdownPanelHeight(avail float32) float32 {
-	return min(imgui.FontSize()*13, avail*0.4)
+	return min(imgui.FontSize()*20, avail*0.5)
 }
 
 // breakdownPanel draws the panel: what changed the line the breakdown follows over the interval, by cause.

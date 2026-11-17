@@ -96,9 +96,9 @@ func taxRows(rec *model.Record, ty *engine.TaxYear) []taxRow {
 	r := ty.Result
 	income := ty.Wages + ty.VestWages + ty.Ordinary + r.TaxableBenefits + ty.EarlyWithdrawal + ty.NonQualified529 + tax.GainsInAGI(ty.ShortTermGains, ty.LongTermGains, ty.Input.Status)
 	deducted := income - r.AGI
-	state := "State tax"
+	state := "State"
 	if ty.Input.State != "" {
-		state = "State tax (" + ty.Input.State + ")"
+		state = stateName(ty.Input.State)
 	}
 	rows := []taxRow{
 		{Label: "Income"},
@@ -126,7 +126,7 @@ func taxRows(rec *model.Record, ty *engine.TaxYear) []taxRow {
 		taxRow{"Federal tax", formatDollars(r.FederalTax), "before credits"},
 		taxRow{"Credits", formatDollars(r.Credits), ""},
 		taxRow{state + " taxable income", formatDollars(r.StateTaxable), ""},
-		taxRow{state, formatDollars(r.StateTax), ""},
+		taxRow{state + " tax", formatDollars(r.StateTax), ""},
 		taxRow{"FICA", formatDollars(r.SocialSecurity + r.Medicare + r.AdditionalMedicare),
 			"Social Security " + formatDollars(r.SocialSecurity) + ", Medicare " + formatDollars(r.Medicare+r.AdditionalMedicare)},
 	)

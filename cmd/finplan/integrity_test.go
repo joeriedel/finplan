@@ -203,3 +203,36 @@ func TestDeleteLinesSayTheMatchAndTheTermsAreRemoved(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// A live line of a deleted account is dropped with it, saved preset or not; the other lines stay, and undoing the delete does not bring the line back.
+func TestDeleteAccountRemovesItsLiveGraphLine(t *testing.T) {
+	a := demoApp(t)
+	f := newAcctForm{name: "Brokerage 2", typ: model.TypeBrokerage, tax: model.Taxable}
+	acct, _ := f.account()
+	if !a.edit("add account", func() (*ops.Result, error) { return ops.NewAccount(a.st, a.rec, acct, ops.Options{}) }) {
+		t.Fatal(a.notices)
+	}
+	id := acct.ID
+	if id == "" {
+		id = "brokerage-2"
+	}
+	asset := model.DefaultAssetID(id)
+	hasLine := func(asset model.AssetID) bool {
+		return slices.ContainsFunc(a.graph.lines.All(), func(l graph.Line) bool { return l.Asset == asset })
+	}
+	a.graph.lines.Add(asset, false, "", graph.RGB(2))
+	others := len(a.graph.lines.All()) - 1
+	if !hasLine(asset) {
+		t.Fatal("no line for the new account")
+	}
+	if !a.edit("delete account", func() (*ops.Result, error) { return ops.DeleteAccount(a.st, a.rec, id, ops.Options{}) }) {
+		t.Fatal(a.notices)
+	}
+	if hasLine(asset) || len(a.graph.lines.All()) != others {
+		t.Errorf("after the delete: %d lines, the account's still there: %v", len(a.graph.lines.All()), hasLine(asset))
+	}
+	a.undo()
+	if hasLine(asset) || len(a.graph.lines.All()) != others {
+		t.Errorf("after undo: %d lines", len(a.graph.lines.All()))
+	}
+}

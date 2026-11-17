@@ -118,3 +118,37 @@ func ClearOccurrence(st *store.Store, rec *model.Record, item string, period, as
 	}
 	return res, err
 }
+
+// CorrectOccurrence stores a correction of the occurrence fact with the status and amounts of occ, and a note; the item and period of the fact stay as they were and the original stays in its history. Correcting a voided occurrence restores it. A correction that changes nothing is ErrNoChange. The result has the reloaded Record unless the run was a dry run.
+func CorrectOccurrence(st *store.Store, rec *model.Record, id int64, occ model.Occurrence, note string, o Options) (*Result, error) {
+	f, err := storedFact(st, id, store.FactOccurrence)
+	if err != nil {
+		return nil, err
+	}
+	if !occ.Status.Valid() {
+		return nil, refuse(ErrInvalidValue, "the status %q must be auto, posted or pending", occ.Status)
+	}
+	for _, a := range []*float64{occ.Posted, occ.Expected} {
+		if a != nil && (!finite(*a) || *a < 0) {
+			return nil, refuse(ErrInvalidValue, "the amount %v must not be negative", *a)
+		}
+	}
+	next := occ.Clone()
+	next.ID, next.Item, next.Period = id, f.Occurrence.Item, f.Occurrence.Period
+	if !f.Void && sameOccurrence(next, *f.Occurrence) {
+		return nil, ErrNoChange
+	}
+	return correctFact(st, id, store.FactValue{Occurrence: &next}, note, &Result{Occurrence: &next}, o)
+}
+
+// VoidOccurrence stores a correction that takes the occurrence fact out of the record, with a note; CorrectOccurrence restores it. An occurrence already voided is ErrNoChange.
+func VoidOccurrence(st *store.Store, rec *model.Record, id int64, note string, o Options) (*Result, error) {
+	f, err := storedFact(st, id, store.FactOccurrence)
+	if err != nil {
+		return nil, err
+	}
+	if f.Void {
+		return nil, ErrNoChange
+	}
+	return voidFact(st, id, note, &Result{Occurrence: f.Occurrence}, o)
+}
