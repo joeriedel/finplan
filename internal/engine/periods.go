@@ -82,4 +82,9 @@ func newDeposits(rec *model.Record, cutoffs map[string]model.Date) *householdTax
 	return ht
 }
 
-func init() { model.NetDeposits = Deposits }
+// matchDeposits is the model.NetDeposits hook: Deposits without the item cutoffs. Matching calls it while holding the record's match lock, and finding cutoffs needs the matches, so a cutoff-aware household tax would deadlock; matching only ranks candidates by the deposit, which the cutoffs change only slightly.
+func matchDeposits(rec *model.Record) func(it model.BudgetItem, d model.Date) (float64, bool) {
+	return newDeposits(rec, nil).deposit
+}
+
+func init() { model.NetDeposits = matchDeposits }

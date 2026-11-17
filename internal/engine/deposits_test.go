@@ -125,6 +125,23 @@ func TestWagesLumpTieIsBrokenByTheNetDeposit(t *testing.T) {
 	}
 }
 
+// Matching reaches the deposit hook while holding the match lock, so the hook must not need the matches itself.
+func TestMatchingWagesWithDepositsInTheCutoffPeriodDoesNotDeadlock(t *testing.T) {
+	rec, salary := depositRecord(t, 500)
+	net := deposit(t, rec, salary, d(2026, time.January, 10))
+	must(t, rec.Account("chk").AddTransaction(model.Transaction{Date: d(2026, time.January, 12), Amount: net, Kind: model.TxIncome, Memo: "salary"}))
+	done := make(chan int)
+	go func() { done <- len(rec.Matches().Item("salary")) }()
+	select {
+	case n := <-done:
+		if n != 1 {
+			t.Errorf("matched %d deposits, want 1", n)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("deriving the matches deadlocked")
+	}
+}
+
 func TestEndingTheSalaryStopsItsDeduction(t *testing.T) {
 	rec, _ := depositRecord(t, 500)
 	end := d(2026, time.March, 31)
