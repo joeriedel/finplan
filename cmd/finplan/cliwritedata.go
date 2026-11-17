@@ -714,7 +714,14 @@ func cmdAccountClose(c *call) (any, error) {
 		date = c.rec.Today
 	}
 	res, err := ops.CloseAccount(c.st, c.rec, id, date, c.options())
-	return c.accountResult(res, err, id)
+	out, err := c.accountResult(res, err, id)
+	if err != nil {
+		return nil, err
+	}
+	if res != nil && len(res.Affected) > 0 {
+		out.(map[string]any)["affected"] = res.Affected
+	}
+	return out, nil
 }
 
 func cmdAccountReopen(c *call) (any, error) {

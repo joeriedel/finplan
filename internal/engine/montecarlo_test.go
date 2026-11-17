@@ -202,6 +202,14 @@ func netWorthWorkload(tb testing.TB) {
 	}
 }
 
+func TestWorkerCountLeavesCoresForTheInterface(t *testing.T) {
+	for procs, want := range map[int]int{1: 1, 2: 1, 3: 2, 4: 3, 5: 3, 8: 6, 64: 62} {
+		if got := workerCount(procs); got != want {
+			t.Errorf("workerCount(%d) = %d, want %d", procs, got, want)
+		}
+	}
+}
+
 func BenchmarkMonteCarlo(b *testing.B) {
 	for range b.N {
 		netWorthWorkload(b)

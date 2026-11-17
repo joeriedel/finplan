@@ -689,8 +689,19 @@ func (prior rateLayer) over(v rateLayer) rateLayer {
 	return rateLayer{s: prior.s.Overlay(v.s)}
 }
 
+// raiseSeries is the raises of one item as a running product: the anniversaries it counts, in order, and the factor after each. It extends as later dates are asked for.
+type raiseSeries struct {
+	// next is the year whose anniversary is generated next.
+	next  int
+	dates []model.Date
+	cum   []float64
+}
+
+// raiseMemo keeps the raiseSeries of the items asked for, by item id, so that the raise factors of one run are not walked from the start for each date. A nil raiseMemo keeps nothing. The series of an id must always be for the same item and growth schedule; a memo belongs to one run and one goroutine.
+type raiseMemo map[string]*raiseSeries
+
 // raiseFactor is the factor by which raises have lifted an item's amount on d. The item's raise anniversaries are the yearly repeats of its start (or, with none, its recurrence anchor or today); each one after both that start and today, up to d, steps the amount up by the rate g gives on that day, never below zero. A 29 February anniversary falls on 28 February in other years.
-func raiseFactor(it model.BudgetItem, today, d model.Date, g model.Schedule) float64 {
+func raiseFactor(it model.BudgetItem, today, d model.Date, g model.Schedule, memo raiseMemo) float64 {
 	anchor := today
 	switch {
 	case it.Start != nil:
@@ -702,8 +713,15 @@ func raiseFactor(it model.BudgetItem, today, d model.Date, g model.Schedule) flo
 	ay, month, day := anchor.YMD()
 	fy, _, _ := from.YMD()
 	dy, _, _ := d.YMD()
-	f := 1.0
-	for y := max(ay+1, fy); y <= dy; y++ {
+	ser := memo[it.ID]
+	if ser == nil {
+		ser = &raiseSeries{next: max(ay+1, fy)}
+		if memo != nil {
+			memo[it.ID] = ser
+		}
+	}
+	for ; ser.next <= dy; ser.next++ {
+		y := ser.next
 		a := model.D(y, month, day)
 		if month == time.February && day == 29 && !(y%4 == 0 && (y%100 != 0 || y%400 == 0)) {
 			a = model.D(y, month, 28)
@@ -711,14 +729,22 @@ func raiseFactor(it model.BudgetItem, today, d model.Date, g model.Schedule) flo
 		if a <= from {
 			continue
 		}
-		if a > d {
-			break
+		f := 1.0
+		if n := len(ser.cum); n > 0 {
+			f = ser.cum[n-1]
 		}
 		if v, ok := g.At(a); ok {
 			f *= max(1+v, 0)
 		}
+		ser.dates = append(ser.dates, a)
+		ser.cum = append(ser.cum, f)
 	}
-	return f
+	// The anniversaries up to d are a prefix of the series, which may reach past d.
+	n := sort.Search(len(ser.dates), func(i int) bool { return ser.dates[i] > d })
+	if n == 0 {
+		return 1
+	}
+	return ser.cum[n-1]
 }
 
 // change is one recorded change to an account's balance, with its cause.
@@ -881,7 +907,7 @@ func (p *path) legGrowthAt(i int, d model.Date) float64 {
 }
 
 // amountOn is the item's amount on d under the projection's amounts and raises: the schedule's value lifted by the raises and, if the item is indexed, by inflation. It reports false if the schedule has no value on d.
-func amountOn(rec *model.Record, it model.BudgetItem, d model.Date, amounts, growths map[string]model.Schedule, infl model.Schedule) (float64, bool) {
+func amountOn(rec *model.Record, it model.BudgetItem, d model.Date, amounts, growths map[string]model.Schedule, infl model.Schedule, memo raiseMemo) (float64, bool) {
 	raises, ok := growths[it.ID]
 	if !ok {
 		raises = it.Growth
@@ -894,7 +920,7 @@ func amountOn(rec *model.Record, it model.BudgetItem, d model.Date, amounts, gro
 	if !ok {
 		return 0, false
 	}
-	amt *= raiseFactor(it, rec.Today, d, raises)
+	amt *= raiseFactor(it, rec.Today, d, raises, memo)
 	if it.Indexed {
 		amt *= infl.Compound(rec.Today, d)
 	}
@@ -933,7 +959,7 @@ func (p *path) collect(rec *model.Record, items []model.BudgetItem, cutoffs, ite
 			if _, found := rec.Occurrences.Get(it.ID, d); !found && rec.Paid(it, d, after) {
 				continue
 			}
-			if amt, ok := amountOn(rec, it, d, amounts, growths, infl); ok {
+			if amt, ok := amountOn(rec, it, d, amounts, growths, infl, p.ht.raiseMemo()); ok {
 				p.flows(rec, it, d, amt)
 			}
 		}
@@ -1009,7 +1035,7 @@ func (p *path) remainders(rec *model.Record, it model.BudgetItem, cutoff, upTo m
 
 // periodView evaluates the item's period against the cutoff with its budgeted amount and occurrence fact. A wages paycheck counts its projected net deposit, as the periods the user sees do; with plain set it is the plain year's, for the tax inputs that the real year is built from.
 func periodView(rec *model.Record, it model.BudgetItem, per model.Period, cutoff model.Date, ht *householdTax, plain bool, amounts, growths map[string]model.Schedule, infl model.Schedule) model.PeriodView {
-	budgeted, _ := amountOn(rec, it, per.Start, amounts, growths, infl)
+	budgeted, _ := amountOn(rec, it, per.Start, amounts, growths, infl, ht.raiseMemo())
 	if net, ok := ht.depositIn(it, per.Start, plain); ok {
 		budgeted = net
 	}

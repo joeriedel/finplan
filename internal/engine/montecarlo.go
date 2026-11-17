@@ -19,6 +19,14 @@ import (
 // DefaultRuns is the number of runs MonteCarlo makes when asked for none.
 const DefaultRuns = 1000
 
+// workerCount is how many workers a pool may start on procs processors: all but one of up to four, all but two of more, and at least one, so that the interface keeps a core while a simulation runs.
+func workerCount(procs int) int {
+	if procs <= 4 {
+		return max(1, procs-1)
+	}
+	return procs - 2
+}
+
 // DefaultPercentiles are the percentiles MonteCarlo returns when asked for none.
 var DefaultPercentiles = []float64{10, 25, 50, 75, 90}
 
@@ -76,7 +84,7 @@ func MonteCarlo(rec *model.Record, projection string, target model.AssetID, time
 		firstErr error
 		next     int
 	)
-	for range min(runtime.GOMAXPROCS(0), opts.Runs) {
+	for range min(workerCount(runtime.GOMAXPROCS(0)), opts.Runs) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

@@ -84,7 +84,7 @@ func freeAssetName(rec *model.Record, name string, except model.AssetID) error {
 	return nil
 }
 
-// freeAccountName refuses a name that another account or any user asset already has, ignoring case and surrounding space, because an account's name is also the name of its default asset. The account except is not compared, so an account can change the case of its own name.
+// freeAccountName refuses a name that another account, any user asset or an account of any projection already has, ignoring case and surrounding space, because an account's name is also the name of its default asset and the accounts of projections appear beside the record's. The account except is not compared, so an account can change the case of its own name.
 func freeAccountName(rec *model.Record, name string, except model.AccountID) error {
 	for _, a := range rec.Assets {
 		if _, isDefault := accountOfDefault(a.ID); !isDefault && strings.EqualFold(strings.TrimSpace(a.Name), name) {
@@ -94,6 +94,13 @@ func freeAccountName(rec *model.Record, name string, except model.AccountID) err
 	for _, a := range rec.Accounts {
 		if a.ID != except && strings.EqualFold(strings.TrimSpace(a.Name), name) {
 			return refuse(ErrNameTaken, "there is already an account named %q", a.Name)
+		}
+	}
+	for _, p := range rec.Projections {
+		for _, a := range p.Accounts {
+			if strings.EqualFold(strings.TrimSpace(a.Name), name) {
+				return refuse(ErrNameTaken, "projection %q already has an account named %q", p.Name, a.Name)
+			}
 		}
 	}
 	return nil

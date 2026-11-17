@@ -180,3 +180,15 @@ func TestCLIAccountWithRecordsIsClosedNotDeleted(t *testing.T) {
 		t.Errorf("close: %+v", w.Account)
 	}
 }
+
+func TestCLICloseOfTheReconciliationAccountReportsTheClearedSetting(t *testing.T) {
+	path := seededFile(t)
+	write(t, path, "", "household", "set", "--checking", "Checking")
+	w := data(t, path, "", "account", "close", "checking", "--date", "2026-11-09")
+	if len(w.Affected) != 1 || w.Affected[0] != (waffected{"household", "household", "reconciliation account", "removed"}) {
+		t.Errorf("close affected: %+v", w.Affected)
+	}
+	if w := data(t, path, "", "account", "close", "tsp", "--date", "2026-11-09"); len(w.Affected) != 0 {
+		t.Errorf("closing another account affected: %+v", w.Affected)
+	}
+}

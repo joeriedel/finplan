@@ -23,8 +23,8 @@ var (
 	ErrNoChange = errors.New("ops: no change")
 	// ErrEmptyName is returned for a projection name that is empty once trimmed.
 	ErrEmptyName = errors.New("ops: a projection needs a name")
-	// ErrNameTaken is returned for a projection name that another projection has.
-	ErrNameTaken = errors.New("ops: projection name already used")
+	// ErrNameTaken is returned for a name or id that something else of its kind already has: a projection, an account, an asset, a budget item, a class and so on.
+	ErrNameTaken = errors.New("ops: name already used")
 	// ErrUnknownProjection is returned for a projection name the record does not have.
 	ErrUnknownProjection = errors.New("ops: unknown projection")
 	// ErrHasChildren is returned by a delete of a projection that others build on.
@@ -119,7 +119,7 @@ type Result struct {
 	// Household is the household a household edit changed, in Record; Member the member a member edit changed or added, or for a removal the member as it was.
 	Household *model.Household
 	Member    *model.HouseholdMember
-	// Affected lists the accounts a removal of a household member cleared as the beneficiary of.
+	// Affected lists the accounts a removal of a household member cleared as the beneficiary of, and the household setting that closing its reconciliation account cleared.
 	Affected []Affected
 	// Federal and State are the tax table a table edit set or reverted, in Record.
 	Federal *tax.Federal

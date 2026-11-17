@@ -376,3 +376,42 @@ func TestCheckingPreStartInterestIsTaxed(t *testing.T) {
 		t.Errorf("interest %v, want the 100 the snapshots add", got)
 	}
 }
+
+func TestCapitalLossCarriesForwardAcrossYearsInAnyOrder(t *testing.T) {
+	rec := marketFixture(t)
+	crash := []model.Shock{{Class: model.ClassLargeCap, Date: d(2026, time.July, 1), Change: -0.6}}
+	to1090 := model.Rebalance{Account: "a", Date: d(2027, time.March, 1), Allocation: []model.Weight{{Class: model.ClassLargeCap, Share: 0.1}, {Class: model.ClassBonds, Share: 0.9}}}
+	must(t, rec.AddProjection(&model.Projection{Name: "loss", Shocks: crash, Rebalances: []model.Rebalance{to1090}}))
+
+	// The later years are asked first: the carryover of a year does not depend on the order the years are computed in.
+	y29 := taxYear(t, rec, "loss", 2029)
+	y28 := taxYear(t, rec, "loss", 2028)
+	y27 := taxYear(t, rec, "loss", 2027)
+	y26 := taxYear(t, rec, "loss", 2026)
+
+	loss := -(y27.ShortTermGains + y27.LongTermGains)
+	if loss < 100000 {
+		t.Fatalf("the rebalance realized a loss of %v, want a large one", loss)
+	}
+	if y26.Input.LossCarryover != 0 || y27.Input.LossCarryover != 0 {
+		t.Errorf("carryover into 2026 and 2027: %v and %v", y26.Input.LossCarryover, y27.Input.LossCarryover)
+	}
+	if !within(y27.Result.LossCarryforward, loss-3000, 1e-6) {
+		t.Errorf("2027 carries forward %v, want %v", y27.Result.LossCarryforward, loss-3000)
+	}
+	if !within(y28.Input.LossCarryover, loss-3000, 1e-6) || !within(y28.Result.LossCarryforward, loss-6000, 1e-6) {
+		t.Errorf("2028 carries in %v and out %v, want %v and %v", y28.Input.LossCarryover, y28.Result.LossCarryforward, loss-3000, loss-6000)
+	}
+	if !within(y29.Input.LossCarryover, loss-6000, 1e-6) {
+		t.Errorf("2029 carries in %v, want %v", y29.Input.LossCarryover, loss-6000)
+	}
+
+	// The carryover lowers the 2028 adjusted gross income by the 3,000 it deducts.
+	without := y28.Input
+	without.LossCarryover = 0
+	base, err := tax.Compute(rec.Tax, without)
+	must(t, err)
+	if !within(base.AGI-y28.Result.AGI, 3000, 1e-6) {
+		t.Errorf("the carryover lowered the 2028 AGI by %v, want 3000", base.AGI-y28.Result.AGI)
+	}
+}

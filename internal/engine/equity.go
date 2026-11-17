@@ -126,6 +126,27 @@ type equityPlan struct {
 	prices  *stockPrices
 	held    map[priceKey]int
 	events  []equityEvent
+	// settled are the recorded vests dated on or before start, which the plan does not repeat; their deposits matter to a brokerage whose own data was replaced from before them.
+	settled []settledVest
+}
+
+// depositDate is the date of the brokerage transaction that deposited the recorded vest's proceeds, or the vest's date when it is not tied to one.
+func depositDate(rec *model.Record, brokerage model.AccountID, v model.RecordedVest) model.Date {
+	if b := rec.Account(brokerage); b != nil && v.TxEntry != 0 {
+		for _, tx := range b.Transactions {
+			if tx.Entry == v.TxEntry {
+				return tx.Date
+			}
+		}
+	}
+	return v.Date
+}
+
+// settledVest is the net proceeds of a recorded vest, the date they were deposited and the account they were deposited in.
+type settledVest struct {
+	date model.Date
+	net  float64
+	into model.AccountID
 }
 
 // newEquityPlan plans the account from start up to horizon. Its real grants dated after start and the focal grants dated after start (generated up to horizon, shares from the projected price on their dates) add their shares on their dates; every planned vest that no recorded vest dated on or before start fulfils happens on its date, or on the day after start if that date is not after start. A grant's vests never vest more than its shares that are left.
@@ -135,6 +156,13 @@ func newEquityPlan(rec *model.Record, a *model.Account, start, horizon model.Dat
 	var keys []priceKey
 	for i := range grants {
 		keys = append(keys, prices.key(i, &grants[i]))
+	}
+	for _, g := range a.Grants {
+		for _, v := range a.Vests {
+			if v.Grant == g.ID && v.Date <= start {
+				pl.settled = append(pl.settled, settledVest{date: depositDate(rec, g.Brokerage, v), net: v.Net(), into: g.Brokerage})
+			}
+		}
 	}
 	for _, f := range focal {
 		for _, d := range f.Dates(horizon) {
@@ -257,9 +285,14 @@ func (pl *equityPlan) changes() []change {
 	return out
 }
 
-// deposits returns the net proceeds of the plan's vests paid into the account after the date, as transfers from the equity account.
+// deposits returns the net proceeds of the plan's vests paid into the account after the date, as transfers from the equity account. A recorded vest counts too when it is dated after the date: the account's data then ends before it, so the recorded deposit is not in the account's balance.
 func (pl *equityPlan) deposits(into model.AccountID, after model.Date) []change {
 	var out []change
+	for _, sv := range pl.settled {
+		if sv.into == into && sv.date > after && into != pl.account {
+			out = append(out, change{date: sv.date, cause: CauseTransfer, amount: sv.net, counter: pl.account, rank: rankTransfer})
+		}
+	}
 	for _, ev := range pl.events {
 		if !ev.vest || ev.deposit != into || ev.date <= after || into == pl.account {
 			continue

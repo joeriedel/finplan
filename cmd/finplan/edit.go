@@ -230,6 +230,16 @@ func (a *app) install(res *ops.Result) {
 	for _, c := range res.Pruned {
 		a.graph.setPreset(c.After)
 	}
+	// Closing the reconciliation account clears the setting; a delete tells so in its dialog.
+	var cleared []ops.Affected
+	for _, af := range res.Affected {
+		if af.Kind == ops.AffectedHousehold {
+			cleared = append(cleared, af)
+		}
+	}
+	for _, line := range deleteLines(ops.DeletePlan{Affected: cleared}) {
+		a.notify(line)
+	}
 }
 
 // restore saves the projections ps (with the rename the step they undo or redo made) through the same ops as an edit and installs the result; a step of docs restores the accounts, assets, base budget and projections of docs instead (the record entries added since are kept). It then stores the view presets to in place of from (the presets as the step left them), each only if the stored preset still has the body of from; a preset saved since is left alone and named in a notice. It reports whether the record was restored.

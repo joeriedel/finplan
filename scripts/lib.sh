@@ -46,6 +46,7 @@ run_in_container() {
         -v "$ROOT:/src:Z" \
         -v finplan-go:/gopath:Z \
         -e HOME=/tmp \
+        -e GOTELEMETRY=off \
         -e GOPATH=/gopath \
         -e GOCACHE=/gopath/cache \
         -e GOFLAGS=-buildvcs=false \

@@ -5,6 +5,7 @@ package tax
 
 import (
 	"math"
+	"sync"
 	"testing"
 )
 
@@ -356,5 +357,66 @@ func TestBracketTop(t *testing.T) {
 	}
 	if !tables.HasBracketRate(0.22) || tables.HasBracketRate(0.23) {
 		t.Error("HasBracketRate")
+	}
+}
+
+func TestStateIndexingPastItsTable(t *testing.T) {
+	d := Defaults()
+	d.State = append(d.State, State{
+		Name: "IDX", Year: 2025,
+		Brackets:          []Bracket{{0, 0.02}, {10000, 0.05}},
+		StandardDeduction: map[FilingStatus]float64{MarriedJoint: 10000},
+		Exemption:         1000, DependentExemption: 500, Cap529: 4000,
+	})
+	s, err := d.stateFor("IDX", 2027, 0.03)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two years at 3% is 1.0609: brackets and deductions round to 50, exemptions to 10, the 529 cap to 100.
+	near(t, "bracket", s.Brackets[1].Over, 10600)
+	near(t, "deduction", s.StandardDeduction[MarriedJoint], 10600)
+	near(t, "exemption", s.Exemption, 1060)
+	near(t, "dependent exemption", s.DependentExemption, 530)
+	near(t, "529 cap", s.Cap529, 4200)
+	if got, _ := d.StateYear("IDX", 2025); got.Brackets[1].Over != 10000 || got.StandardDeduction[MarriedJoint] != 10000 {
+		t.Error("indexing changed the stored table")
+	}
+	if s, _ := d.stateFor("IDX", 2025, 0.03); s.Brackets[1].Over != 10000 {
+		t.Error("the table's own year was indexed")
+	}
+
+	res, err := Compute(d, Input{Year: 2027, Status: MarriedJoint, State: "IDX", OtherIncome: 10600 + 1060*2 + 10600 + 10600, Inflation: 0.03})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Taxable 21,200 less nothing else: 10,600 at 2% and 10,600 at 5%.
+	near(t, "state tax", res.StateTax, 0.02*10600+0.05*10600)
+
+	// An edited table is not served from the entry of its earlier self.
+	d.State[len(d.State)-1].Brackets[1].Over = 20000
+	if s, _ := d.stateFor("IDX", 2027, 0.03); s.Brackets[1].Over != 21200 {
+		t.Errorf("edited bracket indexed to %v, want 21200", s.Brackets[1].Over)
+	}
+}
+
+func TestIndexedTablesAreCachedAndRaceFree(t *testing.T) {
+	d := Defaults()
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for y := 2030; y < 2060; y++ {
+				if _, err := Compute(d, Input{Year: y, Status: MarriedJoint, State: VA, OtherIncome: float64(100000 + i), Inflation: 0.03}); err != nil {
+					t.Error(err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	a, _ := d.federalFor(2040, 0.03)
+	b, _ := d.federalFor(2040, 0.03)
+	if &a.Status[MarriedJoint].Brackets[0] != &b.Status[MarriedJoint].Brackets[0] {
+		t.Error("the indexed table is not shared")
 	}
 }

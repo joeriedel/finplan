@@ -112,6 +112,9 @@ type snapshot struct {
 	Presets     []store.Preset
 	Household   model.Household
 	Tax         tax.Tables
+	// Classes and Correlations are the market model, so that a refused class write proves them untouched.
+	Classes      []model.MarketClass
+	Correlations []model.Correlation
 }
 
 func dbSnapshot(t *testing.T, path string) snapshot {
@@ -135,7 +138,7 @@ func dbSnapshot(t *testing.T, path string) snapshot {
 			t.Fatal(err)
 		}
 	}
-	return snapshot{rec.Projections, rec.Accounts, rec.Assets, rec.Budget, entries, rows, rec.Household, rec.Tax}
+	return snapshot{rec.Projections, rec.Accounts, rec.Assets, rec.Budget, entries, rows, rec.Household, rec.Tax, rec.Classes, rec.Correlations}
 }
 
 func lastValue(t *testing.T, path, target, projection, from, to string) float64 {

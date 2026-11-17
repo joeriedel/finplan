@@ -38,8 +38,10 @@ type Input struct {
 	EarlyWithdrawal float64
 	// NonQualified529 is the earnings part of withdrawals from 529 accounts that did not pay qualified education expenses: ordinary income and subject to the penalty.
 	NonQualified529 float64
-	// ShortTermGains and LongTermGains are the year's net realized capital gains on assets held a year or less and more than a year; a loss is negative. Short-term gains are ordinary income and long-term gains are taxed at the preferential rates on top of the ordinary taxable income. A net loss deducts up to 3,000 (1,500 married filing separately) from ordinary income, and what is left is not carried forward. Both kinds of gains count in the adjusted gross income and the net investment income.
+	// ShortTermGains and LongTermGains are the year's net realized capital gains on assets held a year or less and more than a year; a loss is negative. Short-term gains are ordinary income and long-term gains are taxed at the preferential rates on top of the ordinary taxable income. A net loss deducts up to 3,000 (1,500 married filing separately) from ordinary income, and what is left carries forward (see LossCarryover). Both kinds of gains count in the adjusted gross income and the net investment income.
 	ShortTermGains, LongTermGains float64
+	// LossCarryover is the net capital loss carried in from earlier years, a positive amount. It is treated as a long-term loss in the netting.
+	LossCarryover float64
 	// BenefitIncome is the year's Social Security benefits received. Part of it is taxable by the provisional income formula and the state does not tax it. It is not the payroll tax, which is Result.SocialSecurity.
 	BenefitIncome float64
 	// Inflation is the annual rate that indexes a year past the last federal table.
@@ -72,14 +74,20 @@ type Result struct {
 	PreferredGains float64
 	// TaxableBenefits is the part of the Social Security benefits in the adjusted gross income.
 	TaxableBenefits float64
+	// LossCarryforward is the net capital loss the year leaves for later years: what its netting, with the carryover, loses beyond the deduction limit.
+	LossCarryforward float64
 	// Total is the federal tax after credits, the NIIT, the penalty, the state tax and the payroll taxes.
 	Total float64
 }
 
-// index scales the table's indexed amounts from its own year to year by (1+inflation) a year. Brackets, the long-term gains thresholds and the standard deduction round to 50, the Social Security wage base to 300, the 401(k) and IRA limits to 500, the HSA limit to 50 and the child credit to 100. The credit for other dependents and the statutory thresholds are not indexed. A year at or before the table's is left as it is.
+// index scales the table's indexed amounts from its own year to year by (1+inflation) a year. Brackets, the long-term gains thresholds and the standard deduction round to 50, the Social Security wage base to 300, the 401(k) and IRA limits to 500, the HSA limit to 50 and the child credit to 100. The credit for other dependents and the statutory thresholds are not indexed. A year at or before the table's is left as it is. The result of an indexed year is cached and shared, so callers must not change it.
 func (f Federal) index(year int, inflation float64) Federal {
 	if year <= f.Year {
 		return f
+	}
+	key := indexKey{f.fingerprint(), year, inflation}
+	if v, ok := indexed.federal(key); ok {
+		return v
 	}
 	factor := math.Pow(1+inflation, float64(year-f.Year))
 	scale := func(v, unit float64) float64 { return math.Round(v*factor/unit) * unit }
@@ -99,7 +107,34 @@ func (f Federal) index(year int, inflation float64) Federal {
 	f.Limit401k = scale(f.Limit401k, 500)
 	f.LimitIRA = scale(f.LimitIRA, 500)
 	f.LimitHSA = scale(f.LimitHSA, 50)
+	indexed.putFederal(key, f)
 	return f
+}
+
+// index scales the state's brackets and standard deductions from its own year to year by (1+inflation) a year, rounding them to 50, the exemptions to 10 and the 529 cap to 100. A year at or before the table's is left as it is. The result of an indexed year is cached and shared, so callers must not change it.
+func (s State) index(year int, inflation float64) State {
+	if year <= s.Year {
+		return s
+	}
+	key := indexKey{s.fingerprint(), year, inflation}
+	if v, ok := indexed.state(key); ok {
+		return v
+	}
+	factor := math.Pow(1+inflation, float64(year-s.Year))
+	scale := func(v, unit float64) float64 { return math.Round(v*factor/unit) * unit }
+	s = s.Clone()
+	s.Year = year
+	for i := range s.Brackets {
+		s.Brackets[i].Over = scale(s.Brackets[i].Over, 50)
+	}
+	for k, v := range s.StandardDeduction {
+		s.StandardDeduction[k] = scale(v, 50)
+	}
+	s.Exemption = scale(s.Exemption, 10)
+	s.DependentExemption = scale(s.DependentExemption, 10)
+	s.Cap529 = scale(s.Cap529, 100)
+	indexed.putState(key, s)
+	return s
 }
 
 // federalFor returns the table in effect in the year: that of the latest table year not after it, or the first table for an earlier year, indexed by inflation for the years between.
@@ -124,8 +159,8 @@ func (t Tables) federalFor(year int, inflation float64) (Federal, error) {
 	return best.index(year, inflation), nil
 }
 
-// stateFor returns the state's table of the latest year not after the year, or its first table for an earlier year. State amounts are not indexed.
-func (t Tables) stateFor(name string, year int) (State, error) {
+// stateFor returns the state's table of the latest year not after the year, or its first table for an earlier year, indexed by inflation for the years between.
+func (t Tables) stateFor(name string, year int, inflation float64) (State, error) {
 	var best *State
 	for i := range t.State {
 		s := &t.State[i]
@@ -142,7 +177,7 @@ func (t Tables) stateFor(name string, year int) (State, error) {
 	if best == nil {
 		return State{}, fmt.Errorf("tax: there is no state table %q", name)
 	}
-	return *best, nil
+	return best.index(year, inflation), nil
 }
 
 func bracketTax(bs []Bracket, income float64) float64 {
@@ -160,27 +195,34 @@ func bracketTax(bs []Bracket, income float64) float64 {
 	return tax
 }
 
-// netGains nets the year's short-term and long-term gains against each other. It returns the part taxed as ordinary income, the part taxed at the long-term rates and the deduction a net loss takes against other income.
-func netGains(short, long float64, status FilingStatus) (ordinary, preferred, deduction float64) {
+// netGains nets the year's short-term and long-term gains against each other. It returns the part taxed as ordinary income, the part taxed at the long-term rates, the deduction a net loss takes against other income and the part of a net loss beyond that deduction, which carries forward.
+func netGains(short, long float64, status FilingStatus) (ordinary, preferred, deduction, carry float64) {
 	switch net := short + long; {
 	case net < 0:
 		limit := float64(capitalLossLimit)
 		if status == MarriedSeparate {
 			limit = capitalLossLimitMS
 		}
-		return 0, 0, math.Min(-net, limit)
+		deduction = math.Min(-net, limit)
+		return 0, 0, deduction, -net - deduction
 	case short < 0:
-		return 0, net, 0
+		return 0, net, 0, 0
 	case long < 0:
-		return net, 0, 0
+		return net, 0, 0, 0
 	}
-	return short, long, 0
+	return short, long, 0, 0
 }
 
-// GainsInAGI is what the year's short-term and long-term gains add to the adjusted gross income: their net, or for a net loss the part that deducts.
-func GainsInAGI(short, long float64, status FilingStatus) float64 {
-	ordinary, preferred, deduction := netGains(short, long, status)
+// GainsInAGI is what the year's short-term and long-term gains add to the adjusted gross income once the loss carried in from earlier years nets against them, as Compute nets them: their net, or for a net loss the part that deducts.
+func GainsInAGI(short, long, carryover float64, status FilingStatus) float64 {
+	ordinary, preferred, deduction, _ := netGains(short, long-math.Max(0, carryover), status)
 	return ordinary + preferred - deduction
+}
+
+// LossCarryforward is the net capital loss a year leaves for the next: its net gains, a loss when negative, and the carryover from earlier years, as Compute nets them.
+func LossCarryforward(gains, carryover float64, status FilingStatus) float64 {
+	_, _, _, carry := netGains(0, gains-math.Max(0, carryover), status)
+	return carry
 }
 
 // taxableBenefits is the part of the benefits that the federal formula taxes: the lesser of 85% of the benefits and half of the provisional income over the base threshold plus another 35% over the adjusted threshold (the first tier capped at half of the benefits). other is the adjusted gross income without the benefits.
@@ -245,7 +287,8 @@ func Compute(t Tables, in Input) (Result, error) {
 	r.Medicare = f.MedicareRate * medicareWages
 	r.AdditionalMedicare = f.AdditionalMedicareRate * math.Max(0, medicareWages-rules.AdditionalMedicareThreshold)
 
-	ordinaryGains, preferred, lossDeduction := netGains(in.ShortTermGains, in.LongTermGains, in.Status)
+	ordinaryGains, preferred, lossDeduction, carryforward := netGains(in.ShortTermGains, in.LongTermGains-math.Max(0, in.LossCarryover), in.Status)
+	r.LossCarryforward = carryforward
 	r.AGI = wages + in.OtherIncome + in.EarlyWithdrawal + in.NonQualified529 + ordinaryGains + preferred - lossDeduction - deductions
 	if in.BenefitIncome > 0 {
 		base, adjusted := rules.BenefitBase, rules.BenefitAdjusted
@@ -290,7 +333,7 @@ func Compute(t Tables, in Input) (Result, error) {
 	r.Penalty = f.PenaltyRate * (math.Max(0, in.EarlyWithdrawal) + math.Max(0, in.NonQualified529))
 
 	if in.State != "" {
-		s, err := t.stateFor(in.State, in.Year)
+		s, err := t.stateFor(in.State, in.Year, in.Inflation)
 		if err != nil {
 			return r, err
 		}

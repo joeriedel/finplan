@@ -374,3 +374,42 @@ func TestRestoreDocumentsRefusesRemovingACounterAccount(t *testing.T) {
 		t.Errorf("remove a counter account: %v", err)
 	}
 }
+
+func TestCloseOfTheReconciliationAccountClearsTheSetting(t *testing.T) {
+	st, rec := seed(t)
+	res, err := SetHousehold(st, rec, HouseholdChange{Checking: model.Ptr(demodata.Checking)}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = res.Record
+	date := model.D(2026, time.November, 9)
+
+	// Closing another account leaves the setting alone.
+	other, err := CloseAccount(st, rec, demodata.TSP, date, Options{DryRun: true})
+	if err != nil || len(other.Affected) != 0 || other.Record.Household.Checking != demodata.Checking {
+		t.Fatalf("closing another account: %v, affected %+v", err, other.Affected)
+	}
+
+	dry, err := CloseAccount(st, rec, demodata.Checking, date, Options{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Affected{{AffectedHousehold, "household", "reconciliation account", EffectRemoved}}
+	if !slices.Equal(dry.Affected, want) || dry.Record.Household.Checking != "" {
+		t.Errorf("dry run: affected %+v, setting %q", dry.Affected, dry.Record.Household.Checking)
+	}
+	if got := reload(t, st).Household.Checking; got != demodata.Checking {
+		t.Errorf("a dry run saved the setting %q", got)
+	}
+
+	res, err = CloseAccount(st, rec, demodata.Checking, date, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(res.Affected, want) {
+		t.Errorf("affected %+v, want %+v", res.Affected, want)
+	}
+	if got := reload(t, st).Household.Checking; got != "" {
+		t.Errorf("the setting is %q after the close, want it cleared", got)
+	}
+}

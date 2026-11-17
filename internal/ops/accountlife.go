@@ -11,7 +11,7 @@ import (
 	"github.com/joeriedel/finplan/internal/store"
 )
 
-// CloseAccount closes the account on date: it keeps its history, is left out of the pickers for new lines and objects, and reads 0 on every date after date. It is ErrUnknownObject for an account the record does not have, ErrInvalidValue for an account a projection defines (those are not closable), for an account already closed (reopen it first) and for a date before the account's last record entry and for a date before an entry of another account that names it as counter account.
+// CloseAccount closes the account on date: it keeps its history, is left out of the pickers for new lines and objects, and reads 0 on every date after date. It is ErrUnknownObject for an account the record does not have, ErrInvalidValue for an account a projection defines (those are not closable), for an account already closed (reopen it first) and for a date before the account's last record entry and for a date before an entry of another account that names it as counter account. If the account is the household's reconciliation account the setting is cleared, so that the first open checking account takes over (the engine's fallback), and Result.Affected reports it as a delete does.
 func CloseAccount(st *store.Store, rec *model.Record, id model.AccountID, date model.Date, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		a := next.Account(id)
@@ -39,7 +39,12 @@ func CloseAccount(st *store.Store, rec *model.Record, id model.AccountID, date m
 			}
 		}
 		a.Closed = &date
-		return Result{Account: a}, nil
+		var affected []Affected
+		if next.Household.Checking == id {
+			next.Household.Checking = ""
+			affected = append(affected, Affected{AffectedHousehold, "household", "reconciliation account", EffectRemoved})
+		}
+		return Result{Account: a, Affected: affected}, nil
 	})
 }
 
@@ -58,7 +63,7 @@ func ReopenAccount(st *store.Store, rec *model.Record, id model.AccountID, o Opt
 	})
 }
 
-// DeleteAccount deletes an account and its default asset, and removes it from what refers to it, as AccountDeletePlan lists: other assets' members, asset settings and modifications that name it or its default asset, the household's reconciliation account setting, the budget items (base and projection-added) that move money in or out of it, and the modifications of those base items. Each saved view preset loses the lines of the default asset and the bands that used them (Result.Pruned). It is ErrUnknownObject for an account the record does not have, and ErrInUse while the account has any entry stored (a voided one too) or is the counter account of any entry stored: close it instead (CloseAccount). The result's Account is the account as it was.
+// DeleteAccount deletes an account and its default asset, and removes it from what refers to it, as AccountDeletePlan lists: other assets' members, asset settings and modifications that name it or its default asset, the household's reconciliation account setting, the rebalances of projections that name it, the budget items (base and projection-added) that move money in or out of it, and the modifications of those base items. Each saved view preset loses the lines of the default asset and the bands that used them (Result.Pruned). It is ErrUnknownObject for an account the record does not have, and ErrInUse while the account has any entry stored (a voided one too) or is the counter account of any entry stored: close it instead (CloseAccount). The result's Account is the account as it was.
 func DeleteAccount(st *store.Store, rec *model.Record, id model.AccountID, o Options) (*Result, error) {
 	return editRecord(st, rec, o, func(next *model.Record) (Result, error) {
 		a := next.Account(id)

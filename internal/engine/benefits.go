@@ -157,7 +157,7 @@ func BenefitsOf(rec *model.Record, projection string, year int) ([]MemberBenefit
 		}
 		sum := 0.0
 		for _, d := range r.tax.dates(b.item, year) {
-			if amt, ok := amountOn(r.rec, b.item, d, r.tax.amounts, r.tax.growths, r.tax.infl); ok {
+			if amt, ok := amountOn(r.rec, b.item, d, r.tax.amounts, r.tax.growths, r.tax.infl, r.tax.raises); ok {
 				sum += amt
 			}
 		}

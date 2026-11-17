@@ -7,6 +7,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/joeriedel/finplan/internal/demodata"
@@ -48,7 +49,7 @@ func TestAddProjAccount(t *testing.T) {
 	// An empty id is made from the name, and avoids the ids that are taken.
 	h2 := house
 	h2.ID = ""
-	h2.Name = "Home"
+	h2.Name = "Home!"
 	res, err = AddProjAccount(st, got, demodata.ProjNewJob, h2, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -308,7 +309,7 @@ func TestRecordIDsAvoidProjectionAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec = res.Record
-	acct := model.Account{ID: "house", Name: "House", Type: model.TypeChecking, Tax: model.Taxable}
+	acct := model.Account{ID: "house", Name: "House!", Type: model.TypeChecking, Tax: model.Taxable}
 	if _, err := NewAccount(st, rec, acct, Options{}); !errors.Is(err, ErrNameTaken) {
 		t.Errorf("account with a projection account's id: %v", err)
 	}
@@ -335,5 +336,43 @@ func TestRestoreProjectionsRefusesIDCollision(t *testing.T) {
 	}
 	if got := reload(t, st).Projection(demodata.ProjNewJob).Accounts[0].ID; got != "house" {
 		t.Errorf("a refused restore saved account %q", got)
+	}
+}
+
+func TestAccountNamesAreSharedBetweenTheRecordAndProjections(t *testing.T) {
+	st, rec := seed(t)
+	recordName := rec.Account(demodata.Checking).Name
+	messy := "  " + strings.ToUpper(recordName) + " "
+
+	// A projection account may not take a record account's name, new or by rename.
+	clash := house
+	clash.Name = messy
+	if _, err := AddProjAccount(st, rec, demodata.ProjNewJob, clash, Options{}); !errors.Is(err, ErrNameTaken) || !strings.Contains(err.Error(), recordName) {
+		t.Errorf("add with a record account's name: %v", err)
+	}
+	res, err := AddProjAccount(st, rec, demodata.ProjNewJob, house, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = res.Record
+	if _, err := EditProjAccount(st, rec, demodata.ProjNewJob, "house", ProjAccountChange{Name: &messy}, Options{}); !errors.Is(err, ErrNameTaken) {
+		t.Errorf("rename to a record account's name: %v", err)
+	}
+
+	// A record account may not take the name of an account of any projection, new or by rename.
+	take := model.Account{ID: "other", Name: " hOUSE", Type: model.TypeSavings, Tax: model.Taxable}
+	if _, err := NewAccount(st, rec, take, Options{}); !errors.Is(err, ErrNameTaken) || !strings.Contains(err.Error(), demodata.ProjNewJob) {
+		t.Errorf("new account with a projection account's name: %v", err)
+	}
+	name := "House"
+	if _, err := EditAccount(st, rec, demodata.Checking, AccountChange{Name: &name}, Options{}); !errors.Is(err, ErrNameTaken) || !strings.Contains(err.Error(), demodata.ProjNewJob) {
+		t.Errorf("rename to a projection account's name: %v", err)
+	}
+	if got := reload(t, st); got.Account(demodata.Checking).Name != recordName || got.Account("other") != nil {
+		t.Error("a refused edit changed the record")
+	}
+	free := "Holiday home"
+	if _, err := EditAccount(st, rec, demodata.Checking, AccountChange{Name: &free}, Options{DryRun: true}); err != nil {
+		t.Errorf("an unused name: %v", err)
 	}
 }

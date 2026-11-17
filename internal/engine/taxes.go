@@ -173,12 +173,22 @@ type householdTax struct {
 	draw   *drawPlan
 	draws  map[int]*yearDraw
 	ranOut bool
+	// raises memoizes the raise factors of the items.
+	raises raiseMemo
+}
+
+// raiseMemo returns the memo of the raise factors, or nil for no household tax.
+func (h *householdTax) raiseMemo() raiseMemo {
+	if h == nil {
+		return nil
+	}
+	return h.raises
 }
 
 func newHouseholdTax(rec *model.Record, items []model.BudgetItem, amounts, growths map[string]model.Schedule, infl model.Schedule, plans []*equityPlan, hypothetical map[string]model.Date, diag *Diagnostics) *householdTax {
 	return &householdTax{
 		rec: rec, items: items, amounts: amounts, growths: growths, infl: infl, plans: plans, hypothetical: hypothetical, diag: diag,
-		years: map[int]*yearInputs{}, plains: map[int]*yearInputs{}, results: map[int]*TaxYear{}, reported: map[string]bool{},
+		raises: raiseMemo{}, years: map[int]*yearInputs{}, plains: map[int]*yearInputs{}, results: map[int]*TaxYear{}, reported: map[string]bool{},
 	}
 }
 
@@ -229,7 +239,7 @@ func (h *householdTax) amountIn(it model.BudgetItem, d model.Date, plain bool) (
 
 // grossIn is amountIn, and whether the amount of a wages paycheck differs from its budgeted gross because of an occurrence fact or a booked remainder.
 func (h *householdTax) grossIn(it model.BudgetItem, d model.Date, plain bool) (float64, bool, bool) {
-	amt, ok := amountOn(h.rec, it, d, h.amounts, h.growths, h.infl)
+	amt, ok := amountOn(h.rec, it, d, h.amounts, h.growths, h.infl, h.raises)
 	if !ok {
 		return amt, false, false
 	}
@@ -624,6 +634,25 @@ func (h *householdTax) result(y int) *TaxYear {
 	return h.compute(y, h.savers)
 }
 
+// lossCarryover is the net capital loss the years before y carry into it. It derives from the sales of those years alone, never from their cached results, so it does not depend on which years were computed first.
+func (h *householdTax) lossCarryover(y int) float64 {
+	net := map[int]float64{}
+	first := y
+	for _, p := range h.lots {
+		for _, g := range p.gains {
+			if gy, _, _ := g.date.YMD(); gy < y {
+				net[gy] += g.short + g.long
+				first = min(first, gy)
+			}
+		}
+	}
+	var carry float64
+	for gy := first; gy < y; gy++ {
+		carry = tax.LossCarryforward(net[gy], carry, h.rec.Household.Filing)
+	}
+	return carry
+}
+
 // compute returns the year's tax with the interest the paths earned in it.
 func (h *householdTax) compute(y int, interest []*path) *TaxYear {
 	in := h.year(y)
@@ -654,7 +683,7 @@ func (h *householdTax) compute(y int, interest []*path) *TaxYear {
 		Year: y, Status: hh.Filing, State: hh.State, DependentAges: hh.DependentAges(y), Inflation: h.inflation(y),
 		Earners:     []tax.Earner{{Wages: in.wages + in.vests, K401: in.k401, IRA: in.ira, HSA: in.hsa}},
 		OtherIncome: t.Ordinary, BenefitIncome: t.Benefits, NetInvestmentIncome: t.Interest, EarlyWithdrawal: t.EarlyWithdrawal, NonQualified529: t.NonQualified529,
-		ShortTermGains: t.ShortTermGains, LongTermGains: t.LongTermGains,
+		ShortTermGains: t.ShortTermGains, LongTermGains: t.LongTermGains, LossCarryover: h.lossCarryover(y),
 	}
 	for _, a := range h.rec.Accounts {
 		if v, ok := in.contrib529[a.ID]; ok {

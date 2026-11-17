@@ -139,3 +139,56 @@ func TestLongTermThresholdsAreIndexedAndBorrowed(t *testing.T) {
 	}
 	near(t, "federal tax with borrowed thresholds", got.FederalTax, want.FederalTax)
 }
+
+func TestCapitalLossCarriesForward(t *testing.T) {
+	tables := Defaults()
+	r, err := Compute(tables, gainsInput(60000, 0, -10000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	near(t, "carryforward of a 10,000 loss", r.LossCarryforward, 7000)
+
+	// The carryover deducts the next year's 3,000 and leaves the rest.
+	in := gainsInput(60000, 0, 0)
+	in.LossCarryover = r.LossCarryforward
+	next, err := Compute(tables, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	near(t, "AGI with the carryover", next.AGI, 57000)
+	near(t, "carryforward after a second year", next.LossCarryforward, 4000)
+
+	// A gain uses the carryover before the deduction.
+	in = gainsInput(60000, 0, 5000)
+	in.LossCarryover = 4000
+	used, err := Compute(tables, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	near(t, "AGI when a gain absorbs the carryover", used.AGI, 61000)
+	near(t, "nothing left", used.LossCarryforward, 0)
+
+	// Married filing separately deducts 1,500.
+	in = gainsInput(60000, 0, -4000)
+	in.Status = MarriedSeparate
+	mfs, err := Compute(tables, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	near(t, "MFS carryforward", mfs.LossCarryforward, 2500)
+}
+
+func TestGainsInAGINetsTheCarryover(t *testing.T) {
+	for _, c := range []struct {
+		short, long, carryover, want float64
+	}{
+		{0, 0, 0, 0},
+		{0, 5000, 0, 5000},
+		{0, 0, 7000, -3000},
+		{0, 5000, 4000, 1000},
+		{2000, -1000, 0, 1000},
+		{0, 0, -500, 0},
+	} {
+		near(t, "gains in AGI", GainsInAGI(c.short, c.long, c.carryover, MarriedJoint), c.want)
+	}
+}

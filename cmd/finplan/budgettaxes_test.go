@@ -11,6 +11,7 @@ import (
 	"github.com/joeriedel/finplan/internal/engine"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/ops"
+	"github.com/joeriedel/finplan/internal/tax"
 )
 
 func taxRowValue(t *testing.T, v taxView, label string) string {
@@ -152,5 +153,28 @@ func TestTaxRowsNameTheState(t *testing.T) {
 	}
 	for _, label := range []string{"Virginia taxable income", "Virginia tax"} {
 		taxRowValue(t, v, label)
+	}
+}
+
+// The pre-tax deductions row is only what the contributions deducted: a loss carried in from earlier years nets against the year's gains and is not a deduction.
+func TestPreTaxDeductionsIgnoreTheLossCarryover(t *testing.T) {
+	for _, c := range []struct {
+		name            string
+		long, carryover float64
+	}{
+		{"carryover deducts", 0, 7000},
+		{"gain absorbs the carryover", 5000, 4000},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			in := tax.Input{Year: 2025, Status: tax.MarriedJoint, OtherIncome: 60000, LongTermGains: c.long, LossCarryover: c.carryover}
+			res, err := tax.Compute(tax.Defaults(), in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ty := &engine.TaxYear{Year: 2025, Input: in, Result: res, Ordinary: 60000, LongTermGains: c.long}
+			if got := taxRowValue(t, taxView{Rows: taxRows(nil, ty)}, "Pre-tax deductions"); got != "$0" {
+				t.Errorf("pre-tax deductions %s, want $0", got)
+			}
+		})
 	}
 }

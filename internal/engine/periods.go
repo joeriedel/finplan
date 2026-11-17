@@ -7,7 +7,7 @@ import "github.com/joeriedel/finplan/internal/model"
 
 // BudgetedAmount is the amount of the base budget item on d as the engine counts it: its schedule's value lifted by the item's raises and, if it is indexed, by inflation. It reports false if the schedule has no value on d. A projection's modifications are not applied.
 func BudgetedAmount(rec *model.Record, it model.BudgetItem, d model.Date) (float64, bool) {
-	return amountOn(rec, it, d, nil, nil, rec.Globals[model.PropInflation])
+	return amountOn(rec, it, d, nil, nil, rec.Globals[model.PropInflation], nil)
 }
 
 // ItemPeriods is the recent periods of one base budget item.

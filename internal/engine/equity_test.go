@@ -625,3 +625,49 @@ func TestVestDepositInTheDataGapIsNotCountedTwice(t *testing.T) {
 		})
 	}
 }
+
+func TestRecordedVestDepositIsKeptWhenOnlyTheBrokerageStartsBeforeIt(t *testing.T) {
+	vestDate, depositDate := d(2025, time.September, 15), d(2025, time.September, 17)
+	// The brokerage's history starts before the vest or between the vest and its deposit.
+	for _, c := range []struct {
+		name  string
+		start model.Date
+	}{
+		{"before the vest", d(2025, time.September, 1)},
+		{"between the vest and its deposit", d(2025, time.September, 16)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := rsuRecord(t)
+			rsu, brk := rec.Account("rsu"), rec.Account("brk")
+			rsu.Grants[0].FirstVest = vestDate
+			pct, err := model.GeneratePercents(rec.Calendar("cal"), vestDate, rsu.Grants[0].YearPercents, 0)
+			must(t, err)
+			rsu.Grants[0].VestPercents = pct
+			*rec.Prices = model.PriceBook{}
+			rec.Prices.Add(model.PriceObservation{ID: 1, Symbol: "ACME", Date: d(2025, time.June, 1), Price: 100})
+			rec.Prices.Add(model.PriceObservation{ID: 3, Symbol: "ACME", Date: vestDate, Price: 110})
+			v := model.RecordedVest{ID: 4, Grant: 1, Planned: 1, Date: vestDate, Shares: 50, Price: 110, Rates: model.DefaultWithholding, TxEntry: 7}
+			rsu.Vests = append(rsu.Vests, v)
+			brk.Snapshots = nil
+			brk.AddSnapshot(d(2025, time.August, 1), 1000)
+			brk.AddSnapshot(c.start, 1000)
+			brk.AddSnapshot(d(2025, time.December, 14), 1000+v.Net())
+			must(t, brk.AddTransaction(model.Transaction{Date: depositDate, Amount: v.Net(), Kind: model.TxTransfer, Counter: "rsu", Entry: 7}))
+			// Only the brokerage's history is replaced, from before the deposit: its recorded deposit is no longer in its data.
+			must(t, rec.AddProjection(&model.Projection{Name: "base", AssetSettings: []model.AssetSetting{
+				{Asset: brkAsset, Start: model.Ptr(c.start), OverrideHistory: model.Ptr(true)},
+			}}))
+
+			for _, date := range []model.Date{c.start, depositDate.Add(-1)} {
+				if got := value(t, rec, "base", brkAsset, date); !near(got, 1000) {
+					t.Errorf("brokerage on %v is %v, want 1000", date, got)
+				}
+			}
+			for _, date := range []model.Date{depositDate, d(2025, time.December, 1), d(2025, time.December, 14)} {
+				if got := value(t, rec, "base", brkAsset, date); !near(got, 1000+v.Net()) {
+					t.Errorf("brokerage on %v is %v, want %v: the recorded vest deposit counts once", date, got, 1000+v.Net())
+				}
+			}
+		})
+	}
+}

@@ -73,12 +73,12 @@ func entryKindName(k store.EntryKind, tx model.TxKind) string {
 }
 
 // accountTypeLabels and taxLabels are the display names of accountTypes and taxTreatments, in the same order.
-var accountTypeLabels, taxLabels = func() (types, tax []string) {
+var accountTypeLabels, taxLabels = func() (types, taxes []string) {
 	for _, t := range model.AccountTypes {
 		types = append(types, accountTypeName(t))
 	}
 	for _, t := range model.TaxTreatments {
-		tax = append(tax, taxName(t))
+		taxes = append(taxes, taxName(t))
 	}
 	return
 }()
