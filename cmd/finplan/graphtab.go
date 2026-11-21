@@ -180,6 +180,7 @@ func (g *graphTab) reload(rec *model.Record, presets []graph.Preset) {
 	}
 	g.bandUpper, g.bandLower = newIDs[g.bandUpper], newIDs[g.bandLower]
 	g.presets, g.preset = presets, -1
+	g.fitY = true
 	for i, p := range presets {
 		if p.Name == name {
 			g.preset = i
@@ -388,16 +389,46 @@ func (g *graphTab) visible(grid graph.Grid) []lineView {
 
 // fitToData sets the y limits to the drawn lines within the visible dates, with a margin.
 func (g *graphTab) fitToData(views []lineView) {
-	series := make([][]engine.Sample, len(views))
-	for i, v := range views {
-		series[i] = v.samples
+	from, to := dateOf(g.xMin), dateOf(g.xMax)
+	var series [][]engine.Sample
+	for _, v := range views {
+		series = append(series, withEnds(v.samples, from, to))
 		if v.mcSeries != nil {
-			series = append(series, v.mcSeries.samples(v.mcSeries.p10), v.mcSeries.samples(v.mcSeries.p90))
+			series = append(series, withEnds(v.mcSeries.samples(v.mcSeries.p10), from, to), withEnds(v.mcSeries.samples(v.mcSeries.p90), from, to))
 		}
 	}
-	if lo, hi, ok := fitYRange(series, dateOf(g.xMin), dateOf(g.xMax)); ok {
+	if lo, hi, ok := fitYRange(series, from, to); ok {
 		g.yMin, g.yMax = lo, hi
 	}
+}
+
+// withEnds returns the samples dated from..to and the series' interpolated values at from and to, which a short view, or a coarse grid reused while the view moves, may have no sample at.
+func withEnds(samples []engine.Sample, from, to model.Date) []engine.Sample {
+	var pts []engine.Sample
+	if v, _, ok := graph.At(samples, from); ok {
+		pts = append(pts, engine.Sample{Date: from, Amount: v})
+	}
+	for _, s := range samples {
+		if s.Date >= from && s.Date <= to {
+			pts = append(pts, s)
+		}
+	}
+	if v, _, ok := graph.At(samples, to); ok {
+		pts = append(pts, engine.Sample{Date: to, Amount: v})
+	}
+	return pts
+}
+
+// fitSpan is the x range that shows all the data of the drawn lines, the All range, and ok is false when no line is drawn.
+func (g *graphTab) fitSpan() (lo, hi float64, ok bool) {
+	for _, ln := range g.lines.All() {
+		if g.lines.Drawn(ln.ID) {
+			from, to := graph.RangeButtons[len(graph.RangeButtons)-1].Span(g.rec.Today, g.dataStart)
+			lo, hi = fitTimeSpan(float64(from)*secondsPerDay, float64(to)*secondsPerDay)
+			return lo, hi, true
+		}
+	}
+	return 0, 0, false
 }
 
 // fitYRange returns the y range that shows the samples dated from..to with a margin: the span of their amounts, widened by 1 on each side if under 1, plus 8% on each side. ok is false when no sample is in range.
@@ -481,6 +512,12 @@ func (g *graphTab) prepareView(lo, hi float64, moved bool, plotWidth float32) []
 
 func (g *graphTab) plotArea() {
 	lo, hi, moved := g.pin.apply(g.xMin, g.xMax, g.plotPos, g.plotSize)
+	if overPlot(g.plotPos, g.plotSize) && imgui.IsMouseDoubleClicked(imgui.MouseButtonLeft) {
+		if flo, fhi, ok := g.fitSpan(); ok {
+			lo, hi, moved = flo, fhi, true
+			g.fitY = true
+		}
+	}
 	views := g.prepareView(lo, hi, moved, g.plotSize.X)
 
 	laneH, pitch := lanesHeight(len(views))

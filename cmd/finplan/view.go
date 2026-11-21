@@ -87,7 +87,7 @@ func (ti *timeInput) apply(lo, hi float64, pos, size imgui.Vec2) (float64, float
 	return nlo, nhi, nlo != lo || nhi != hi
 }
 
-// beginTimePlot begins a plot whose time axis the app owns: ImPlot's own mouse input is turned off, which leaves it the hover state, by moving its pan to a mouse button no mouse sends the plot and its zoom rate to nothing, no box select and no menus. ImPlot's input map is global, so the plot must be ended with endTimePlot. The limits are set every frame, from the app's view.
+// beginTimePlot begins a plot whose time axis the app owns: ImPlot's own mouse input is turned off, which leaves it the hover state, by moving its pan to mouse button 4 (X2, which GLFW does send; ImPlot only pans while the plot is held, and it latches that on left, right and middle only, so X2 alone cannot pan), and its zoom rate to nothing, no box select and no menus. ImPlot's input map is global, so the plot must be ended with endTimePlot. The limits are set every frame, from the app's view.
 func beginTimePlot(id string, size imgui.Vec2, xMin, xMax, yMin, yMax float64, yTicks *moneyTicks, plotH float32) bool {
 	m := implot.GetInputMap()
 	inputPan, inputZoom = m.Pan(), m.ZoomRate()

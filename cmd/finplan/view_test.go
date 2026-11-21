@@ -152,3 +152,58 @@ func TestMoneyTicksAreMadeForTheDrawnRangeOnce(t *testing.T) {
 		t.Errorf("a new range kept the old ticks: %v", m.ticks)
 	}
 }
+
+// Double-clicking the plot fits x to the All range of the drawn lines, within the time axis limits.
+func TestGraphFitSpanIsTheDataRange(t *testing.T) {
+	g := demoApp(t).graph
+	lo, hi, ok := g.fitSpan()
+	if !ok {
+		t.Fatal("no fit span with drawn lines")
+	}
+	from, to := graph.RangeButtons[len(graph.RangeButtons)-1].Span(g.rec.Today, g.dataStart)
+	if lo != float64(from)*secondsPerDay || hi != float64(to)*secondsPerDay || lo < timeAxisMin || hi > timeAxisMax {
+		t.Errorf("fit span %v..%v, want %v..%v", dateOf(lo), dateOf(hi), from, to)
+	}
+	for _, ln := range g.lines.All() {
+		g.lines.Remove(ln.ID)
+	}
+	if _, _, ok := g.fitSpan(); ok {
+		t.Error("fit span with no lines")
+	}
+}
+
+// A view narrower than the sample grid has no sample in it, but y still fits the lines' values there.
+func TestPrepareViewFitsYInAViewNarrowerThanTheGrid(t *testing.T) {
+	g := demoApp(t).graph
+	g.setRange(graph.RangeButtons[3])
+	g.prepareView(g.xMin, g.xMax, false, 1000)
+	if g.grid.Step < 14 {
+		t.Fatalf("grid step %d is not wider than the view", g.grid.Step)
+	}
+	stale := g.yMax - g.yMin
+	mid := float64(g.rec.Today)*secondsPerDay + 2000*secondsPerDay
+	g.prepareView(mid, mid+minTimeSpan, true, 1000)
+	if g.grid.Step < 14 {
+		t.Fatalf("grid step %d after the zoom, want the coarse grid kept", g.grid.Step)
+	}
+	if !(g.yMax > g.yMin) || g.yMax-g.yMin == stale {
+		t.Errorf("y %v..%v was not fitted to the week", g.yMin, g.yMax)
+	}
+	series := [][]engine.Sample{}
+	for _, v := range g.visible(g.grid) {
+		series = append(series, withEnds(v.samples, dateOf(g.xMin), dateOf(g.xMax)))
+	}
+	if lo, hi, ok := fitYRange(series, dateOf(g.xMin), dateOf(g.xMax)); !ok || lo != g.yMin || hi != g.yMax {
+		t.Errorf("y %v..%v, want %v..%v", g.yMin, g.yMax, lo, hi)
+	}
+}
+
+// Setting a record refits y even though x is unchanged.
+func TestSetRecordAsksForAYFit(t *testing.T) {
+	g := demoApp(t).graph
+	g.fitY = false
+	g.setRecord(g.rec)
+	if !g.fitY {
+		t.Error("setRecord did not ask for a y fit")
+	}
+}

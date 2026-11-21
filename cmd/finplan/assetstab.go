@@ -109,10 +109,9 @@ type assetsTab struct {
 	// chart is the chart of the asset chartFor.
 	chart    *assetChart
 	chartFor model.AssetID
-	// chartView is the chart's plot as of the last frame. The app owns the chart's limits: chartX0 to chartX1 is the x range, set to the asset's data range when the chart is first shown for it, when another asset is chosen (chartLimitsFor is the asset it was last set for) and when chartFit asks, which a double-click does, and changed by chartIn, the wheel and right drag. chartY0 to chartY1 is the y range fitted to the x range chartFitX0 to chartFitX1 of the asset chartFitFor.
+	// chartView is the chart's plot as of the last frame. The app owns the chart's limits: chartX0 to chartX1 is the x range, set to the asset's data range when the chart is first shown for it, when another asset is chosen (chartLimitsFor is the asset it was last set for) and when the user double-clicks, and changed by chartIn, the wheel and right drag. chartY0 to chartY1 is the y range fitted to the x range chartFitX0 to chartFitX1 of the asset chartFitFor.
 	chartView              plotGeom
 	chartLimitsFor         model.AssetID
-	chartFit               bool
 	chartX0, chartX1       float64
 	chartIn                timeInput
 	chartTicks             moneyTicks
@@ -501,19 +500,7 @@ func chartYRange(c *assetChart) (lo, hi float64) {
 
 // chartYFit is the y range that shows the part of the chart's series dated from..to with a margin: the samples in it and the values at its ends, which a short span may have no sample in. With no values there, it is the range of the whole chart.
 func chartYFit(c *assetChart, from, to model.Date) (lo, hi float64) {
-	var pts []engine.Sample
-	if v, _, ok := graph.At(c.Samples, from); ok {
-		pts = append(pts, engine.Sample{Date: from, Amount: v})
-	}
-	for _, s := range c.Samples {
-		if s.Date >= from && s.Date <= to {
-			pts = append(pts, s)
-		}
-	}
-	if v, _, ok := graph.At(c.Samples, to); ok {
-		pts = append(pts, engine.Sample{Date: to, Amount: v})
-	}
-	if lo, hi, ok := fitYRange([][]engine.Sample{pts}, from, to); ok {
+	if lo, hi, ok := fitYRange([][]engine.Sample{withEnds(c.Samples, from, to)}, from, to); ok {
 		return lo, hi
 	}
 	return chartYRange(c)
@@ -523,7 +510,8 @@ func chartYFit(c *assetChart, from, to model.Date) (lo, hi float64) {
 func (t *assetsTab) chartArea(id model.AssetID) {
 	imgui.Spacing()
 	imgui.SeparatorText("Value over time")
-	if t.chart == nil || t.chartFor != id {
+	rebuilt := t.chart == nil || t.chartFor != id
+	if rebuilt {
 		t.chart, t.chartFor = buildChart(t.a.rec, id), id
 	}
 	c := t.chart
@@ -534,13 +522,14 @@ func (t *assetsTab) chartArea(id model.AssetID) {
 	disabledText("Solid: actual data. Dashed: projected. Faded: default balances. Right-drag to pan, scroll to zoom, double-click to fit.")
 	h := max(imgui.ContentRegionAvail().Y-imgui.FontSize()*14, imgui.FontSize()*12)
 	view := t.chartView
-	if t.chartLimitsFor != id || t.chartFit || (overPlot(view.pos, view.size) && imgui.IsMouseDoubleClicked(imgui.MouseButtonLeft)) {
+	refit := rebuilt
+	if t.chartLimitsFor != id || (overPlot(view.pos, view.size) && imgui.IsMouseDoubleClicked(imgui.MouseButtonLeft)) {
 		t.chartX0, t.chartX1 = fitTimeSpan(float64(c.From)*secondsPerDay, float64(c.To)*secondsPerDay)
-		t.chartLimitsFor, t.chartFit = id, false
+		t.chartLimitsFor, refit = id, true
 	}
 	lo, hi, _ := t.chartIn.apply(t.chartX0, t.chartX1, view.pos, view.size)
 	t.chartX0, t.chartX1 = fitTimeSpan(lo, hi)
-	if t.chartFitFor != id || t.chartFitX0 != t.chartX0 || t.chartFitX1 != t.chartX1 {
+	if refit || t.chartFitFor != id || t.chartFitX0 != t.chartX0 || t.chartFitX1 != t.chartX1 {
 		t.chartFitFor, t.chartFitX0, t.chartFitX1 = id, t.chartX0, t.chartX1
 		t.chartY0, t.chartY1 = chartYFit(c, dateOf(t.chartX0), dateOf(t.chartX1))
 	}
