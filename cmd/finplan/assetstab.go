@@ -13,6 +13,7 @@ import (
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/AllenDang/cimgui-go/implot"
 
+	"github.com/joeriedel/finplan/internal/engine"
 	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/ops"
@@ -108,10 +109,16 @@ type assetsTab struct {
 	// chart is the chart of the asset chartFor.
 	chart    *assetChart
 	chartFor model.AssetID
-	// chartView is the chart's plot as of the last frame; chartLimitsFor is the asset whose data range the plot's limits were last set to and chartFit asks for them to be set again, which a double-click does.
-	chartView      plotGeom
-	chartLimitsFor model.AssetID
-	chartFit       bool
+	// chartView is the chart's plot as of the last frame. The app owns the chart's limits: chartX0 to chartX1 is the x range, set to the asset's data range when the chart is first shown for it, when another asset is chosen (chartLimitsFor is the asset it was last set for) and when chartFit asks, which a double-click does, and changed by chartIn, the wheel and right drag. chartY0 to chartY1 is the y range fitted to the x range chartFitX0 to chartFitX1 of the asset chartFitFor.
+	chartView              plotGeom
+	chartLimitsFor         model.AssetID
+	chartFit               bool
+	chartX0, chartX1       float64
+	chartIn                timeInput
+	chartTicks             moneyTicks
+	chartY0, chartY1       float64
+	chartFitX0, chartFitX1 float64
+	chartFitFor            model.AssetID
 	// tags are the crosshair tags of the chart, drawn after the plot.
 	tags tagQueue
 	// delFor and delReason cache deleteAssetProblem for the selected asset, which reads the database.
@@ -492,7 +499,27 @@ func chartYRange(c *assetChart) (lo, hi float64) {
 	return c.Min - pad, c.Max + pad
 }
 
-// chartArea draws the chart of the asset's value with the coverage bar of its actual data under it. The chart pans and zooms like the Graph; its limits are set when it is first shown, when another asset is chosen and when the user double-clicks it, which fits it to the asset's data.
+// chartYFit is the y range that shows the part of the chart's series dated from..to with a margin: the samples in it and the values at its ends, which a short span may have no sample in. With no values there, it is the range of the whole chart.
+func chartYFit(c *assetChart, from, to model.Date) (lo, hi float64) {
+	var pts []engine.Sample
+	if v, _, ok := graph.At(c.Samples, from); ok {
+		pts = append(pts, engine.Sample{Date: from, Amount: v})
+	}
+	for _, s := range c.Samples {
+		if s.Date >= from && s.Date <= to {
+			pts = append(pts, s)
+		}
+	}
+	if v, _, ok := graph.At(c.Samples, to); ok {
+		pts = append(pts, engine.Sample{Date: to, Amount: v})
+	}
+	if lo, hi, ok := fitYRange([][]engine.Sample{pts}, from, to); ok {
+		return lo, hi
+	}
+	return chartYRange(c)
+}
+
+// chartArea draws the chart of the asset's value with the coverage bar of its actual data under it. The chart pans and zooms like the Graph: the wheel zooms its time axis around the pointer, a right drag pans it, and y is fitted to the part of the chart in view in the same frame. Its time range is set when it is first shown, when another asset is chosen and when the user double-clicks it, which fits it to the asset's data.
 func (t *assetsTab) chartArea(id model.AssetID) {
 	imgui.Spacing()
 	imgui.SeparatorText("Value over time")
@@ -504,35 +531,25 @@ func (t *assetsTab) chartArea(id model.AssetID) {
 		errorText(c.Err)
 		return
 	}
-	disabledText("Solid: actual data. Dashed: projected. Faded: default balances. Drag to pan, scroll to zoom, double-click to fit.")
+	disabledText("Solid: actual data. Dashed: projected. Faded: default balances. Right-drag to pan, scroll to zoom, double-click to fit.")
 	h := max(imgui.ContentRegionAvail().Y-imgui.FontSize()*14, imgui.FontSize()*12)
-	var geom plotGeom
-	if implot.BeginPlotV("##assetchart", imgui.NewVec2(-1, h), implot.FlagsNoTitle|implot.FlagsNoLegend|implot.FlagsNoMouseText) {
-		implot.SetupAxisV(implot.AxisX1, "", implot.AxisFlagsNoLabel)
-		implot.SetupAxisScalePlotScale(implot.AxisX1, implot.ScaleTime)
-		implot.SetupAxisV(implot.AxisY1, "", implot.AxisFlagsNoLabel)
-		constrainTimeAxis()
-		fitLo, fitHi := chartYRange(c)
-		tickLo, tickHi := fitLo, fitHi
-		if t.chartView.usable() {
-			tickLo, tickHi = t.chartView.yMin, t.chartView.yMax
-		}
-		setupMoneyTicks(tickLo, tickHi, h)
-		cond := implot.CondOnce
-		if t.chartLimitsFor != id || t.chartFit {
-			cond = implot.CondAlways
-		}
-		implot.SetupAxisLimitsV(implot.AxisX1, float64(c.From)*secondsPerDay, float64(c.To)*secondsPerDay, cond)
-		implot.SetupAxisLimitsV(implot.AxisY1, fitLo, fitHi, cond)
-		implot.SetupFinish()
+	view := t.chartView
+	if t.chartLimitsFor != id || t.chartFit || (overPlot(view.pos, view.size) && imgui.IsMouseDoubleClicked(imgui.MouseButtonLeft)) {
+		t.chartX0, t.chartX1 = fitTimeSpan(float64(c.From)*secondsPerDay, float64(c.To)*secondsPerDay)
 		t.chartLimitsFor, t.chartFit = id, false
-		geom = readPlotGeom()
+	}
+	lo, hi, _ := t.chartIn.apply(t.chartX0, t.chartX1, view.pos, view.size)
+	t.chartX0, t.chartX1 = fitTimeSpan(lo, hi)
+	if t.chartFitFor != id || t.chartFitX0 != t.chartX0 || t.chartFitX1 != t.chartX1 {
+		t.chartFitFor, t.chartFitX0, t.chartFitX1 = id, t.chartX0, t.chartX1
+		t.chartY0, t.chartY1 = chartYFit(c, dateOf(t.chartX0), dateOf(t.chartX1))
+	}
+	var geom plotGeom
+	if beginTimePlot("##assetchart", imgui.NewVec2(-1, h), t.chartX0, t.chartX1, t.chartY0, t.chartY1, &t.chartTicks, h) {
+		geom = plotGeom{implot.GetPlotPos(), implot.GetPlotSize(), t.chartX0, t.chartX1, t.chartY0, t.chartY1}
 		t.chartView = geom
-		if implot.IsPlotHovered() && imgui.IsMouseDoubleClicked(imgui.MouseButtonLeft) {
-			t.chartFit = true
-		}
 		t.drawChart(c, geom)
-		implot.EndPlot()
+		endTimePlot()
 		t.tags.draw()
 	}
 	t.coverageBar(c, geom)
@@ -560,13 +577,13 @@ func (t *assetsTab) drawChart(c *assetChart, geom plotGeom) {
 	amount, status, ok := graph.At(c.Samples, day)
 	ok = ok && implot.IsPlotHovered()
 	if ok {
-		drawCrosshair(dl, geom, imgui.MousePos().X, []crosshairPoint{{amount, assetChartColor}})
+		drawCrosshair(dl, geom, imgui.MousePos().X, []crosshairPoint{{amount, assetChartColor}}, false)
 	}
 	implot.PopPlotClipRect()
 	if !ok {
 		return
 	}
-	t.tags.crosshair(geom, day, []crosshairPoint{{amount, assetChartColor}})
+	t.tags.crosshair(geom, tagSet{day, []crosshairPoint{{amount, assetChartColor}}})
 	if imgui.BeginTooltip() {
 		imgui.PushStyleColorVec4(imgui.ColText, rgba(colMuted, 1))
 		imgui.TextUnformatted(graph.FormatDate(day))

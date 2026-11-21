@@ -10,7 +10,6 @@ import (
 	"strconv"
 
 	"github.com/AllenDang/cimgui-go/imgui"
-	"github.com/AllenDang/cimgui-go/implot"
 
 	"github.com/joeriedel/finplan/internal/demodata"
 	"github.com/joeriedel/finplan/internal/engine"
@@ -42,19 +41,27 @@ type graphTab struct {
 	// demo is whether the database is the throwaway demo, which decides the lines a new Graph draws.
 	demo bool
 
-	// The visible limits as ImPlot reported them last frame, in unix seconds and dollars. applyX and
-	// applyY push the limits to ImPlot next frame (a range button, or fitting to the data); otherwise
-	// the user's panning and zooming stand, except that a change of the x range refits y.
+	// The visible limits, in unix seconds and dollars, which the app owns and sets on the plot every frame: the x range is changed by the wheel and right drag (pin), the range buttons and presets, and y is fitted to the lines in the x range before the plot is built. fitY asks for y to be fitted again, as it is whenever the x range or the sample grid changes.
 	xMin, xMax, yMin, yMax float64
-	applyX, applyY, fitY   bool
+	fitY                   bool
+	pin                    timeInput
+	ticks                  moneyTicks
 
-	// fitX0 and fitX1 are the x range the y range was last fitted for.
+	// fitX0, fitX1 and fitGrid are the x range and the sample grid the y range was last fitted for.
 	fitX0, fitX1 float64
+	fitGrid      graph.Grid
+	// grid is the sample grid of the last frame, and moving the number of frames left of the time that the view counts as moving after a wheel or drag, in which a grid that is not cached is not made but one already sampled, or a coarse one that leaves room to move, is used.
+	grid   graph.Grid
+	moving int
+
+	// The pixel geometry of the plot's lines and bands, and the slice of them made each frame.
+	px    pixelCache
+	polys [][]graph.Pt
 
 	// The plot area in screen pixels as of last frame, shared with the data lanes.
 	plotPos, plotSize imgui.Vec2
 
-	// The crosshair tags queued by crosshairTags, drawn after the plot.
+	// The cursor tags queued while the plot is built, drawn after it.
 	tags tagQueue
 
 	// The breakdown panel: its cache, the interval the user set (unset, it covers the 12 months ending at cursor), the cursor, the header fields, and the Shift-drag gesture that paints the interval, anchored at bandAnchor.
@@ -185,7 +192,7 @@ func (g *graphTab) applyPreset(i int) {
 	p := g.presets[i]
 	g.lines = p.Restore(recordHas(g.rec), projectionNames(g.rec))
 	g.xMin, g.xMax = p.From, p.To
-	g.applyX, g.fitY = true, true
+	g.fitY = true
 	g.preset = i
 }
 
@@ -283,7 +290,7 @@ func (g *graphTab) setRange(b graph.RangeButton) {
 // setSpan shows the dates from..to.
 func (g *graphTab) setSpan(from, to model.Date) {
 	g.xMin, g.xMax = float64(from)*secondsPerDay, float64(to)*secondsPerDay
-	g.applyX, g.fitY = true, true
+	g.fitY = true
 }
 
 func dateOf(x float64) model.Date { return model.Date(math.Floor(x / secondsPerDay)) }
@@ -389,7 +396,7 @@ func (g *graphTab) fitToData(views []lineView) {
 		}
 	}
 	if lo, hi, ok := fitYRange(series, dateOf(g.xMin), dateOf(g.xMax)); ok {
-		g.yMin, g.yMax, g.applyY = lo, hi, true
+		g.yMin, g.yMax = lo, hi
 	}
 }
 
@@ -413,26 +420,68 @@ func fitYRange(series [][]engine.Sample, from, to model.Date) (lo, hi float64, o
 	return lo - margin, hi + margin, true
 }
 
-func (g *graphTab) plotArea() {
-	width := g.plotSize.X
-	if width <= 0 {
-		width = 1000
+// viewSettleFrames is how many frames, counting the one with the wheel or drag, the view counts as moving. The app draws settleFrames frames after input before it waits, so the last of them has the exact grid.
+const viewSettleFrames = settleFrames - 1
+
+// cachedAll reports whether every drawn line is sampled on the grid already, so that sampling on it runs no engine.
+func (g *graphTab) cachedAll(grid graph.Grid) bool {
+	for _, ln := range g.lines.All() {
+		if proj, _ := g.lines.Effective(ln.ID); g.lines.Drawn(ln.ID) && !g.cache.has(ln.Asset, proj, grid) {
+			return false
+		}
 	}
-	grid := graph.SampleGrid(dateOf(g.xMin), dateOf(g.xMax), width)
+	return true
+}
+
+// sampleGrid returns the grid to sample the lines on for the visible dates, plotWidth pixels wide. While the view moves, the grid is not changed to the exact one for each step, which would run the engine for every line at each one (a stall of many frames), but kept while it covers the view, or made coarse with room to move; the exact grid comes once the view settles.
+func (g *graphTab) sampleGrid(plotWidth float32) graph.Grid {
+	from, to := dateOf(g.xMin), dateOf(g.xMax)
+	want := graph.SampleGrid(from, to, plotWidth)
+	if g.moving == 0 || g.cachedAll(want) {
+		return want
+	}
+	if g.grid.Step > 0 && g.grid.First <= from && g.grid.Last >= to && g.cachedAll(g.grid) {
+		return g.grid
+	}
+	return graph.SampleGrid(from-(to-from), to+(to-from), plotWidth)
+}
+
+// prepareView sets the x range to lo..hi, which the frame's wheel and drag made (moved) or left as it was, and returns the lines sampled for it, with y fitted to them: all before the plot is built, so that what is drawn is the view of this frame.
+func (g *graphTab) prepareView(lo, hi float64, moved bool, plotWidth float32) []lineView {
+	g.xMin, g.xMax = fitTimeSpan(lo, hi)
+	if moved {
+		g.moving = viewSettleFrames
+	} else if g.moving > 0 {
+		g.moving--
+	}
+	if plotWidth <= 0 {
+		plotWidth = 1000
+	}
+	grid := g.sampleGrid(plotWidth)
+	g.grid = grid
 	fresh := g.mc.takeFresh()
 	views := g.visible(grid)
 	if fresh {
 		g.fitY = true
 	}
-	// Panning or zooming refits y to the lines in the new x range, so dragging y alone is left as the user set it.
-	if g.xMin != g.fitX0 || g.xMax != g.fitX1 {
-		g.fitX0, g.fitX1 = g.xMin, g.xMax
+	// y is fitted to the lines in the x range, so panning or zooming refits it in the frame it happens.
+	if g.xMin != g.fitX0 || g.xMax != g.fitX1 || grid != g.fitGrid {
+		g.fitX0, g.fitX1, g.fitGrid = g.xMin, g.xMax, grid
 		g.fitY = true
 	}
 	if g.fitY {
 		g.fitToData(views)
 		g.fitY = false
 	}
+	if !(g.yMax > g.yMin) {
+		g.yMin, g.yMax = 0, 1
+	}
+	return views
+}
+
+func (g *graphTab) plotArea() {
+	lo, hi, moved := g.pin.apply(g.xMin, g.xMax, g.plotPos, g.plotSize)
+	views := g.prepareView(lo, hi, moved, g.plotSize.X)
 
 	laneH, pitch := lanesHeight(len(views))
 	panelH := breakdownPanelHeight(imgui.ContentRegionAvail().Y)
@@ -440,28 +489,10 @@ func (g *graphTab) plotArea() {
 	if plotH < 50 {
 		plotH = 50
 	}
-	// Shift alone belongs to the breakdown interval: ImPlot ignores the mouse while the modifier is held, so Shift-drag does not pan (ImPlot pans on a left drag whatever the modifiers), and Ctrl, its default, is free.
-	implot.GetInputMap().SetOverrideMod(int32(imgui.ModShift))
-	if implot.BeginPlotV("##balances", imgui.NewVec2(-1, plotH), implot.FlagsNoTitle|implot.FlagsNoLegend|implot.FlagsNoMouseText) {
-		// The time axis always reserves two label rows (PadAndDatumAxesX in implot.cpp), so its height is constant.
-		implot.SetupAxisV(implot.AxisX1, "", implot.AxisFlagsNoLabel)
-		implot.SetupAxisScalePlotScale(implot.AxisX1, implot.ScaleTime)
-		implot.SetupAxisV(implot.AxisY1, "", implot.AxisFlagsNoLabel)
-		constrainTimeAxis()
-		setupMoneyTicks(g.yMin, g.yMax, g.plotSize.Y)
-		condX, condY := implot.CondOnce, implot.CondOnce
-		if g.applyX {
-			condX = implot.CondAlways
-		}
-		if g.applyY {
-			condY = implot.CondAlways
-		}
-		implot.SetupAxisLimitsV(implot.AxisX1, g.xMin, g.xMax, condX)
-		implot.SetupAxisLimitsV(implot.AxisY1, g.yMin, g.yMax, condY)
-		implot.SetupFinish()
-		g.applyX, g.applyY = false, false
+	// The time axis always reserves two label rows (PadAndDatumAxesX in implot.cpp), so its height is constant.
+	if beginTimePlot("##balances", imgui.NewVec2(-1, plotH), g.xMin, g.xMax, g.yMin, g.yMax, &g.ticks, g.plotSize.Y) {
 		g.drawPlot(views)
-		implot.EndPlot()
+		endTimePlot()
 		g.tags.draw()
 	}
 	g.drawLanes(views, laneH, pitch)

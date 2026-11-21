@@ -7,28 +7,20 @@ import (
 	"fmt"
 
 	"github.com/AllenDang/cimgui-go/imgui"
-
-	"github.com/joeriedel/finplan/internal/graph"
 )
 
 // drawMonteCarlo fills the 10th to 90th and the 25th to 75th percentile bands of each line that has them, lighter outside, and strokes the median. It runs before the lines so that they lie on top.
 func (g *graphTab) drawMonteCarlo(dl *imgui.DrawList, views []lineView) {
+	geom := g.geom()
 	for _, v := range views {
 		sr := v.mcSeries
 		if sr == nil || len(sr.dates) < 2 {
 			continue
 		}
-		px := func(values []float64) []graph.Pt {
-			pts := make([]graph.Pt, len(values))
-			for i, val := range values {
-				pts[i] = g.toPx(float64(sr.dates[i])*secondsPerDay, val)
-			}
-			return pts
-		}
-		g.fillBetween(dl, px(sr.p90), px(sr.p10), u32(lineColor(v.line.Color, 0.12)))
-		g.fillBetween(dl, px(sr.p75), px(sr.p25), u32(lineColor(v.line.Color, 0.25)))
-		median := px(sr.p50)
-		dl.AddPolyline(vecs(median), int32(len(median)), u32(lineColor(v.line.Color, 0.75)), 1.5*uiScale)
+		px := g.px.mcBands(v.line.ID, geom, sr)
+		fillPolys(dl, px.outer, u32(lineColor(v.line.Color, 0.12)))
+		fillPolys(dl, px.inner, u32(lineColor(v.line.Color, 0.25)))
+		dl.AddPolyline(vecs(px.median), int32(len(px.median)), u32(lineColor(v.line.Color, 0.75)), 1.5*uiScale)
 	}
 }
 

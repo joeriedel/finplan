@@ -43,7 +43,7 @@ func main() {
 		os.Exit(runCLI(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 	}
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: finplan [--demo]\n       finplan [--demo] --screenshot <out.png> [--tab <name>] [--frames N] [--size WxH] [--select <name>] [--open <state>] [--check-ids]\n       finplan [--demo | --db <path>] <command> ...   (run finplan help)")
+		fmt.Fprintln(os.Stderr, "usage: finplan [--demo]\n       finplan [--demo] --screenshot <out.png> [--tab <name>] [--frames N] [--size WxH] [--select <name>] [--open <state>] [--check-ids] [--frame-times]\n       finplan [--demo | --db <path>] <command> ...   (run finplan help)")
 		flag.PrintDefaults()
 	}
 	demo := flag.Bool("demo", false, "use a throwaway database holding an invented family instead of your own")
@@ -54,6 +54,7 @@ func main() {
 	sel := flag.String("select", "", "with --screenshot: the projection, asset, account or market class to select, by name (Projections, Assets, Accounts and Markets tabs)")
 	open := flag.String("open", "", "with --screenshot: a state to show, with the tab it works with, one of "+openHelp())
 	checkIDs := flag.Bool("check-ids", false, "with --screenshot: after saving, move the mouse over every widget, in a window made tall enough to show them all, and fail if two visible widgets share an ID")
+	timeFrames := flag.Bool("frame-times", false, "with --screenshot and the Graph tab: instead of saving the screenshot, print the CPU time per frame of scripted pan, zoom and hover, with and without Monte Carlo")
 	flag.Parse()
 	var shot *shotOptions
 	if *out != "" {
@@ -62,6 +63,9 @@ func main() {
 			log.Fatal(err)
 		}
 		shot.checkIDs = *checkIDs
+		if shot.frameTimes = *timeFrames; shot.frameTimes && shot.tab != "Graph" {
+			log.Fatal("--frame-times works only with the Graph tab")
+		}
 	} else {
 		bad := ""
 		flag.Visit(func(f *flag.Flag) {
@@ -213,6 +217,11 @@ func run(demo bool, shot *shotOptions) error {
 		// A screenshot waits for the Monte Carlo jobs, which run in the background, so that it shows their bands.
 		mcWasBusy := shot != nil && app.graph.mc.busy()
 		backend.NewFrame()
+		if shot != nil {
+			if x, y, ok := shot.pointer(app); ok {
+				imgui.CurrentIO().AddMousePosEvent(x, y)
+			}
+		}
 		imgui.NewFrame()
 		app.draw()
 		imgui.Render()
@@ -223,6 +232,9 @@ func run(demo bool, shot *shotOptions) error {
 			backend.Render()
 			time.Sleep(20 * time.Millisecond)
 			continue
+		}
+		if shotLeft == 1 && shot.frameTimes {
+			return frameTimes(app, os.Stdout)
 		}
 		if shotLeft == 1 {
 			img, err := backend.RenderCapture()

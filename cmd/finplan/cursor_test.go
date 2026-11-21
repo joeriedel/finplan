@@ -47,16 +47,62 @@ func TestIsClick(t *testing.T) {
 	}
 }
 
-func TestBreakdownWindowFollowsEffectiveCursor(t *testing.T) {
+func TestBreakdownWindowFollowsSettledCursor(t *testing.T) {
 	today := model.D(2026, time.November, 8)
 	c := cursorState{lock: today}
 	var iv bkInterval
-	c.track(true, today.Add(100))
-	if _, to := iv.window(c.effective()); to != today.Add(100) {
-		t.Errorf("window ends %v, want the hover date", to)
+	hover := today.Add(100)
+	// The pointer comes onto the plot and crosses days: the panel stays on the lock until it rests.
+	for i := range restFrames {
+		c.track(true, hover.Add(i))
+		if _, to := iv.window(c.settled()); to != today {
+			t.Errorf("frame %d of moving: window ends %v, want the lock", i, to)
+		}
+	}
+	for range restFrames + 1 {
+		c.track(true, hover)
+	}
+	if _, to := iv.window(c.settled()); to != hover {
+		t.Errorf("at rest: window ends %v, want the hover date", to)
+	}
+	// Moving on keeps the day it last rested on.
+	c.track(true, hover.Add(50))
+	if _, to := iv.window(c.settled()); to != hover {
+		t.Errorf("moving after rest: window ends %v, want %v", to, hover)
+	}
+	if _, to := iv.window(c.effective()); to != hover.Add(50) {
+		t.Errorf("the effective cursor ends %v, want the day under the pointer", to)
 	}
 	c.track(false, 0)
-	if _, to := iv.window(c.effective()); to != today {
-		t.Errorf("window ends %v, want the lock", to)
+	if _, to := iv.window(c.settled()); to != today {
+		t.Errorf("away: window ends %v, want the lock", to)
+	}
+}
+
+func TestSetLockWhileHoveringMovesThePanelAtOnce(t *testing.T) {
+	today := model.D(2026, time.November, 8)
+	c := cursorState{lock: today}
+	day := today.Add(40)
+	c.track(true, day)
+	c.setLock(day)
+	if c.lock != day || c.settled() != day {
+		t.Errorf("lock %v, settled %v, want %v", c.lock, c.settled(), day)
+	}
+}
+
+func TestCursorMarks(t *testing.T) {
+	c := cursorState{lock: 5}
+	for _, tc := range []struct {
+		hovering, lockInView, wantLock, wantHover bool
+	}{
+		{false, true, true, false},   // the locked marker alone
+		{true, true, true, true},     // both
+		{true, false, false, true},   // the pointer alone, the lock out of view
+		{false, false, false, false}, // none
+	} {
+		c.track(tc.hovering, 9)
+		if lock, hover := c.marks(tc.lockInView); lock != tc.wantLock || hover != tc.wantHover {
+			t.Errorf("hovering %v, lock in view %v: marks %v, %v", tc.hovering, tc.lockInView, lock, hover)
+		}
 	}
 }

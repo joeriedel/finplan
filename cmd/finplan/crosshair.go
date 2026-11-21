@@ -4,7 +4,7 @@
 package main
 
 import (
-	"math"
+	"slices"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/AllenDang/cimgui-go/implot"
@@ -17,13 +17,6 @@ import (
 type plotGeom struct {
 	pos, size              imgui.Vec2
 	xMin, xMax, yMin, yMax float64
-}
-
-// readPlotGeom reads the geometry of the plot being built, which must have had its setup finished.
-func readPlotGeom() plotGeom {
-	lim := implot.GetPlotLimitsV(implot.AxisX1, implot.AxisY1)
-	lo, hi := lim.Min(), lim.Max()
-	return plotGeom{implot.GetPlotPos(), implot.GetPlotSize(), lo.X, hi.X, lo.Y, hi.Y}
 }
 
 // usable reports whether the plot has an area and ranges to draw in.
@@ -39,22 +32,10 @@ func (p plotGeom) toPx(x, y float64) graph.Pt {
 	}
 }
 
-// constrainTimeAxis keeps the time axis of the plot being set up within the years the app handles and zoomed between a week and two centuries.
+// constrainTimeAxis keeps the time axis of the plot being set up within the years the app handles and zoomed between a week and two centuries, as the app's own view does (see fitTimeSpan).
 func constrainTimeAxis() {
-	implot.SetupAxisLimitsConstraints(implot.AxisX1, float64(model.D(1971, 1, 1))*secondsPerDay, float64(model.D(2200, 1, 1))*secondsPerDay)
-	implot.SetupAxisZoomConstraints(implot.AxisX1, 7*secondsPerDay, 200*365*secondsPerDay)
-}
-
-// setupMoneyTicks sets the ticks of the y axis, a dollar axis, of the plot being set up for the range yMin to yMax in a plot plotH pixels tall. ImPlot sizes the y gutter to the widest tick label. A last tick far outside the visible range, never drawn, is labelled (space-padded if need be) to be as wide as the widest tick label or value tag, which keeps the gutter the same width however the view moves and wide enough for the tags drawn in it.
-func setupMoneyTicks(yMin, yMax float64, plotH float32) {
-	ticks := graph.NiceTicks(yMin, yMax, max(3, int(plotH/(48*uiScale))))
-	labels := make([]string, len(ticks), len(ticks)+1)
-	for i, t := range ticks {
-		labels[i] = graph.FormatMoneyCompact(t)
-	}
-	ticks = append(ticks, yMin-1000*max(yMax-yMin, math.Abs(yMin), 1))
-	labels = append(labels, graph.GutterLabel(func(s string) float32 { return imgui.CalcTextSize(s).X }, implot.GetStyle().AnnotationPadding().X))
-	implot.SetupAxisTicksdoublePtrV(implot.AxisY1, &ticks[0], int32(len(ticks)), labels, false)
+	implot.SetupAxisLimitsConstraints(implot.AxisX1, timeAxisMin, timeAxisMax)
+	implot.SetupAxisZoomConstraints(implot.AxisX1, minTimeSpan, maxTimeSpan)
 }
 
 // crosshairPoint is a series' value at the date under the pointer.
@@ -63,16 +44,26 @@ type crosshairPoint struct {
 	color  graph.Color
 }
 
-// drawCrosshair draws, inside the plot's clip rect, the dashed vertical line through the pointer at screen column mouseX and, for each point, a dashed line from it to the plot's left edge and a dot on the series.
-func drawCrosshair(dl *imgui.DrawList, p plotGeom, mouseX float32, pts []crosshairPoint) {
+// drawCrosshair draws, inside the plot's clip rect, the vertical line through screen column x and, for each point, a line from it to the plot's left edge and a dot on the series. The locked cursor's is solid and bold, the pointer's dashed and faint.
+func drawCrosshair(dl *imgui.DrawList, p plotGeom, x float32, pts []crosshairPoint, locked bool) {
 	s := uiScale
 	left, top, bottom := p.pos.X, p.pos.Y, p.pos.Y+p.size.Y
-	dashRGBA := u32(rgba(colMuted, 0.6))
-	for _, sg := range graph.Dash([]graph.Pt{{X: mouseX, Y: top}, {X: mouseX, Y: bottom}}, 4*s, 4*s) {
-		dl.AddLineArgs(vec(sg.A), vec(sg.B), dashRGBA, s)
+	if locked {
+		dl.AddLineArgs(imgui.NewVec2(x, top), imgui.NewVec2(x, bottom), u32(rgba(colSelect, 0.95)), 2*s)
+	} else {
+		dashRGBA := u32(rgba(colMuted, 0.6))
+		for _, sg := range graph.Dash([]graph.Pt{{X: x, Y: top}, {X: x, Y: bottom}}, 4*s, 4*s) {
+			dl.AddLineArgs(vec(sg.A), vec(sg.B), dashRGBA, s)
+		}
 	}
 	for _, pt := range pts {
-		at := graph.Pt{X: mouseX, Y: p.toPx(0, pt.amount).Y}
+		at := graph.Pt{X: x, Y: p.toPx(0, pt.amount).Y}
+		if locked {
+			dl.AddLineArgs(vec(at), imgui.NewVec2(left, at.Y), u32(lineColor(pt.color, 0.6)), s)
+			dl.AddCircleFilled(vec(at), 4.5*s, u32(lineColor(pt.color, 1)))
+			dl.AddCircleV(vec(at), 4.5*s, u32(rgba(colSelect, 1)), 0, 1.5*s)
+			continue
+		}
 		col := lineColor(pt.color, 0.75)
 		for _, sg := range graph.Dash([]graph.Pt{at, {X: left, Y: at.Y}}, 4*s, 4*s) {
 			dl.AddLineArgs(vec(sg.A), vec(sg.B), u32(col), s)
@@ -93,31 +84,50 @@ type tagQueue struct {
 	tags []pendingTag
 }
 
-// crosshair queues the value tags (in the y-axis gutter, against the plot's left edge, stacked so that none overlaps another) of the points that lie in the plot's y range, and the date tag (in the x-axis area, below the plot) of day, which is queued only if some series has a value there, that is, if pts is not empty. The tags are our own rather than ImPlot's, which would resize the axis gutters as the pointer moves.
-func (q *tagQueue) crosshair(p plotGeom, day model.Date, pts []crosshairPoint) {
-	if len(pts) == 0 {
-		return
-	}
+// tagSet is the points of a cursor at a day, whose tags the queue takes. The day is queued only if some series has a value there, that is, if pts is not empty.
+type tagSet struct {
+	day model.Date
+	pts []crosshairPoint
+}
+
+// crosshair queues the value tags of the points that lie in the plot's y range, stacked so that none overlaps another: the first set's in the y-axis gutter, against the plot's left edge, and the others', which would overlap them there, against the plot's right edge, and the date tag (in the x-axis area, below the plot) of each set's day. A date tag that would overlap an earlier set's is left out. The tags are our own rather than ImPlot's, which would resize the axis gutters as the pointer moves.
+func (q *tagQueue) crosshair(p plotGeom, sets ...tagSet) {
 	plotPos := graph.Pt{X: p.pos.X, Y: p.pos.Y}
 	plotSize := graph.Pt{X: p.size.X, Y: p.size.Y}
-	var ys []float32
-	var sizes []graph.Pt
-	var texts []string
-	var cols []imgui.Vec4
-	for _, pt := range pts {
-		if !graph.InRange(pt.amount, p.yMin, p.yMax) {
+	for k, set := range sets {
+		var ys []float32
+		var sizes []graph.Pt
+		var texts []string
+		var cols []imgui.Vec4
+		for _, pt := range set.pts {
+			if !graph.InRange(pt.amount, p.yMin, p.yMax) {
+				continue
+			}
+			text := graph.FormatTagMoney(pt.amount)
+			ys, sizes, texts, cols = append(ys, p.toPx(0, pt.amount).Y), append(sizes, tagSize(text)), append(texts, text), append(cols, lineColor(pt.color, 1))
+		}
+		for i, at := range graph.StackValueTags(ys, sizes, uiScale, plotPos, plotSize) {
+			if k > 0 {
+				at.X = plotPos.X + plotSize.X - sizes[i].X
+			}
+			q.tags = append(q.tags, pendingTag{at, cols[i], texts[i]})
+		}
+	}
+	type span struct{ lo, hi float32 }
+	var taken []span
+	for _, set := range sets {
+		dayStart := float64(set.day) * secondsPerDay
+		if len(set.pts) == 0 || dayStart+secondsPerDay <= p.xMin || dayStart > p.xMax {
 			continue
 		}
-		text := graph.FormatTagMoney(pt.amount)
-		ys, sizes, texts, cols = append(ys, p.toPx(0, pt.amount).Y), append(sizes, tagSize(text)), append(texts, text), append(cols, lineColor(pt.color, 1))
-	}
-	for i, at := range graph.StackValueTags(ys, sizes, uiScale, plotPos, plotSize) {
-		q.tags = append(q.tags, pendingTag{at, cols[i], texts[i]})
-	}
-	dateText := graph.FormatDate(day)
-	dx := p.toPx(float64(day)*secondsPerDay, 0).X
-	if dayStart := float64(day) * secondsPerDay; dayStart+secondsPerDay > p.xMin && dayStart <= p.xMax {
-		q.tags = append(q.tags, pendingTag{graph.DateTagPos(dx, tagSize(dateText), plotPos, plotSize), rgba(colSelect, 1), dateText})
+		text := graph.FormatDate(set.day)
+		size := tagSize(text)
+		at := graph.DateTagPos(p.toPx(dayStart, 0).X, size, plotPos, plotSize)
+		if slices.ContainsFunc(taken, func(t span) bool { return at.X < t.hi && at.X+size.X > t.lo }) {
+			continue
+		}
+		taken = append(taken, span{at.X, at.X + size.X})
+		q.tags = append(q.tags, pendingTag{at, rgba(colSelect, 1), text})
 	}
 }
 

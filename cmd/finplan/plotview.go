@@ -91,7 +91,7 @@ func drawLine(dl *imgui.DrawList, v lineView, pts []graph.Pt, selected bool, lo,
 	}
 }
 
-// geom is the plot's geometry as drawPlot last read it.
+// geom is the plot's geometry as drawPlot last read it: the area ImPlot gave the plot and the limits the app set.
 func (g *graphTab) geom() plotGeom {
 	return plotGeom{g.plotPos, g.plotSize, g.xMin, g.xMax, g.yMin, g.yMax}
 }
@@ -99,19 +99,16 @@ func (g *graphTab) geom() plotGeom {
 func (g *graphTab) toPx(x, y float64) graph.Pt { return g.geom().toPx(x, y) }
 
 // drawPlot draws everything inside the plot: the today marker, the bands, the lines, handoff markers and labels,
-// the crosshair, and handles selecting a line by clicking it. Limits and plot area are read from ImPlot.
+// the locked cursor and the pointer's, and handles selecting a line by clicking it. The plot area is read from ImPlot; the limits are the app's own.
 func (g *graphTab) drawPlot(views []lineView) {
-	lim := implot.GetPlotLimitsV(implot.AxisX1, implot.AxisY1)
-	lo, hi := lim.Min(), lim.Max()
-	g.xMin, g.xMax, g.yMin, g.yMax = lo.X, hi.X, lo.Y, hi.Y
 	g.plotPos, g.plotSize = implot.GetPlotPos(), implot.GetPlotSize()
-	if g.plotSize.X <= 0 || g.plotSize.Y <= 0 || !(g.xMax > g.xMin) || !(g.yMax > g.yMin) {
+	geom := g.geom()
+	if !geom.usable() {
 		return
 	}
 	s := uiScale
 	left, right := g.plotPos.X, g.plotPos.X+g.plotSize.X
 	top, bottom := g.plotPos.Y, g.plotPos.Y+g.plotSize.Y
-	selID, hasSel := g.lines.Selected()
 
 	dl := implot.GetPlotDrawList()
 	implot.PushPlotClipRect()
@@ -132,17 +129,30 @@ func (g *graphTab) drawPlot(views []lineView) {
 	g.cur.track(hovered, day)
 	g.intervalBand(dl, hovered, day)
 
-	// Bands lie beneath the lines. The selected line is drawn last so that it lies on top.
-	polys := make([][]graph.Pt, len(views))
-	for i, v := range views {
-		polys[i] = make([]graph.Pt, len(v.samples))
-		for k, sm := range v.samples {
-			polys[i][k] = g.toPx(float64(sm.Date)*secondsPerDay, sm.Amount)
-		}
+	polys := g.polys[:0]
+	for _, v := range views {
+		polys = append(polys, g.px.line(v.line.ID, geom, v.samples))
 	}
+	g.polys = polys
+
+	// A click selects the line nearest the pointer, within a few pixels; a click elsewhere clears it.
+	// A drag is not a click, and a Shift gesture paints the interval. A click also locks the cursor at its date. This comes before anything is drawn so that the selection and the lock show in the frame of the click.
+	if d := imgui.MouseDragDelta(); hovered && isClick(imgui.IsMouseReleased(imgui.MouseButtonLeft), d.X != 0 || d.Y != 0, g.bandDrag) {
+		g.cur.setLock(day)
+		best, bestDist := graph.LineID(0), float32(hitRadius*s)
+		for i, v := range views {
+			if dist := graph.Distance(graph.Pt{X: mouse.X, Y: mouse.Y}, polys[i]); dist <= bestDist {
+				best, bestDist = v.line.ID, dist
+			}
+		}
+		g.lines.Select(best)
+	}
+	selID, hasSel := g.lines.Selected()
+
+	// Bands lie beneath the lines. The selected line is drawn last so that it lies on top.
 	bands := g.bandViews(views)
 	for _, bv := range bands {
-		g.drawBand(dl, bv, polys[bv.upper], polys[bv.lower])
+		g.drawBand(dl, geom, bv, views, polys)
 	}
 	g.drawMonteCarlo(dl, views)
 	for pass := 0; pass < 2; pass++ {
@@ -174,34 +184,26 @@ func (g *graphTab) drawPlot(views []lineView) {
 		}
 	}
 
-	// The cursor is drawn at the pointer while hovering, else at the locked date if the view includes it.
-	cday := g.cur.effective()
-	rows, pts := crosshairAt(views, cday)
-	cx := mouse.X
-	if !hovered {
-		cx = g.toPx(float64(cday)*secondsPerDay, 0).X
+	// The cursors: the pointer's, faint, under the locked one's, solid, which is drawn whenever the view includes its day.
+	lockX := g.toPx(float64(g.cur.lock)*secondsPerDay, 0).X
+	lockMark, hoverMark := g.cur.marks(lockX >= left && lockX <= right)
+	var sets []tagSet
+	var hoverRows []crosshairRow
+	if lockMark {
+		_, pts := crosshairAt(views, g.cur.lock)
+		drawCrosshair(dl, geom, lockX, pts, true)
+		sets = append(sets, tagSet{g.cur.lock, pts})
 	}
-	drawn := hovered || (cx >= left && cx <= right)
-	if drawn {
-		drawCrosshair(dl, g.geom(), cx, pts)
+	if hoverMark {
+		rows, pts := crosshairAt(views, day)
+		hoverRows = rows
+		drawCrosshair(dl, geom, mouse.X, pts, false)
+		sets = append(sets, tagSet{day, pts})
 	}
 	implot.PopPlotClipRect()
-
-	// Click selects the line nearest the pointer, within a few pixels; a click elsewhere clears it.
-	// A drag is panning, not a click, and a Shift gesture paints the interval. A click also locks the cursor at its date.
-	if d := imgui.MouseDragDelta(); hovered && isClick(imgui.IsMouseReleased(imgui.MouseButtonLeft), d.X != 0 || d.Y != 0, g.bandDrag) {
-		g.cur.lock = day
-		best, bestDist := graph.LineID(0), float32(hitRadius*s)
-		for i, v := range views {
-			if dist := graph.Distance(graph.Pt{X: mouse.X, Y: mouse.Y}, polys[i]); dist <= bestDist {
-				best, bestDist = v.line.ID, dist
-			}
-		}
-		g.lines.Select(best)
-	}
-
-	if drawn {
-		g.crosshairTags(views, rows, pts, bands, cday, hovered)
+	g.tags.crosshair(geom, sets...)
+	if hoverMark {
+		g.hoverTooltip(views, hoverRows, bands, day)
 	}
 	if !imgui.IsMouseDown(imgui.MouseButtonLeft) {
 		g.bandDrag = false
@@ -221,7 +223,7 @@ func (g *graphTab) intervalBand(dl *imgui.DrawList, hovered bool, day model.Date
 			x := float64(d) * secondsPerDay
 			var clicked, hov, held bool
 			if implot.DragLineXV(int32(i), &x, rgba(colAccentLit, 0.9), 1.5*uiScale, implot.DragToolFlagsNoFit, &clicked, &hov, &held) {
-				g.iv.setEdge(g.cur.effective(), i == 1, model.Date(math.Round(x/secondsPerDay)))
+				g.iv.setEdge(g.cur.settled(), i == 1, model.Date(math.Round(x/secondsPerDay)))
 			}
 			handleHovered = handleHovered || hov || held
 		}
@@ -253,13 +255,12 @@ func crosshairAt(views []lineView, day model.Date) (rows []crosshairRow, pts []c
 	return rows, pts
 }
 
-// crosshairTags queues the value and date tags for the cursor's day and, if tooltip, shows the tooltip.
-func (g *graphTab) crosshairTags(views []lineView, rows []crosshairRow, pts []crosshairPoint, bands []bandView, day model.Date, tooltip bool) {
+// hoverTooltip shows the tooltip of the lines' values at the day under the pointer, if any line has one.
+func (g *graphTab) hoverTooltip(views []lineView, rows []crosshairRow, bands []bandView, day model.Date) {
 	if len(rows) == 0 {
 		return
 	}
-	g.tags.crosshair(g.geom(), day, pts)
-	if tooltip && imgui.BeginTooltip() {
+	if imgui.BeginTooltip() {
 		imgui.PushStyleColorVec4(imgui.ColText, rgba(colMuted, 1))
 		imgui.TextUnformatted(graph.FormatDate(day))
 		imgui.PopStyleColor()
@@ -284,31 +285,19 @@ func (g *graphTab) crosshairTags(views []lineView, rows []crosshairRow, pts []cr
 	}
 }
 
-// drawBand fills the area between the band's edges, and stripes it if hatched. The edges are the pixel polylines of
-// its upper and lower lines.
-func (g *graphTab) drawBand(dl *imgui.DrawList, bv bandView, upper, lower []graph.Pt) {
-	g.fillBetween(dl, upper, lower, u32(lineColor(bv.band.Color, 0.25)))
-	left, right := g.plotPos.X, g.plotPos.X+g.plotSize.X
-	if bv.band.Hatch {
-		col := u32(lineColor(bv.band.Color, 0.6))
-		for _, sg := range graph.HatchStripes(upper, lower, hatchSpacing*uiScale,
-			graph.Pt{X: left, Y: g.plotPos.Y}, graph.Pt{X: right, Y: g.plotPos.Y + g.plotSize.Y}) {
-			dl.AddLineArgs(vec(sg.A), vec(sg.B), col, uiScale)
-		}
+// drawBand fills the area between the band's edges, and stripes it if hatched. The edges are the pixel polylines of its upper and lower lines, polys the pixel polylines of the frame's lines.
+func (g *graphTab) drawBand(dl *imgui.DrawList, geom plotGeom, bv bandView, views []lineView, polys [][]graph.Pt) {
+	px := g.px.band(bv.band.ID, geom, polys[bv.upper], polys[bv.lower], views[bv.upper].samples, views[bv.lower].samples, bv.band.Hatch)
+	fillPolys(dl, px.polys, u32(lineColor(bv.band.Color, 0.25)))
+	col := u32(lineColor(bv.band.Color, 0.6))
+	for _, sg := range px.stripes {
+		dl.AddLineArgs(vec(sg.A), vec(sg.B), col, uiScale)
 	}
 }
 
-// fillBetween fills the area between two pixel polylines sampled at the same x positions, skipping the pieces outside the plot.
-func (g *graphTab) fillBetween(dl *imgui.DrawList, upper, lower []graph.Pt, fill uint32) {
-	left, right := g.plotPos.X, g.plotPos.X+g.plotSize.X
-	for _, poly := range graph.BandPolys(upper, lower) {
-		minX, maxX := poly[0].X, poly[0].X
-		for _, p := range poly[1:] {
-			minX, maxX = min(minX, p.X), max(maxX, p.X)
-		}
-		if minX > right || maxX < left {
-			continue
-		}
+// fillPolys fills the convex polygons.
+func fillPolys(dl *imgui.DrawList, polys [][]graph.Pt, fill uint32) {
+	for _, poly := range polys {
 		dl.AddConvexPolyFilled(vecs(poly), int32(len(poly)), fill)
 	}
 }

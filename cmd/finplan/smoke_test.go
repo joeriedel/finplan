@@ -73,6 +73,7 @@ func TestScreenshotSmoke(t *testing.T) {
 		{"graph-breakdown-line", "Graph", "", "breakdown-line"},
 		{"graph-breakdown-interval", "Graph", "", "breakdown-interval"},
 		{"graph-cursor-lock", "Graph", "", "cursor-lock"},
+		{"graph-cursor-hover", "Graph", "", "cursor-hover"},
 		{"graph-breakdown-expand", "Graph", "", "breakdown-expand"},
 		// The Graph under a projection draws the Acme RSUs and Brokerage lines: vests step one down and the other up.
 		{"graph-base", "Graph", "Base", ""},

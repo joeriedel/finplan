@@ -44,7 +44,7 @@ func (g *graphTab) breakdownBody() {
 		return
 	}
 	proj, _ := g.lines.Effective(ln.ID)
-	from, to := g.iv.window(g.cur.effective())
+	from, to := g.iv.window(g.cur.settled())
 	g.breakdownHeader(ln.ID, from, to)
 	k := bkKey{proj, ln.Asset, from, to}
 	entry := g.bkCache.get(k)
@@ -138,7 +138,7 @@ func (g *graphTab) breakdownHeader(line graph.LineID, from, to model.Date) {
 	}
 
 	if imgui.Button("Year at cursor") {
-		g.iv.setWindow(yearAt(g.cur.effective()))
+		g.iv.setWindow(yearAt(g.cur.settled()))
 	}
 	imgui.SameLine()
 	if imgui.Button("This year") {
@@ -180,7 +180,7 @@ func (g *graphTab) bkDateField(id string, text *string, editing *bool, shown mod
 	if !end {
 		d--
 	}
-	g.iv.setEdge(g.cur.effective(), end, d)
+	g.iv.setEdge(g.cur.settled(), end, d)
 }
 
 func muted(s string) {

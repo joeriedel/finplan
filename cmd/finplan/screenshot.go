@@ -38,6 +38,8 @@ type shotOptions struct {
 	openID string
 	// checkIDs asks for the widget ID conflict scan after the screenshot is saved.
 	checkIDs bool
+	// frameTimes asks for the frame-time table in place of the PNG.
+	frameTimes bool
 }
 
 // openState is a state --open can show, with the tab it needs, whether it needs --select, and the id the code that draws it asks takeOpen about, which is empty for a state set by applyOpen instead of a picker.
@@ -55,6 +57,7 @@ var openNames = []openState{
 	{"breakdown-interval", "Graph", "", false},
 	{"breakdown-expand", "Graph", "", false},
 	{"cursor-lock", "Graph", "", false},
+	{"cursor-hover", "Graph", "", false},
 	{"target", "Projections", "addsetasset", true},
 	{"member", "Assets", "memberacct", true},
 	{"member-form", "Assets", "", true},
@@ -91,6 +94,7 @@ var openNames = []openState{
 // openNotes say more of the states whose name does not say what they show.
 var openNotes = map[string]string{
 	"cursor-lock":        "the cursor locked two years after today, with the pointer away",
+	"cursor-hover":       "the cursor locked two years after today and the pointer over the plot at four years after, so that both cursors show",
 	"about":              "the Help > About finplan dialog",
 	"new-item":           "the Add form for a new budget item",
 	"budget-item":        "the first item's editor",
@@ -211,10 +215,19 @@ func (o *shotOptions) openName() (n openState) {
 	return n
 }
 
+// pointer is where the screenshot holds the mouse, for the states that need one: over the Graph's plot, halfway down it, at four years after today (cursor-hover). It reports false until the plot has been drawn once.
+func (o *shotOptions) pointer(a *app) (x, y float32, ok bool) {
+	if o.open != "cursor-hover" || !a.graph.geom().usable() {
+		return 0, 0, false
+	}
+	p := a.graph.toPx(float64(a.rec.Today.Add(1460))*secondsPerDay, 0)
+	return p.X, a.graph.plotPos.Y + a.graph.plotSize.Y/2, true
+}
+
 // pastCursorDate is where budget-period-past locks the Graph's cursor: a day in a past month of the demo, when some bills had been paid and some, due earlier, had yet to be.
 var pastCursorDate = model.D(2026, time.October, 3)
 
-// applyOpen puts the app in the state --open asks for that is not a picker: the About dialog (about), the Net worth line soloed with Monte Carlo on (monte-carlo), the Net worth line selected so that the breakdown panel follows it (breakdown-line), also with the interval set to the calendar year before today (breakdown-interval), also with the first cause row folded out to its member accounts (breakdown-expand), the Graph's cursor locked two years after today with the pointer away (cursor-lock), the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the Projections Add form on the focal grant, shock or rebalance kind (focal-grant, shock, rebalance), the first Budget item's editor (budget-item) or its delete confirmation (budget-delete), the Taxes view (budget-taxes), the This period view (budget-period), also with the Graph's cursor locked at pastCursorDate, a day in a past month (budget-period-past), the Projections tab with the selected projection's drift row shown, which Base with drift sets (projection-drift), or with its tax tables editor shown, on the household's state table (tax-tables) or the federal table (tax-tables-federal), the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth, the confirmation for deleting the selected asset (asset-delete) or account (account-delete), which lists the saved view presets that show it (on the demo, a new account Brokerage 2 in a new preset, since the demo's own accounts all have history), the selected account's ledger panel (ledger), the household members' Benefits sections folded out (member-benefits), or one of the equity states, which scroll the selected equity account's detail to a section: its grants table (equity-grants), the Add grant form filled in by dollar value (equity-add-grant), the schedule of its first grant with recorded and planned vests (equity-schedule), the Record vest form of that grant's first planned vest with a changed federal rate (equity-vest) or tied to a deposit (equity-tie, with the picker closed), the Move date form of that planned vest (equity-move), the untouched Correct or void form of that grant (equity-correct), the Prices section (equity-prices) and the vest calendar editor (equity-calendar), or the Markets tab's Add class form filled in with the name of an existing class, so that its refusal shows (class-add).
+// applyOpen puts the app in the state --open asks for that is not a picker: the About dialog (about), the Net worth line soloed with Monte Carlo on (monte-carlo), the Net worth line selected so that the breakdown panel follows it (breakdown-line), also with the interval set to the calendar year before today (breakdown-interval), also with the first cause row folded out to its member accounts (breakdown-expand), the Graph's cursor locked two years after today with the pointer away (cursor-lock) or with the pointer over the plot at four years after (cursor-hover), the Assets Add member form (member also opens its account picker; member-form leaves it closed), the Projections new budget item form, the Projections Add form on the focal grant, shock or rebalance kind (focal-grant, shock, rebalance), the first Budget item's editor (budget-item) or its delete confirmation (budget-delete), the Taxes view (budget-taxes), the This period view (budget-period), also with the Graph's cursor locked at pastCursorDate, a day in a past month (budget-period-past), the Projections tab with the selected projection's drift row shown, which Base with drift sets (projection-drift), or with its tax tables editor shown, on the household's state table (tax-tables) or the federal table (tax-tables-federal), the strip editor of the selected projection's first modification with a schedule (timeline), or of the selected asset's growth (asset-timeline), which must have growth, the confirmation for deleting the selected asset (asset-delete) or account (account-delete), which lists the saved view presets that show it (on the demo, a new account Brokerage 2 in a new preset, since the demo's own accounts all have history), the selected account's ledger panel (ledger), the household members' Benefits sections folded out (member-benefits), or one of the equity states, which scroll the selected equity account's detail to a section: its grants table (equity-grants), the Add grant form filled in by dollar value (equity-add-grant), the schedule of its first grant with recorded and planned vests (equity-schedule), the Record vest form of that grant's first planned vest with a changed federal rate (equity-vest) or tied to a deposit (equity-tie, with the picker closed), the Move date form of that planned vest (equity-move), the untouched Correct or void form of that grant (equity-correct), the Prices section (equity-prices) and the vest calendar editor (equity-calendar), or the Markets tab's Add class form filled in with the name of an existing class, so that its refusal shows (class-add).
 func (o *shotOptions) applyOpen(a *app) error {
 	switch o.open {
 	case "member", "member-form":
@@ -237,7 +250,7 @@ func (o *shotOptions) applyOpen(a *app) error {
 			}
 		}
 		return fmt.Errorf("the Graph has no Net worth line")
-	case "cursor-lock":
+	case "cursor-lock", "cursor-hover":
 		a.graph.cur.lock = a.rec.Today.Add(730)
 	case "breakdown-line", "breakdown-interval", "breakdown-expand":
 		for _, ln := range a.graph.lines.All() {
