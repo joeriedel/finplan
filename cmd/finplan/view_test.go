@@ -80,10 +80,14 @@ func TestPrepareViewFitsYInTheFrameOfTheChange(t *testing.T) {
 	g := demoApp(t).graph
 	g.setRange(graph.RangeButtons[1])
 	g.prepareView(g.xMin, g.xMax, false, 1000)
+	waitIdle(t, g)
+	g.prepareView(g.xMin, g.xMax, false, 1000)
 	lo5, hi5 := g.yMin, g.yMax
-	// Zoom in on a year a long way ahead.
+	// Zoom in on a year a long way ahead. Its series is made in the background and fitted when it lands.
 	today := float64(g.rec.Today) * secondsPerDay
-	views := g.prepareView(today+3000*secondsPerDay, today+3365*secondsPerDay, true, 1000)
+	g.prepareView(today+3000*secondsPerDay, today+3365*secondsPerDay, true, 1000)
+	waitIdle(t, g)
+	views := g.prepareView(g.xMin, g.xMax, false, 1000)
 	series := make([][]engine.Sample, len(views))
 	for i, v := range views {
 		series[i] = v.samples
@@ -98,12 +102,14 @@ func TestPrepareViewFitsYInTheFrameOfTheChange(t *testing.T) {
 	// A pan refits again at once.
 	before := g.yMax
 	g.prepareView(g.xMin+1500*secondsPerDay, g.xMax+1500*secondsPerDay, true, 1000)
+	waitIdle(t, g)
+	g.prepareView(g.xMin, g.xMax, false, 1000)
 	if g.yMax == before {
 		t.Error("y did not follow the pan")
 	}
 }
 
-// While the view moves, a grid that is not cached is not made; the exact one comes when it settles.
+// While the view moves, the grid is not changed to the exact one; that comes when it settles.
 func TestPrepareViewKeepsTheGridWhileMoving(t *testing.T) {
 	g := demoApp(t).graph
 	g.setRange(graph.RangeButtons[1])
@@ -176,6 +182,8 @@ func TestGraphFitSpanIsTheDataRange(t *testing.T) {
 func TestPrepareViewFitsYInAViewNarrowerThanTheGrid(t *testing.T) {
 	g := demoApp(t).graph
 	g.setRange(graph.RangeButtons[3])
+	g.prepareView(g.xMin, g.xMax, false, 1000)
+	waitIdle(t, g)
 	g.prepareView(g.xMin, g.xMax, false, 1000)
 	if g.grid.Step < 14 {
 		t.Fatalf("grid step %d is not wider than the view", g.grid.Step)

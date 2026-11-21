@@ -167,11 +167,11 @@ func TestNetWorthBreakdownRowsAndMembers(t *testing.T) {
 	rec := demodata.Family()
 	c := newBreakdownCache(rec)
 	k := bkKey{"", demodata.NetWorth, model.D(2025, time.June, 30), model.D(2025, time.December, 31)}
-	e := c.get(k)
+	e := breakdownOn(t, c, k)
 	if e.err != nil {
 		t.Fatal(e.err)
 	}
-	if c.get(k) != e {
+	if again, exact := c.get(k); again != e || !exact {
 		t.Error("the cache does not return the same entry for the same key")
 	}
 	change := e.res.End - e.res.Start
@@ -191,7 +191,7 @@ func TestNetWorthBreakdownRowsAndMembers(t *testing.T) {
 	if len(accts) != 14 {
 		t.Fatalf("net worth has %d member accounts, want 14", len(accts))
 	}
-	members := c.members(k, e)
+	members := membersOf(t, c, e)
 	if len(members) != len(accts) {
 		t.Fatalf("%d member breakdowns for %d accounts", len(members), len(accts))
 	}

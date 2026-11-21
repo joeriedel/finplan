@@ -116,7 +116,7 @@ func TestAccountsInTheTab(t *testing.T) {
 	// Net worth under the child counts it; undo takes it away again.
 	day := model.D(2027, 6, 1)
 	nw := func(proj string) float64 {
-		s := a.graph.cache.samples(demodata.NetWorth, proj, graph.Grid{Step: 1, First: day, Last: day})
+		s := samplesOn(t, a.graph.cache, demodata.NetWorth, proj, graph.Grid{Step: 1, First: day, Last: day})
 		if len(s) != 1 {
 			t.Fatalf("no net worth under %q", proj)
 		}
@@ -159,7 +159,7 @@ func TestLineCandidatesIncludeTheProjectionsAccounts(t *testing.T) {
 	g := a.graph
 	g.lines.Add("acct:house", true, demodata.ProjNewJob, graph.AssetColor(effective(a.rec, demodata.ProjNewJob), "acct:house"))
 	day := model.D(2027, 6, 1)
-	if s := g.cache.samples("acct:house", demodata.ProjNewJob, graph.Grid{Step: 1, First: day, Last: day}); len(s) != 1 || s[0].Amount != 400000 {
+	if s := samplesOn(t, g.cache, "acct:house", demodata.ProjNewJob, graph.Grid{Step: 1, First: day, Last: day}); len(s) != 1 || s[0].Amount != 400000 {
 		t.Errorf("the line's data: %v", s)
 	}
 	has := recordHas(a.rec)

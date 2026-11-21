@@ -18,7 +18,7 @@ import (
 // balanceOn is the balance the Graph draws for the account under the projection on the date.
 func balanceOn(t *testing.T, a *app, acct model.AccountID, proj string, d model.Date) float64 {
 	t.Helper()
-	s := a.graph.cache.samples(model.DefaultAssetID(acct), proj, graph.Grid{Step: 1, First: d, Last: d})
+	s := samplesOn(t, a.graph.cache, model.DefaultAssetID(acct), proj, graph.Grid{Step: 1, First: d, Last: d})
 	if len(s) != 1 {
 		t.Fatalf("no balance of %s under %q", acct, proj)
 	}

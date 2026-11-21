@@ -27,6 +27,8 @@ import (
 const (
 	// idleWaitMs bounds how long the loop sleeps waiting for an event when nothing needs redrawing.
 	idleWaitMs = 500
+	// busyWaitMs is how long the loop waits for an event after a frame that had background jobs running, which bounds how late their results are drawn.
+	busyWaitMs = 30
 	// settleFrames is how many frames are drawn after input so ImGui's one-frame-late state settles.
 	settleFrames = 3
 	// pollEvery is how often the database is checked for changes made by other programs.
@@ -54,7 +56,7 @@ func main() {
 	sel := flag.String("select", "", "with --screenshot: the projection, asset, account or market class to select, by name (Projections, Assets, Accounts and Markets tabs)")
 	open := flag.String("open", "", "with --screenshot: a state to show, with the tab it works with, one of "+openHelp())
 	checkIDs := flag.Bool("check-ids", false, "with --screenshot: after saving, move the mouse over every widget, in a window made tall enough to show them all, and fail if two visible widgets share an ID")
-	timeFrames := flag.Bool("frame-times", false, "with --screenshot and the Graph tab: instead of saving the screenshot, print the CPU time per frame of scripted pan, zoom and hover, with and without Monte Carlo")
+	timeFrames := flag.Bool("frame-times", false, "with --screenshot and the Graph tab: instead of saving the screenshot, print the CPU time per frame of scripted pan, zoom and hover from the All, Age 95, 30Y and 5Y views, with and without Monte Carlo")
 	flag.Parse()
 	var shot *shotOptions
 	if *out != "" {
@@ -98,8 +100,8 @@ func openStore(demo bool) (*store.Store, func(), error) {
 	return st, func() { st.Close() }, nil
 }
 
-// shotMonteCarloWait is the longest a screenshot waits for the Monte Carlo jobs; the scan of widget IDs and the smoke test's case timeout come after it.
-const shotMonteCarloWait = 15 * time.Second
+// shotBackgroundWait is the longest a screenshot waits for the background jobs, the Graph's samples and Monte Carlo among them; the scan of widget IDs and the smoke test's case timeout come after it.
+const shotBackgroundWait = 15 * time.Second
 
 // run shows the window until it is closed or a SIGINT or SIGTERM arrives, or, with shot set, draws the screenshot.
 func run(demo bool, shot *shotOptions) error {
@@ -159,6 +161,7 @@ func run(demo bool, shot *shotOptions) error {
 	uiScale = scale
 
 	frames := settleFrames
+	again := false
 	shotStart := time.Now()
 	for {
 		timeout := idleWaitMs
@@ -167,6 +170,10 @@ func run(demo bool, shot *shotOptions) error {
 		}
 		if shot != nil {
 			timeout = 0
+		}
+		// Background jobs land in a later frame, so after a frame that had some running, or that one landed in, the loop waits only a short time for the next.
+		if again && timeout > busyWaitMs {
+			timeout = busyWaitMs
 		}
 		select {
 		case <-stop:
@@ -194,6 +201,9 @@ func run(demo bool, shot *shotOptions) error {
 				frames = settleFrames
 			}
 		}
+		if again && frames == 0 {
+			frames = 1
+		}
 		if frames == 0 {
 			continue
 		}
@@ -214,8 +224,8 @@ func run(demo bool, shot *shotOptions) error {
 			uiScale = s
 		}
 
-		// A screenshot waits for the Monte Carlo jobs, which run in the background, so that it shows their bands.
-		mcWasBusy := shot != nil && app.graph.mc.busy()
+		// A screenshot waits for the background jobs, so that it shows their results.
+		busyBefore := app.busy()
 		backend.NewFrame()
 		if shot != nil {
 			if x, y, ok := shot.pointer(app); ok {
@@ -225,9 +235,10 @@ func run(demo bool, shot *shotOptions) error {
 		imgui.NewFrame()
 		app.draw()
 		imgui.Render()
-		if shotLeft == 1 && (mcWasBusy || app.graph.mc.busy()) {
-			if time.Since(shotStart) > shotMonteCarloWait {
-				return fmt.Errorf("the Monte Carlo jobs were still running after %v", shotMonteCarloWait)
+		again = app.keepRedrawing(busyBefore)
+		if shotLeft == 1 && (busyBefore || app.busy()) {
+			if time.Since(shotStart) > shotBackgroundWait {
+				return fmt.Errorf("the background jobs were still running after %v", shotBackgroundWait)
 			}
 			backend.Render()
 			time.Sleep(20 * time.Millisecond)

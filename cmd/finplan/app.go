@@ -20,7 +20,9 @@ type app struct {
 	st    *store.Store
 	rec   *model.Record
 	graph *graphTab
-	quit  bool
+	// landSeen is the background caches the screens show and their landing count as of the last landed call.
+	landSeen landMark
+	quit     bool
 	// notices are messages waiting for the user to dismiss them; backupOpen is set while the Backup save dialog is open.
 	notices    []string
 	backupOpen bool
@@ -306,4 +308,35 @@ func (a *app) menuBar() {
 		imgui.EndMenu()
 	}
 	imgui.EndMainMenuBar()
+}
+
+// busy reports whether background work for the screens is still running.
+func (a *app) busy() bool {
+	return a.graph.busy() || (a.assets.charts != nil && (a.assets.charts.busy() || a.assets.balances.busy()))
+}
+
+// landMark is the caches whose landings the loop redraws for and the number of landings in them.
+type landMark struct {
+	data     *dataCache
+	bk       *breakdownCache
+	charts   *chartCache
+	balances *balanceCache
+	n        uint64
+}
+
+// landed reports whether a result landed in a background cache the screens show since the last call, so that the loop redraws once for it whichever tab is shown; the Graph refits on its own flag when it is next drawn.
+func (a *app) landed() bool {
+	m := landMark{data: a.graph.cache, bk: a.graph.bkCache, charts: a.assets.charts, balances: a.assets.balances}
+	m.n = m.data.landCount() + m.bk.landCount()
+	if m.charts != nil {
+		m.n += m.charts.landCount() + m.balances.landCount()
+	}
+	f := m != a.landSeen
+	a.landSeen = m
+	return f
+}
+
+// keepRedrawing reports whether the loop should redraw soon: background work was running before or after the frame, or a series landed in it.
+func (a *app) keepRedrawing(busyBefore bool) bool {
+	return busyBefore || a.busy() || a.landed()
 }

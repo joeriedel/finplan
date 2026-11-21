@@ -5,6 +5,7 @@ package main
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/joeriedel/finplan/internal/engine"
 	"github.com/joeriedel/finplan/internal/graph"
@@ -182,35 +183,108 @@ type bkAccount struct {
 
 // bkEntry is the cached breakdown of one asset over one window and, once asked for, those of its member accounts.
 type bkEntry struct {
+	key     bkKey
 	res     *engine.BreakdownResult
 	err     error
 	members []bkMember
 	done    bool
 }
 
-// breakdownCache memoizes engine breakdowns so the engine does not run every frame. Like dataCache it belongs to one record and is replaced when the record is reloaded.
+// bkSlot and bkMembersSlot are the bgRunner slots of the breakdown of the line the panel follows and of its members: the panel shows one of each at a time, so a new ask replaces the one before it that has not started.
+type (
+	bkSlot        struct{}
+	bkMembersSlot struct{}
+)
+
+// breakdownCache memoizes engine breakdowns so the engine does not run every frame, and runs the engine in the background: the panel asks for a breakdown that is not cached and shows it in a later frame. Like dataCache it belongs to one record and is replaced, and closed, when the record is reloaded.
 type breakdownCache struct {
-	rec      *model.Record
-	entries  map[bkKey]*bkEntry
+	rec  *model.Record
+	snap recCopy
+	run  *bgRunner
+
+	mu      sync.Mutex
+	entries map[bkKey]*bkEntry
+	// want is the key last asked for and wanted whether one was; shown is the entry last returned, which the panel keeps showing while another is computed; wantMembers is the entry whose members were last asked for.
+	want        bkKey
+	wanted      bool
+	shown       *bkEntry
+	wantMembers *bkEntry
+	closed      bool
+	// lands counts the entries and member sets that landed, for the loop to tell whether it has redrawn for the latest.
+	lands uint64
+	// accounts is read and written on the UI thread only.
 	accounts map[bkAcctKey][]bkAccount
 }
 
 func newBreakdownCache(rec *model.Record) *breakdownCache {
-	return &breakdownCache{rec: rec, entries: map[bkKey]*bkEntry{}, accounts: map[bkAcctKey][]bkAccount{}}
+	return &breakdownCache{rec: rec, snap: recCopy{src: rec}, run: newBGRunner(), entries: map[bkKey]*bkEntry{}, accounts: map[bkAcctKey][]bkAccount{}}
 }
 
-// get returns the asset's breakdown over (from, to] under the projection.
-func (c *breakdownCache) get(k bkKey) *bkEntry {
+// get returns the asset's breakdown over (from, to] under the projection and whether it is that one: if it is not cached it is asked for, and the entry returned is the one shown last for the same asset and projection, nil if none.
+func (c *breakdownCache) get(k bkKey) (*bkEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if e, ok := c.entries[k]; ok {
-		return e
+		c.shown = e
+		return e, true
 	}
+	if !c.closed && !(c.wanted && c.want == k) {
+		c.want, c.wanted = k, true
+		rec := c.snap.get()
+		c.run.submit(bkSlot{}, func() { c.compute(rec, k) })
+	}
+	if e := c.shown; e != nil && e.key.proj == k.proj && e.key.asset == k.asset {
+		return e, false
+	}
+	return nil, false
+}
+
+// compute is the job of get.
+func (c *breakdownCache) compute(rec *model.Record, k bkKey) {
+	c.mu.Lock()
+	skip := c.closed || !c.wanted || c.want != k
+	c.mu.Unlock()
+	if skip {
+		return
+	}
+	e := &bkEntry{key: k}
+	e.res, e.err = engine.Breakdown(rec, k.proj, k.asset, k.from, k.to)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	c.storeLocked(e)
+}
+
+// storeLocked adds the entry to the cache. A full cache starts over but keeps the wanted entry: get does not ask again for a key it has asked for, so an older job landing after the wanted one must not evict it.
+func (c *breakdownCache) storeLocked(e *bkEntry) {
 	if len(c.entries) >= maxBreakdowns {
+		w, kept := c.entries[c.want]
 		clear(c.entries)
+		if kept && c.wanted {
+			c.entries[c.want] = w
+		}
 	}
-	e := &bkEntry{}
-	e.res, e.err = engine.Breakdown(c.rec, k.proj, k.asset, k.from, k.to)
-	c.entries[k] = e
-	return e
+	c.entries[e.key] = e
+	c.lands++
+}
+
+// landCount returns the number of results that have landed.
+func (c *breakdownCache) landCount() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lands
+}
+
+// busy reports whether a job is queued or running.
+func (c *breakdownCache) busy() bool { return c.run.busy() }
+
+// close keeps the running jobs from landing: the cache is being replaced.
+func (c *breakdownCache) close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
 }
 
 // memberAccounts returns the accounts under the asset, or nil when there is one or none: a single account has nothing to expand into.
@@ -235,16 +309,40 @@ func (c *breakdownCache) memberAccounts(proj string, asset model.AssetID) []bkAc
 	return out
 }
 
-// members returns the breakdown of each member account of the entry's asset over the same window, computed once per entry.
-func (c *breakdownCache) members(k bkKey, e *bkEntry) []bkMember {
+// members returns the breakdown of each member account of the entry's asset over the same window, and whether they are known: they are asked for the first time and computed in the background, once per entry.
+func (c *breakdownCache) members(e *bkEntry) ([]bkMember, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if e.done {
-		return e.members
+		return e.members, true
 	}
-	e.done = true
-	for _, a := range c.memberAccounts(k.proj, k.asset) {
-		if res, err := engine.Breakdown(c.rec, k.proj, model.DefaultAssetID(a.id), k.from, k.to); err == nil {
-			e.members = append(e.members, bkMember{a.name, res})
+	if !c.closed && c.wantMembers != e {
+		c.wantMembers = e
+		rec := c.snap.get()
+		accounts := c.memberAccounts(e.key.proj, e.key.asset)
+		c.run.submit(bkMembersSlot{}, func() { c.computeMembers(rec, e, accounts) })
+	}
+	return nil, false
+}
+
+// computeMembers is the job of members.
+func (c *breakdownCache) computeMembers(rec *model.Record, e *bkEntry, accounts []bkAccount) {
+	c.mu.Lock()
+	skip := c.closed || c.wantMembers != e
+	c.mu.Unlock()
+	if skip {
+		return
+	}
+	var members []bkMember
+	for _, a := range accounts {
+		if res, err := engine.Breakdown(rec, e.key.proj, model.DefaultAssetID(a.id), e.key.from, e.key.to); err == nil {
+			members = append(members, bkMember{a.name, res})
 		}
 	}
-	return e.members
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.closed {
+		e.members, e.done = members, true
+		c.lands++
+	}
 }

@@ -107,21 +107,26 @@ func overlapProblem(rec *model.Record, a *model.Asset, o model.Overlap) string {
 	return fmt.Sprintf("Left out of the total: %s already counted by %s. Remove one of the two.", strings.Join(names, ", "), against)
 }
 
-// buildAssets returns a row for each asset that is not an account's default asset, in record order, with the members nested.
+// buildAssets returns a row for each asset that is not an account's default asset, in record order, with the members nested and their balances worked out now.
 func buildAssets(rec *model.Record) []*assetRow {
+	return buildAssetsWith(rec, func(id model.AssetID) float64 { return todayBalance(rec, id) })
+}
+
+// buildAssetsWith is buildAssets with the balance of an asset today given by balance, which lets the tab show the rows before the engine has worked the balances out.
+func buildAssetsWith(rec *model.Record, balance func(model.AssetID) float64) []*assetRow {
 	resolved := map[model.AssetID]*model.Resolution{}
 	var rows []*assetRow
 	for _, a := range rec.Assets {
 		if !isDefaultAsset(a.ID) {
-			rows = append(rows, buildAsset(rec, a, resolved, nil))
+			rows = append(rows, buildAsset(rec, a, resolved, nil, balance))
 		}
 	}
 	return rows
 }
 
 // buildAsset makes the row of one asset. shown are the assets being shown above it, which it does not nest again, so a cycle ends in a row with an error.
-func buildAsset(rec *model.Record, a *model.Asset, resolved map[model.AssetID]*model.Resolution, shown []model.AssetID) *assetRow {
-	row := &assetRow{Asset: a, Balance: todayBalance(rec, a.ID)}
+func buildAsset(rec *model.Record, a *model.Asset, resolved map[model.AssetID]*model.Resolution, shown []model.AssetID, balance func(model.AssetID) float64) *assetRow {
+	row := &assetRow{Asset: a, Balance: balance(a.ID)}
 	res, ok := resolved[a.ID]
 	if !ok {
 		var err error
@@ -140,21 +145,21 @@ func buildAsset(rec *model.Record, a *model.Asset, resolved map[model.AssetID]*m
 		mr := memberRow{Member: m, Label: memberLabel(rec, m)}
 		switch {
 		case m.Asset != "":
-			mr.Balance = todayBalance(rec, m.Asset)
+			mr.Balance = balance(m.Asset)
 			if child := rec.Asset(m.Asset); child != nil && !slices.Contains(shown, m.Asset) {
-				mr.Child = buildAsset(rec, child, resolved, shown)
+				mr.Child = buildAsset(rec, child, resolved, shown, balance)
 			}
 		case m.Rule != nil:
 			var names []string
 			for _, acct := range rec.Accounts {
 				if m.Rule.Matches(acct) {
 					names = append(names, acct.Name)
-					mr.Balance += todayBalance(rec, model.DefaultAssetID(acct.ID))
+					mr.Balance += balance(model.DefaultAssetID(acct.ID))
 				}
 			}
 			mr.Detail, mr.Summary = ruleMatches(names)
 		default:
-			mr.Balance = todayBalance(rec, model.DefaultAssetID(m.Account))
+			mr.Balance = balance(model.DefaultAssetID(m.Account))
 		}
 		if res != nil {
 			if o, bad := res.Invalid(a.ID, m.Seq); bad {

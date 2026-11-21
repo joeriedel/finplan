@@ -106,9 +106,12 @@ type assetsTab struct {
 	rec  *model.Record
 	rows []*assetRow
 	sel  model.AssetID
-	// chart is the chart of the asset chartFor.
-	chart    *assetChart
-	chartFor model.AssetID
+	// charts builds the chart of the selected asset in the background; chart is the chart drawn, once built.
+	charts *chartCache
+	chart  *assetChart
+	// balances works out the balances of the rows in the background; they show as ... until balancesReady, when the rows are made again with them.
+	balances      *balanceCache
+	balancesReady bool
 	// chartView is the chart's plot as of the last frame. The app owns the chart's limits: chartX0 to chartX1 is the x range, set to the asset's data range when the chart is first shown for it, when another asset is chosen (chartLimitsFor is the asset it was last set for) and when the user double-clicks, and changed by chartIn, the wheel and right drag. chartY0 to chartY1 is the y range fitted to the x range chartFitX0 to chartFitX1 of the asset chartFitFor.
 	chartView              plotGeom
 	chartLimitsFor         model.AssetID
@@ -139,8 +142,21 @@ type assetsTab struct {
 }
 
 func (t *assetsTab) reset() {
-	t.rows = buildAssets(t.rec)
+	if t.charts != nil {
+		t.charts.close()
+		t.balances.close()
+	}
+	t.charts, t.balances, t.balancesReady = newChartCache(t.rec), newBalanceCache(t.rec), false
+	t.rows = buildAssetsWith(t.rec, t.balances.balance)
 	t.bufs, t.errs, t.delKnown, t.chart = map[string]string{}, map[string]string{}, false, nil
+}
+
+// money formats a balance of the rows, or ... while the balances are being worked out.
+func (t *assetsTab) money(v float64) string {
+	if !t.balancesReady {
+		return "..."
+	}
+	return graph.FormatMoney(v)
 }
 
 func (t *assetsTab) draw() {
@@ -148,6 +164,10 @@ func (t *assetsTab) draw() {
 	if t.rec != a.rec {
 		t.rec = a.rec
 		t.reset()
+	}
+	if !t.balancesReady && t.balances.ready() {
+		t.balancesReady = true
+		t.rows = buildAssetsWith(t.rec, t.balances.balance)
 	}
 	if t.sel != "" && (a.rec.Asset(t.sel) == nil || isDefaultAsset(t.sel)) {
 		t.sel = ""
@@ -218,7 +238,7 @@ func (t *assetsTab) assetNode(r *assetRow, path, problem string) {
 	if r.Err != "" {
 		errorText("error")
 	} else {
-		imgui.TextUnformatted(graph.FormatMoney(r.Balance))
+		imgui.TextUnformatted(t.money(r.Balance))
 	}
 	if problem != "" {
 		imgui.PopStyleColor()
@@ -251,7 +271,7 @@ func (t *assetsTab) memberNode(parent *assetRow, m memberRow) {
 	imgui.TreeNodeExStrV(shown, imgui.TreeNodeFlagsLeaf|imgui.TreeNodeFlagsNoTreePushOnOpen|imgui.TreeNodeFlagsSpanFullWidth)
 	treeDecor(textX, shown, m.fullLabel(), m.Detail != "", kind, m.Problem)
 	imgui.TableSetColumnIndex(1)
-	imgui.TextUnformatted(graph.FormatMoney(m.Balance))
+	imgui.TextUnformatted(t.money(m.Balance))
 	if m.Problem != "" {
 		imgui.PopStyleColor()
 	}
@@ -337,7 +357,7 @@ func (t *assetsTab) detail(asset *model.Asset) {
 	if row := t.find(id); row != nil {
 		t.label("Balance today")
 		imgui.AlignTextToFramePadding()
-		imgui.TextUnformatted(graph.FormatMoney(row.Balance))
+		imgui.TextUnformatted(t.money(row.Balance))
 		t.members(asset, row)
 	}
 	t.defaults(asset)
@@ -390,7 +410,7 @@ func (t *assetsTab) members(asset *model.Asset, row *assetRow) {
 		hoverIcon(p.X, cy, kind)
 		imgui.SameLineV(em*30, -1)
 		imgui.AlignTextToFramePadding()
-		imgui.TextUnformatted(graph.FormatMoney(m.Balance))
+		imgui.TextUnformatted(t.money(m.Balance))
 		imgui.SameLine()
 		if imgui.Button("x") {
 			t.a.edit("remove member", func() (*ops.Result, error) {
@@ -510,11 +530,13 @@ func chartYFit(c *assetChart, from, to model.Date) (lo, hi float64) {
 func (t *assetsTab) chartArea(id model.AssetID) {
 	imgui.Spacing()
 	imgui.SeparatorText("Value over time")
-	rebuilt := t.chart == nil || t.chartFor != id
-	if rebuilt {
-		t.chart, t.chartFor = buildChart(t.a.rec, id), id
+	c := t.charts.get(id)
+	if c == nil {
+		disabledText("Working out the chart...")
+		return
 	}
-	c := t.chart
+	rebuilt := t.chart != c
+	t.chart = c
 	if c.Err != "" {
 		errorText(c.Err)
 		return

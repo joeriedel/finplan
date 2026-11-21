@@ -20,7 +20,7 @@ import (
 
 const secondsPerDay = 86400
 
-// lineView is one visible line with the samples drawn this frame.
+// lineView is one visible line with the samples drawn this frame: those of the grid asked for if they are cached, else the best the cache has, or none while the first answer is awaited.
 type lineView struct {
 	line    graph.Line
 	name    string
@@ -50,7 +50,7 @@ type graphTab struct {
 	// fitX0, fitX1 and fitGrid are the x range and the sample grid the y range was last fitted for.
 	fitX0, fitX1 float64
 	fitGrid      graph.Grid
-	// grid is the sample grid of the last frame, and moving the number of frames left of the time that the view counts as moving after a wheel or drag, in which a grid that is not cached is not made but one already sampled, or a coarse one that leaves room to move, is used.
+	// grid is the sample grid asked for in the last frame, and moving the number of frames left of the time that the view counts as moving after a wheel or drag, in which the grid is not changed to the exact one for each step but kept while it covers the view, or made coarse with room to move.
 	grid   graph.Grid
 	moving int
 
@@ -154,6 +154,7 @@ func newGraphTab(rec *model.Record, presets []graph.Preset, st *store.Store, not
 // projections still exist, the x range and the current preset if its name still exists.
 func (g *graphTab) reload(rec *model.Record, presets []graph.Preset) {
 	if len(g.rec.Accounts) == 0 {
+		g.closeCaches()
 		*g = *newGraphTab(rec, presets, g.store, g.notify, g.demo)
 		return
 	}
@@ -165,6 +166,7 @@ func (g *graphTab) reload(rec *model.Record, presets []graph.Preset) {
 	oldSel, selected := g.lines.Selected()
 	keep := graph.Capture("", g.lines, g.xMin, g.xMax)
 	has := recordHas(rec)
+	g.closeCaches()
 	g.rec, g.cache, g.mc, g.dataStart, g.bkCache = rec, newDataCache(rec), newMCCache(rec), graph.DataStart(rec), newBreakdownCache(rec)
 	g.lines = keep.Restore(has, projectionNames(rec))
 	// Restore keeps the order of the lines it keeps, so the kept old lines pair up with the new ones.
@@ -186,6 +188,18 @@ func (g *graphTab) reload(rec *model.Record, presets []graph.Preset) {
 			g.preset = i
 		}
 	}
+}
+
+// closeCaches stops the work of the caches that a new record replaces, so that it cannot land in anything the Graph shows.
+func (g *graphTab) closeCaches() {
+	g.cache.close()
+	g.mc.close()
+	g.bkCache.close()
+}
+
+// busy reports whether background work for the Graph is running.
+func (g *graphTab) busy() bool {
+	return g.cache.busy() || g.mc.busy() || g.bkCache.busy()
 }
 
 // applyPreset replaces the lines, bands and x range with the preset's and makes it current. Selection is cleared.
@@ -370,15 +384,21 @@ func (g *graphTab) toolbar() {
 	}
 }
 
-// visible returns the drawn lines sampled on the grid, in list order.
+// visible returns the drawn lines with their samples on the grid, in list order. A series that is not cached is asked for in the background, and the line shows the best series the cache has for the visible dates meanwhile.
 func (g *graphTab) visible(grid graph.Grid) []lineView {
+	from, to := dateOf(g.xMin), dateOf(g.xMax)
 	var out []lineView
 	for _, ln := range g.lines.All() {
 		if !g.lines.Drawn(ln.ID) {
 			continue
 		}
 		proj, _ := g.lines.Effective(ln.ID)
-		v := lineView{line: ln, name: g.assetName(ln.Asset), proj: proj, samples: g.cache.samples(ln.Asset, proj, grid)}
+		samples, ok := g.cache.cached(ln.Asset, proj, grid)
+		if !ok {
+			g.cache.want(ln.Asset, proj, grid)
+			samples = g.cache.nearest(ln.Asset, proj, from, to)
+		}
+		v := lineView{line: ln, name: g.assetName(ln.Asset), proj: proj, samples: samples}
 		if ln.MonteCarlo {
 			v.mc, v.mcSeries = g.mc.get(ln.Asset, proj)
 		}
@@ -454,7 +474,7 @@ func fitYRange(series [][]engine.Sample, from, to model.Date) (lo, hi float64, o
 // viewSettleFrames is how many frames, counting the one with the wheel or drag, the view counts as moving. The app draws settleFrames frames after input before it waits, so the last of them has the exact grid.
 const viewSettleFrames = settleFrames - 1
 
-// cachedAll reports whether every drawn line is sampled on the grid already, so that sampling on it runs no engine.
+// cachedAll reports whether every drawn line is sampled on the grid already.
 func (g *graphTab) cachedAll(grid graph.Grid) bool {
 	for _, ln := range g.lines.All() {
 		if proj, _ := g.lines.Effective(ln.ID); g.lines.Drawn(ln.ID) && !g.cache.has(ln.Asset, proj, grid) {
@@ -464,14 +484,14 @@ func (g *graphTab) cachedAll(grid graph.Grid) bool {
 	return true
 }
 
-// sampleGrid returns the grid to sample the lines on for the visible dates, plotWidth pixels wide. While the view moves, the grid is not changed to the exact one for each step, which would run the engine for every line at each one (a stall of many frames), but kept while it covers the view, or made coarse with room to move; the exact grid comes once the view settles.
+// sampleGrid returns the grid to sample the lines on for the visible dates, plotWidth pixels wide. While the view moves, the grid is not changed to the exact one for each step, which would ask the engine for every line at each one, but kept while it covers the view, or made coarse with room to move; the exact grid is asked for once the view settles.
 func (g *graphTab) sampleGrid(plotWidth float32) graph.Grid {
 	from, to := dateOf(g.xMin), dateOf(g.xMax)
 	want := graph.SampleGrid(from, to, plotWidth)
 	if g.moving == 0 || g.cachedAll(want) {
 		return want
 	}
-	if g.grid.Step > 0 && g.grid.First <= from && g.grid.Last >= to && g.cachedAll(g.grid) {
+	if g.grid.Step > 0 && g.grid.First <= from && g.grid.Last >= to {
 		return g.grid
 	}
 	return graph.SampleGrid(from-(to-from), to+(to-from), plotWidth)
@@ -491,6 +511,9 @@ func (g *graphTab) prepareView(lo, hi float64, moved bool, plotWidth float32) []
 	grid := g.sampleGrid(plotWidth)
 	g.grid = grid
 	fresh := g.mc.takeFresh()
+	if g.cache.takeFresh() {
+		fresh = true
+	}
 	views := g.visible(grid)
 	if fresh {
 		g.fitY = true

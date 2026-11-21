@@ -344,7 +344,8 @@ func (g *graphTab) setRecord(rec *model.Record) {
 		}
 	}
 	seed := len(g.rec.Accounts) == 0 && len(rec.Accounts) > 0 && g.preset < 0 && len(g.lines.All()) == 0
-	g.rec, g.cache, g.mc, g.dataStart = rec, newDataCache(rec), newMCCache(rec), graph.DataStart(rec)
+	g.closeCaches()
+	g.rec, g.cache, g.mc, g.dataStart, g.bkCache = rec, newDataCache(rec), newMCCache(rec), graph.DataStart(rec), newBreakdownCache(rec)
 	g.fitY = true
 	if seed {
 		for _, id := range defaultLines(rec, g.demo) {

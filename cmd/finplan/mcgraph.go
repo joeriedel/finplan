@@ -56,7 +56,8 @@ type mcCache struct {
 	entries map[mcKey]*mcEntry
 	pending int
 	// fresh is set when a job finishes, until the Graph takes it to refit.
-	fresh bool
+	fresh  bool
+	closed bool
 }
 
 func newMCCache(rec *model.Record) *mcCache {
@@ -101,12 +102,23 @@ func (c *mcCache) run(k mcKey, rec *model.Record) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e := c.entries[k]
+	if c.closed {
+		c.pending--
+		return
+	}
 	e.state, e.series = mcReady, series
 	if err != nil {
 		e.state = mcFailed
 	}
 	c.pending--
 	c.fresh = true
+}
+
+// close keeps the running jobs from landing: the Graph replaced the cache.
+func (c *mcCache) close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
 }
 
 // monteCarloSeries runs the engine's default Monte Carlo of the asset under the projection on monthly dates from today to the date the household's first earner is mcSuccessAge, or mcHorizonYears from today if there is no earner. The dates do not depend on the zoom.

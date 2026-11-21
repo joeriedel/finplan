@@ -367,6 +367,8 @@ func netWorthSamples(t *testing.T, a *app) []float64 {
 	t.Helper()
 	today := a.rec.Today
 	grid := graph.Grid{Step: 30, First: today, Last: today.Add(30 * 36)}
+	a.graph.visible(grid)
+	waitIdle(t, a.graph)
 	for _, v := range a.graph.visible(grid) {
 		if v.line.Asset == demodata.NetWorth {
 			out := make([]float64, len(v.samples))

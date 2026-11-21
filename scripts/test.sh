@@ -15,4 +15,6 @@ if [ -n "$unformatted" ]; then
 fi
 go vet ./...
 FINPLAN_SMOKE_OUT=/src/test-output/screenshots go test -timeout 20m ./...
+# The background pipeline under the race detector, which finds a job that touches what the UI thread owns.
+go test -race -timeout 10m -run TestPipeline ./cmd/finplan
 '

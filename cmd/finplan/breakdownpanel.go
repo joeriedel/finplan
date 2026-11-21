@@ -47,7 +47,11 @@ func (g *graphTab) breakdownBody() {
 	from, to := g.iv.window(g.cur.settled())
 	g.breakdownHeader(ln.ID, from, to)
 	k := bkKey{proj, ln.Asset, from, to}
-	entry := g.bkCache.get(k)
+	entry, _ := g.bkCache.get(k)
+	if entry == nil {
+		muted("Working out what changed it...")
+		return
+	}
 	if entry.err != nil {
 		muted("The breakdown failed: " + entry.err.Error())
 		return
@@ -82,14 +86,20 @@ func (g *graphTab) breakdownBody() {
 		open := imgui.TreeNodeExStrV(r.label+"##"+string(r.key.cause)+"/"+r.key.class, flags)
 		moneyCells(r.actual, r.projected, r.total())
 		if expandable && open {
-			shares := memberShares(g.bkCache.members(k, entry), r.key)
+			members, ready := g.bkCache.members(entry)
+			if !ready {
+				imgui.TableNextRow()
+				imgui.TableNextColumn()
+				muted("Working out the member accounts...")
+			}
+			shares := memberShares(members, r.key)
 			for _, s := range shares {
 				imgui.TableNextRow()
 				imgui.TableNextColumn()
 				imgui.TextUnformatted(s.name)
 				moneyCells(s.actual, s.projected, s.actual+s.projected)
 			}
-			if len(shares) == 0 {
+			if len(shares) == 0 && ready {
 				imgui.TableNextRow()
 				imgui.TableNextColumn()
 				muted("No member account has a share.")
