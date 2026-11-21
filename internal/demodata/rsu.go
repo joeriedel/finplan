@@ -52,7 +52,7 @@ func familyRSU() *rsuData {
 		value, px   float64
 		years       []float64
 	}{
-		{model.D(2025, time.February, 10), model.D(2025, time.March, 17), 100000, 187.50, []float64{25, 25, 25, 25}},
+		{model.D(2024, time.November, 4), model.D(2025, time.March, 17), 100000, 187.50, []float64{25, 25, 25, 25}},
 		{model.D(2026, time.January, 12), model.D(2026, time.March, 16), 60000, 205.00, []float64{40, 30, 20, 10}},
 	}
 	for i, s := range specs {

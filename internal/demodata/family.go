@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/joeriedel/finplan/internal/model"
@@ -89,13 +90,13 @@ type accountSpec struct {
 }
 
 var accountSpecs = []accountSpec{
-	{Checking, "Checking", model.TypeChecking, model.Taxable, 0, 18000, 0},
+	{Checking, "Checking", model.TypeChecking, model.Taxable, 0, 55000, 0},
 	{Savings, "Savings", model.TypeSavings, model.Taxable, 0.04, 40000, 0},
 	{Card, "Credit card", model.TypeCreditCard, model.Taxable, 0.2299, -2700, 0},
 	{Brokerage, "Brokerage", model.TypeBrokerage, model.Taxable, 0.06, 120000, 0},
-	{K401, "401k", model.Type401k, model.TaxDeferred, 0.06, 310000, 0},
+	{K401, "401k", model.Type401k, model.TaxDeferred, 0.05, 310000, 0},
 	{Roth, "Roth IRA", model.TypeRothIRA, model.TaxFree, 0.06, 85000, 0},
-	{TSP, "TSP", model.TypeTSP, model.TaxDeferred, 0.055, 140000, tspEnd},
+	{TSP, "TSP", model.TypeTSP, model.TaxDeferred, 0.05, 140000, tspEnd},
 	{Mortgage, "Mortgage", model.TypeMortgage, model.Taxable, 0.06, -411877.57, 0},
 	{College1, "529 oldest", model.Type529, model.Tax529, 0.05, 38000, 0},
 	{College2, "529 middle", model.Type529, model.Tax529, 0.05, 26000, 0},
@@ -113,10 +114,10 @@ type college struct {
 }
 
 var colleges = []college{
-	{College1, "Child 1", 24000, model.D(2026, time.August, 1), model.D(2030, time.May, 31), 14000},
-	{College2, "Child 2", 25000, model.D(2031, time.August, 1), model.D(2035, time.May, 31), 15000},
-	{College3, "Child 3", 15000, model.D(2033, time.August, 1), model.D(2037, time.May, 31), 15000},
-	{College4, "Child 4", 8000, model.D(2036, time.August, 1), model.D(2040, time.May, 31), 16000},
+	{College1, "Child 1", 24000, model.D(2026, time.August, 1), model.D(2030, time.May, 31), 9000},
+	{College2, "Child 2", 25000, model.D(2031, time.August, 1), model.D(2035, time.May, 31), 9500},
+	{College3, "Child 3", 15000, model.D(2033, time.August, 1), model.D(2037, time.May, 31), 10000},
+	{College4, "Child 4", 8000, model.D(2036, time.August, 1), model.D(2040, time.May, 31), 10500},
 }
 
 func monthly(day int) model.Recurrence {
@@ -147,6 +148,23 @@ func mortgageOwed(a *model.Account, d model.Date) float64 {
 	return -math.Round(owed*100) / 100
 }
 
+// familyClasses returns the Family record's capital-market assumptions, more conservative than the shipped defaults: the long-run nominal returns of a diversified portfolio after fees, so that the household's long-range trajectories are plausible.
+func familyClasses() []model.MarketClass {
+	returns := map[string][2]float64{
+		model.ClassLargeCap:      {0.06, 0.16},
+		model.ClassSmallCap:      {0.065, 0.20},
+		model.ClassInternational: {0.055, 0.18},
+		model.ClassBonds:         {0.035, 0.06},
+		model.ClassTreasuries:    {0.03, 0.05},
+		model.ClassCash:          {0.03, 0.01},
+	}
+	classes := model.DefaultClasses()
+	for i, c := range classes {
+		classes[i].Return, classes[i].Volatility = model.Constant(returns[c.ID][0]), returns[c.ID][1]
+	}
+	return classes
+}
+
 func familyBudget() model.Budget {
 	income := func(id, name string, amount float64, rec model.Recurrence) model.BudgetItem {
 		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemIncome, Amount: model.Constant(amount), Recurrence: rec, Indexed: true, Account: Checking, IncomeType: model.IncomeWages, Timing: model.Lump}
@@ -159,14 +177,16 @@ func familyBudget() model.Budget {
 	}
 	// A deduction is taken from every paycheck of its salary, on the salary's schedule.
 	deduction := func(paycheck model.BudgetItem, id, name string, to model.AccountID, amount float64) model.BudgetItem {
-		return model.BudgetItem{ID: id, Name: name, Kind: model.ItemTransfer, Amount: model.Constant(amount), Recurrence: paycheck.Recurrence, Start: paycheck.Start, To: to, Paycheck: paycheck.ID, Timing: model.Lump}
+		return model.BudgetItem{End: paycheck.End, ID: id, Name: name, Kind: model.ItemTransfer, Amount: model.Constant(amount), Recurrence: paycheck.Recurrence, Start: paycheck.Start, To: to, Paycheck: paycheck.ID, Timing: model.Lump}
 	}
 	salaryA := income("salary-a", "Salary (Parent A)", 5000, model.Recurrence{Kind: model.Semimonthly, Day: 15, Day2: 31})
 	salaryA.MatchPercent, salaryA.MatchUpTo, salaryA.MatchAccount = 50, 6, K401
 	salaryB := income("salary-b", "Salary (Parent B)", 3700, model.Recurrence{Kind: model.Biweekly, Anchor: model.D(2024, time.November, 8)})
 	salaryB.MatchPercent, salaryB.MatchUpTo, salaryB.MatchAccount = 100, 4, TSP
+	// Parent B leaves federal service at 57, when the FERS annuity starts.
+	salaryB.End = model.Ptr(model.D(2043, time.July, 3))
 	// The payment equals the card's charges and is indexed like them, and comes before them in the month, so the card never owes more than the opening balance. That balance is paid off separately over the first year, accruing interest meanwhile, and the payments overshoot to leave a credit that absorbs the pennies by which indexing makes each payment a little smaller than the charges after it.
-	cardPayment := transfer("card-payment", "Credit card payment", Checking, Card, 2700, 2)
+	cardPayment := transfer("card-payment", "Credit card payment", Checking, Card, 3000, 2)
 	cardPayment.Indexed = true
 	cardPayoff := transfer("card-payoff", "Credit card opening balance", Checking, Card, 550, 2)
 	cardPayoff.Start, cardPayoff.End = model.Ptr(FamilyToday), model.Ptr(model.D(2027, time.November, 30))
@@ -187,27 +207,49 @@ func familyBudget() model.Budget {
 			collegeBills = append(collegeBills, bill)
 		}
 	}
+	// Childcare ends when the youngest child is twelve and the activities when she turns eighteen.
+	childcare := expense("childcare", "Childcare", Checking, 1200, monthly(3))
+	childcare.End = model.Ptr(model.D(2029, time.December, 31))
+	activities := expense("activities", "Kids' activities and sports", Checking, 500, monthly(11))
+	activities.End = model.Ptr(model.D(2035, time.December, 31))
+	// The brokerage deposit starts once the college bills ease, falls when Parent B leaves service, rises when the mortgage is paid off and again when the required distributions start.
+	brokerageDeposit := transfer("save-brokerage", "Brokerage deposit", Checking, Brokerage, 0, 25)
+	brokerageDeposit.Start = model.Ptr(model.D(2041, time.January, 1))
+	brokerageDeposit.Amount = model.MustSchedule(model.Segment{From: model.MinDate, Value: 600}, model.Segment{From: model.D(2043, time.August, 1), Value: 100}, model.Segment{From: model.D(2052, time.January, 1), Value: 3300}, model.Segment{From: model.D(2060, time.January, 1), Value: 8800})
 	items := []model.BudgetItem{
 		salaryA,
 		salaryB,
 		cardPayment,
 		cardPayoff,
-		spread(expense("groceries", "Groceries", Card, 1800, monthly(3))),
-		spread(expense("dining", "Dining out", Card, 900, monthly(6))),
+		spread(expense("groceries", "Groceries", Card, 2200, monthly(3))),
+		spread(expense("dining", "Dining out", Card, 800, monthly(6))),
 		spread(expense("utilities", "Utilities", Checking, 450, monthly(12))),
-		expense("childcare", "Childcare and activities", Checking, 1200, monthly(3)),
-		spread(expense("transport", "Transportation", Checking, 600, monthly(8))),
-		expense("insurance", "Insurance", Checking, 700, monthly(20)),
-		expense("vacation", "Family vacation", Checking, 6000, model.Recurrence{Kind: model.Annual, Month: time.June, Day: 15}),
-		deduction(salaryA, "save-401k", "401k contribution", K401, 500),
-		deduction(salaryB, "save-tsp", "TSP contribution", TSP, 9600.0/26),
-		transfer("save-savings", "Savings deposit", Checking, Savings, 500, 25),
-		transfer("save-brokerage", "Brokerage deposit", Checking, Brokerage, 800, 25),
-		transfer("save-roth", "Roth IRA contribution", Checking, Roth, 500, 25),
-		transfer("save-529-1", "529 contribution (oldest)", Checking, College1, 170, 25),
-		transfer("save-529-2", "529 contribution (middle)", Checking, College2, 170, 25),
-		transfer("save-529-3", "529 contribution (youngest)", Checking, College3, 170, 25),
-		transfer("save-529-4", "529 contribution (Child 4)", Checking, College4, 170, 25),
+		expense("phones", "Phones and internet", Checking, 250, monthly(14)),
+		childcare,
+		activities,
+		spread(expense("transport", "Transportation", Checking, 700, monthly(8))),
+		expense("insurance", "Insurance", Checking, 750, monthly(20)),
+		expense("health", "Healthcare out of pocket", Checking, 550, monthly(10)),
+		expense("clothing", "Clothing", Checking, 250, monthly(17)),
+		expense("maintenance", "Home maintenance", Checking, 350, monthly(9)),
+		expense("property-tax", "Property tax", Checking, 400, monthly(5)),
+		expense("gifts", "Gifts and giving", Checking, 200, monthly(22)),
+		expense("vacation", "Family vacation", Checking, 7500, model.Recurrence{Kind: model.Annual, Month: time.June, Day: 15}),
+		expense("vehicles", "Vehicle replacement", Checking, 6000, model.Recurrence{Kind: model.Annual, Month: time.April, Day: 20}),
+		deduction(salaryA, "save-401k", "401k contribution", K401, 360),
+		deduction(salaryB, "save-tsp", "TSP contribution", TSP, 6000.0/26),
+		transfer("save-savings", "Savings deposit", Checking, Savings, 200, 25),
+		brokerageDeposit,
+		transfer("save-roth", "Roth IRA contribution", Checking, Roth, 250, 25),
+		transfer("save-529-1", "529 contribution (oldest)", Checking, College1, 100, 25),
+		transfer("save-529-2", "529 contribution (middle)", Checking, College2, 100, 25),
+		transfer("save-529-3", "529 contribution (youngest)", Checking, College3, 100, 25),
+		transfer("save-529-4", "529 contribution (Child 4)", Checking, College4, 100, 25),
+	}
+	for i := range items {
+		if strings.HasPrefix(items[i].ID, "save-") {
+			items[i].Indexed = true
+		}
 	}
 	return model.Budget{Items: append(items, collegeBills...)}
 }
@@ -219,7 +261,7 @@ func familyBudget() model.Budget {
 func Family() *model.Record {
 	rec := model.NewRecord(FamilyToday)
 	rec.Globals[model.PropInflation] = model.Constant(0.025)
-	rec.Classes, rec.Correlations = model.DefaultClasses(), model.DefaultCorrelations()
+	rec.Classes, rec.Correlations = familyClasses(), model.DefaultCorrelations()
 	rec.Budget = familyBudget()
 	rec.Household = model.Household{
 		Members: []model.HouseholdMember{
@@ -254,8 +296,11 @@ func Family() *model.Record {
 			for _, d := range rsu.deposits {
 				must(a.AddTransaction(d))
 			}
+			// A deposit no vest is tied to, which the equity account's tie picker offers.
+			must(a.AddTransaction(model.Transaction{Date: model.D(2026, time.April, 20), Amount: 4000, Kind: model.TxTransfer, Counter: Checking, Memo: "Tax refund savings"}))
 		}
 	}
+	must(rec.Account(Checking).AddTransaction(model.Transaction{Date: model.D(2026, time.April, 20), Amount: -4000, Kind: model.TxTransfer, Counter: Brokerage, Memo: "Tax refund savings"}))
 	// The paychecks deposit what the budget projects, which depends on every account the budget touches.
 	deposit := paycheckDeposits(rec)
 	for _, s := range accountSpecs {
@@ -272,7 +317,7 @@ func Family() *model.Record {
 	for _, p := range rec.Prices.All() {
 		last = max(last, p.ID)
 	}
-	rec.Occurrences.Add(model.Occurrence{ID: last + 1, Item: "groceries", Period: model.D(2026, time.November, 3), Status: model.StatusAuto, Posted: model.Ptr(2050.0)})
+	rec.Occurrences.Add(model.Occurrence{ID: last + 1, Item: "groceries", Period: model.D(2026, time.November, 3), Status: model.StatusAuto, Posted: model.Ptr(2450.0)})
 
 	cash := []model.AccountType{model.TypeChecking, model.TypeSavings}
 	must(rec.AddAsset(&model.Asset{ID: AllCash, Name: "All cash", Members: []model.Member{model.RuleMember(model.Rule{Types: cash})}}))
@@ -348,9 +393,20 @@ func Family() *model.Record {
 		Rebalances: []model.Rebalance{{Account: Brokerage, Date: model.D(2027, time.February, 1),
 			Allocation: []model.Weight{{Class: model.ClassLargeCap, Share: 0.6}, {Class: model.ClassBonds, Share: 0.4}}}},
 	}))
-	must(rec.AddProjection(&model.Projection{Name: ProjRetire60, Parent: ProjBase,
+	// Retiring at 60 costs the employer's health coverage until Medicare at 65 and adds years of travel.
+	retireCosts := []model.BudgetItem{
+		{ID: "retire-health", Name: "Health insurance before Medicare", Kind: model.ItemExpense, Amount: model.Constant(2000), Recurrence: monthly(1), Indexed: true, Account: Checking, Timing: model.Lump,
+			Start: model.Ptr(model.D(2045, time.April, 1)), End: model.Ptr(model.D(2050, time.March, 31))},
+		{ID: "retire-travel", Name: "Retirement travel and family", Kind: model.ItemExpense, Amount: model.Constant(60000), Recurrence: model.Recurrence{Kind: model.Annual, Month: time.May, Day: 1}, Indexed: true, Account: Checking, Timing: model.Lump,
+			Start: model.Ptr(model.D(2045, time.April, 1)), End: model.Ptr(model.D(2065, time.December, 31))},
+	}
+	retire60 := &model.Projection{Name: ProjRetire60, Parent: ProjBase,
 		RetireOn: model.Ptr(model.D(2045, time.March, 12)), RothBracket: model.Ptr(0.22),
-	}))
+	}
+	for i := range retireCosts {
+		retire60.Mods = append(retire60.Mods, model.Modification{Target: model.ObjectRef{Kind: model.KindBudgetItem, ID: retireCosts[i].ID}, Property: model.PropAddItem, Item: &retireCosts[i]})
+	}
+	must(rec.AddProjection(retire60))
 	must(rec.AddProjection(&model.Projection{Name: ProjDrift, Parent: ProjBase, DriftMonths: model.Ptr(6)}))
 	return rec
 }

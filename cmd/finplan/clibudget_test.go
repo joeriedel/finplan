@@ -46,14 +46,14 @@ func TestCLIBudgetListAndTotals(t *testing.T) {
 			t.Errorf("save-401k = %+v", it)
 		}
 	}
-	if kinds["income"] != 2 || kinds["expense"] != 15 || kinds["transfer"] != 11 {
+	if kinds["income"] != 2 || kinds["expense"] != 23 || kinds["transfer"] != 11 {
 		t.Errorf("kinds %v", kinds)
 	}
 
-	// Income: salary-a twice a month (2 x 5000) and salary-b every 2 weeks (3700 x 26 / 12). Expenses: groceries 1800, dining 900, utilities 450, childcare 1200, transport 600, insurance 700 and the vacation 6000 / 12, and the two college bills of 14000 a year that are in their years today. The transfers count in neither.
+	// Income: salary-a twice a month (2 x 5000) and salary-b every 2 weeks (3700 x 26 / 12). Expenses: groceries 2200, dining 800, utilities 450, phones 250, childcare 1200, activities 500, transport 700, insurance 750, healthcare 550, clothing 250, home maintenance 350, property tax 400 and gifts 200, the vacation 7500 / 12 and the vehicle replacement 6000 / 12, and the two college bills of 9000 a year that are in their years today. The transfers count in neither.
 	var tot budgetTotals
 	cliJSON(t, &tot, "--demo", "budget", "totals")
-	if tot.AsOf != "2026-11-08" || !near(tot.MonthlyIncome, 18016.67) || !near(tot.MonthlyExpenses, 8483.33) || !near(tot.MonthlyNet, 9533.33) {
+	if tot.AsOf != "2026-11-08" || !near(tot.MonthlyIncome, 18016.67) || !near(tot.MonthlyExpenses, 11225) || !near(tot.MonthlyNet, 6791.67) {
 		t.Errorf("totals %+v", tot)
 	}
 }

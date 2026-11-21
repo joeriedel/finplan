@@ -231,8 +231,26 @@ func TestFamilyBreakdowns(t *testing.T) {
 		}
 	}
 
+	// The past year's growth is mostly explained: Growth outweighs what the snapshots leave Unexplained.
+	bd, err := engine.Breakdown(rec, "", NetWorth, intervals[0][0], intervals[0][1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var growth, unexplained float64
+	for _, l := range bd.Lines {
+		switch l.Cause {
+		case engine.CauseGrowth:
+			growth += l.Actual
+		case engine.CauseUnexplained:
+			unexplained += l.Actual
+		}
+	}
+	if growth <= math.Abs(unexplained) {
+		t.Errorf("net worth %v..%v: actual growth %v does not exceed unexplained %v", intervals[0][0], intervals[0][1], growth, unexplained)
+	}
+
 	// Net worth contains every account, so no transfer or withdrawal remains: all cancel. The payroll deductions are the one contribution left, money that never reaches the paying account, and only ever add.
-	bd, err := engine.Breakdown(rec, ProjWithdraw, NetWorth, d(2026, time.January, 1), d(2028, time.January, 1))
+	bd, err = engine.Breakdown(rec, ProjWithdraw, NetWorth, d(2026, time.January, 1), d(2028, time.January, 1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,7 +548,7 @@ func TestFamilyHistoryHasNoise(t *testing.T) {
 	for _, tx := range rec.Account(Card).Transactions {
 		if tx.Memo == "Groceries" {
 			amounts[tx.Amount] = true
-			if tx.Amount < -1800.0/28*1.2 || tx.Amount > -1800.0/31*0.8 {
+			if tx.Amount < -2200.0/28*1.2 || tx.Amount > -2200.0/31*0.8 {
 				t.Errorf("a groceries charge of %v strays more than 15%% from the daily budget", tx.Amount)
 			}
 		}

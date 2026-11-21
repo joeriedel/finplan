@@ -22,7 +22,7 @@ var (
 
 func TestSetOccurrenceStoresCorrectsAndSurvivesReloadAndOtherEdits(t *testing.T) {
 	st, rec := seed(t)
-	if o, ok := rec.Occurrences.Get("groceries", nov3); !ok || o.ID == 0 || o.Posted == nil || *o.Posted != 2050 {
+	if o, ok := rec.Occurrences.Get("groceries", nov3); !ok || o.ID == 0 || o.Posted == nil || *o.Posted != 2450 {
 		t.Fatalf("the demo's groceries occurrence loaded as %+v, %v", o, ok)
 	}
 	before := rec.Occurrences.All()

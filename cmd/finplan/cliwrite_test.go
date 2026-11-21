@@ -581,7 +581,7 @@ func closeTo(got, want float64) bool { return math.Abs(got-want) <= 1e-6*math.Ma
 func TestCLICutDiningScenario(t *testing.T) {
 	path := seededFile(t)
 	write(t, path, "", "projection", "new", "Cut dining")
-	// Dining is 900 on the 6th, indexed at 2.5% from the demo's today; the card's expenses over Jan..Jun 2027 are dining and others.
+	// Dining is 800 on the 6th, indexed at 2.5% from the demo's today; the card's expenses over Jan..Jun 2027 are dining and others.
 	from, to := "2026-12-31", "2027-06-30"
 	dining := func(amount float64) float64 {
 		sum := 0.0
@@ -608,7 +608,7 @@ func TestCLICutDiningScenario(t *testing.T) {
 		t.Errorf("stored %+v", m)
 	}
 	// Projected expenses are negative: the card pays 30% less of dining.
-	if got, want := cut(), 0.3*dining(900); !closeTo(got, want) {
+	if got, want := cut(), 0.3*dining(800); !closeTo(got, want) {
 		t.Errorf("30%% less dining over six months: got %v, want %v", got, want)
 	}
 

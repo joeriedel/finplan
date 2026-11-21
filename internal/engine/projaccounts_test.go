@@ -229,8 +229,8 @@ func TestProjectionAccountSharedCutoff(t *testing.T) {
 	from, to := d(2025, time.October, 15), d(2026, time.February, 1)
 	baseBd, err := Breakdown(rec, "", "everything", from, to)
 	must(t, err)
-	if got := unexplained(baseBd); !near(got, 200) {
-		t.Errorf("base unexplained %v, want only inv's 200 gap", got)
+	if got := unexplained(baseBd); !near(got, 200-invGapGrowth) {
+		t.Errorf("base unexplained %v, want only inv's 200 gap less its expected growth", got)
 	}
 	for _, target := range []model.AssetID{late, early, "everything"} {
 		bd, err := Breakdown(rec, "early", target, from, to)

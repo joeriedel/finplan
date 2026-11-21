@@ -55,7 +55,7 @@ func TestCLIClassList(t *testing.T) {
 	path := seededFile(t)
 	var out tClassList
 	cliJSON(t, &out, "--db", path, "class", "list")
-	if len(out.Classes) != 6 || out.Classes[0].ID != "us-large-cap" || out.Classes[0].Name != "US large cap" || out.Classes[0].Return[0].Value != 0.10 || out.Classes[0].Volatility != 0.16 {
+	if len(out.Classes) != 6 || out.Classes[0].ID != "us-large-cap" || out.Classes[0].Name != "US large cap" || out.Classes[0].Return[0].Value != 0.06 || out.Classes[0].Volatility != 0.16 {
 		t.Errorf("classes: %+v", out.Classes)
 	}
 	if len(out.Correlations) != 10 {

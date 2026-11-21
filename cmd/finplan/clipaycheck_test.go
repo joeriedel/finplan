@@ -59,7 +59,7 @@ func TestCLIBudgetDeductedFromFlag(t *testing.T) {
 // A deduction is taken from the paycheck, so its period counts as posted at its budgeted amount with no transaction to wait for.
 func TestCLIBudgetPeriodOfADeductionIsPosted(t *testing.T) {
 	r := periodRows(t, seededFile(t))["save-401k"]
-	if r.Budgeted != 500 || r.Posted != 500 || r.Remaining != 0 || r.Missing || r.Variance != 0 {
-		t.Errorf("save-401k: %+v, want 500 posted with nothing to come", r)
+	if r.Budgeted != 360 || r.Posted != 360 || r.Remaining != 0 || r.Missing || r.Variance != 0 {
+		t.Errorf("save-401k: %+v, want 360 posted with nothing to come", r)
 	}
 }

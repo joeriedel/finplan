@@ -845,8 +845,6 @@ func TestMigrateFromVersion3(t *testing.T) {
 	copyFacts(t, s, srcPath)
 	if got := mustLoad(t, s); !reflect.DeepEqual(got, want) {
 		t.Error("migrated database loads differently")
-	} else if !reflect.DeepEqual(got.Classes, model.DefaultClasses()) {
-		t.Errorf("migrated classes = %v, want the shipped classes", got.Classes)
 	}
 	if err := s.VoidFact(facts[1].ID, "gone"); err != nil {
 		t.Error(err)

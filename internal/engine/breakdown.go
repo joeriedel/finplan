@@ -14,7 +14,7 @@ import (
 // Cause names why a balance changed.
 type Cause string
 
-// Causes. SocialSecurity and FERS are the benefits the household's members receive, which Income would otherwise show. GainsTax is the part of a year's tax that the capital gains realized in taxable accounts add, and Shock the change a market shock made to the holdings of a class (a line with a Class). Grant is the value of new RSU grants added to an equity account and Vest the net proceeds of its vests, which leave it for the deposit account; the withholding of a vest is Tax. Match is the employer's deposit on a paycheck. Interest is what a credit card owing money compounds, or the interest part of a mortgage payment, and Principal the part of a payment that pays the mortgage down; a mortgage payment shows on the paying account as interest and principal and on the mortgage as principal. Unaccounted is the income and expense transactions that match no budget item, which Income and Expense would otherwise hold. Unexplained is the part of an actual change that snapshots show and transactions do not.
+// Causes. SocialSecurity and FERS are the benefits the household's members receive, which Income would otherwise show. GainsTax is the part of a year's tax that the capital gains realized in taxable accounts add, and Shock the change a market shock made to the holdings of a class (a line with a Class). Grant is the value of new RSU grants added to an equity account and Vest the net proceeds of its vests, which leave it for the deposit account; the withholding of a vest is Tax. Match is the employer's deposit on a paycheck. Interest is what a credit card owing money compounds, or the interest part of a mortgage payment, and Principal the part of a payment that pays the mortgage down; a mortgage payment shows on the paying account as interest and principal and on the mortgage as principal. Unaccounted is the income and expense transactions that match no budget item, which Income and Expense would otherwise hold. Unexplained is the part of an actual change that snapshots show and that neither transactions nor the account's expected growth at its rates explain.
 // Default is a change that comes from default balances, including a hand-off between defaults and
 // actual data.
 const (
@@ -234,7 +234,7 @@ func (p *path) breakdown(rec *model.Record, from, to model.Date, acc *accum) {
 }
 
 // breakdownReadBack explains the change over (a, b], all before start. Inside the account's real data
-// span it is its transactions and the unexplained remainder at snapshots (for an equity account with grants, its grants, recorded vests and price moves, then what remains); any difference left (dates
+// span it is its transactions, the expected growth of its balance at its rates (for an account without grants) and the unexplained remainder at snapshots (for an equity account with grants, its grants, recorded vests and price moves, then what remains); any difference left (dates
 // outside the span, which use defaults) is a default change.
 func (p *path) breakdownReadBack(rec *model.Record, a, b model.Date, acc *accum) {
 	explained := 0.0
@@ -281,12 +281,81 @@ func (p *path) breakdownReadBack(rec *model.Record, a, b model.Date, acc *accum)
 					u = 0
 				}
 			}
+			if !p.acct.HoldsGrants() {
+				g := p.expectedGrowthIn(rec, lo, hi)
+				u -= g
+				acc.add(p.growthCause(), g, false)
+			}
 			acc.add(CauseUnexplained, u, false)
 		}
 	}
 	if rest := p.readBack(b) - p.readBack(a) - explained; math.Abs(rest) > residualTolerance {
 		acc.add(CauseDefault, rest, false)
 	}
+}
+
+// growthCause is the cause the account's growth shows under: a credit card's, and an amortized mortgage's, is interest.
+func (p *path) growthCause() Cause {
+	if p.acct.Type == model.TypeCreditCard || p.amortized {
+		return CauseInterest
+	}
+	return CauseGrowth
+}
+
+// expectedGrowthIn is the growth the account's own rates give over each snapshot gap that ends in (lo, hi]. The running balance, the earlier snapshot's plus the transactions so far, grows between transaction dates the way the forward path grows it: a card owing money compounds its stated rate daily and earns nothing in credit, an amortized mortgage accrues interest at its stated rate over the elapsed time, an account with an allocation compounds the class returns of the record by share, any other the stated rate. The rates are the record's, not the projection's, so actuals read the same under every projection.
+func (p *path) expectedGrowthIn(rec *model.Record, lo, hi model.Date) float64 {
+	stated := model.Constant(p.acct.StatedRate)
+	type share struct {
+		weight float64
+		rate   model.Schedule
+	}
+	var legs []share
+	for _, h := range p.acct.Allocation {
+		var r model.Schedule
+		if c := rec.Class(h.Class); c != nil {
+			r = c.Return
+		}
+		legs = append(legs, share{h.Percent / 100, r})
+	}
+	grow := func(bal float64, from, to model.Date) float64 {
+		switch {
+		case p.amortized:
+			return bal * p.acct.StatedRate * float64(to-from) / model.DaysPerYear
+		case p.acct.Type == model.TypeCreditCard:
+			if bal < 0 {
+				return bal * (stated.CompoundDaily(from, to) - 1)
+			}
+			return 0
+		case legs != nil:
+			g := 0.0
+			for _, l := range legs {
+				g += bal * l.weight * (l.rate.Compound(from, to) - 1)
+			}
+			return g
+		}
+		return bal * (stated.Compound(from, to) - 1)
+	}
+	sum := 0.0
+	snaps := p.acct.Snapshots
+	for i := 1; i < len(snaps); i++ {
+		cur, prev := snaps[i], snaps[i-1]
+		if cur.Date <= lo || cur.Date > hi {
+			continue
+		}
+		bal, at := prev.Balance, prev.Date
+		step := func(to model.Date) {
+			g := grow(bal, at, to)
+			sum += g
+			bal += g
+			at = to
+		}
+		for _, t := range p.acct.TransactionsIn(prev.Date, cur.Date) {
+			step(t.Date)
+			bal += t.Amount
+		}
+		step(cur.Date)
+	}
+	return sum
 }
 
 // vestDeposit returns the equity account whose recorded vest is tied to the transaction, which paid its net proceeds into the account, or "" if no vest is or the transaction is a transfer, which names its counter itself.

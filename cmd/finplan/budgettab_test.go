@@ -30,7 +30,7 @@ func TestBudgetTabGroupsRowsAndTotals(t *testing.T) {
 	if len(groups) != 3 || groups[0].Kind != model.ItemIncome || groups[1].Kind != model.ItemExpense || groups[2].Kind != model.ItemTransfer {
 		t.Fatalf("groups %+v", groups)
 	}
-	if len(groups[0].Rows) != 2 || len(groups[1].Rows) != 15 || len(groups[2].Rows) != 11 {
+	if len(groups[0].Rows) != 2 || len(groups[1].Rows) != 23 || len(groups[2].Rows) != 11 {
 		t.Errorf("rows %d, %d, %d", len(groups[0].Rows), len(groups[1].Rows), len(groups[2].Rows))
 	}
 	if groups[0].Title != "Income" || groups[1].Title != "Expense" || groups[2].Title != "Transfer" {
@@ -50,13 +50,13 @@ func TestBudgetTabGroupsRowsAndTotals(t *testing.T) {
 			byID[r.ID] = r
 		}
 	}
-	if r := byID["vacation"]; r.Schedule != "annually on June 15" || r.Monthly != "$500" {
+	if r := byID["vacation"]; r.Schedule != "annually on June 15" || r.Monthly != "$625" {
 		t.Errorf("vacation row %+v", r)
 	}
 	if r := byID["salary-b"]; r.Schedule != "every 2 weeks from 2024-11-08" || r.Monthly != "$8,016.67" {
 		t.Errorf("salary-b row %+v", r)
 	}
-	if r := byID["save-401k"]; r.Accounts != "paycheck of Salary (Parent A) to "+accountName(a.rec, demodata.K401) || r.Monthly != "$1,000" || r.Growth != "" {
+	if r := byID["save-401k"]; r.Accounts != "paycheck of Salary (Parent A) to "+accountName(a.rec, demodata.K401) || r.Monthly != "$720" || r.Growth != "" {
 		t.Errorf("transfer row %+v", r)
 	}
 
@@ -67,7 +67,7 @@ func TestBudgetTabGroupsRowsAndTotals(t *testing.T) {
 	}
 
 	income, expenses, net := budgetTotalsText(a.rec)
-	if income != "$18,017" || expenses != "$8,483" || net != "$9,533" {
+	if income != "$18,017" || expenses != "$11,225" || net != "$6,792" {
 		t.Errorf("totals %s, %s, %s", income, expenses, net)
 	}
 }
@@ -103,7 +103,7 @@ func TestBudgetTabAddWithUndoAndRedo(t *testing.T) {
 	if bt.addItem.name != "" || bt.addItem.kind != model.ItemExpense {
 		t.Errorf("form after add %+v", bt.addItem)
 	}
-	if _, expenses, _ := budgetTotalsText(a.rec); expenses != "$8,543" {
+	if _, expenses, _ := budgetTotalsText(a.rec); expenses != "$11,285" {
 		t.Errorf("expenses %s", expenses)
 	}
 

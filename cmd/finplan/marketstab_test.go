@@ -51,7 +51,7 @@ func TestMarketsEditLargeCapReturn(t *testing.T) {
 	}
 
 	a.undo()
-	if r, _ := classRate(*a.rec.Class(model.ClassLargeCap)); r != 0.10 {
+	if r, _ := classRate(*a.rec.Class(model.ClassLargeCap)); r != 0.06 {
 		t.Errorf("undo left the return at %v", r)
 	}
 	a.redo()

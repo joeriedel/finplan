@@ -80,8 +80,8 @@ func TestCLIBudgetPeriodListAndSet(t *testing.T) {
 	path := seededFile(t)
 	rows := periodRows(t, path)
 	g := rows["groceries"]
-	if g.Start != "2026-11-03" || g.End != "2026-12-02" || g.Timing != "spread" || g.Posted != 2050 || g.PostedAuto || g.Status != "auto" ||
-		g.Remaining != 0 || g.Variance != 2050-g.Budgeted || g.Variance <= 0 || g.OccurrenceI == nil || len(g.History) == 0 || len(g.History) > 6 {
+	if g.Start != "2026-11-03" || g.End != "2026-12-02" || g.Timing != "spread" || g.Posted != 2450 || g.PostedAuto || g.Status != "auto" ||
+		g.Remaining != 0 || g.Variance != 2450-g.Budgeted || g.Variance <= 0 || g.OccurrenceI == nil || len(g.History) == 0 || len(g.History) > 6 {
 		t.Errorf("groceries %+v", g)
 	}
 	d := rows["dining"]

@@ -437,13 +437,16 @@ func TestBreakdownTotalEqualsBalanceChange(t *testing.T) {
 	}
 }
 
+// invGapGrowth is the 6% growth of the fixture inv account's 2025-12-01 balance of 10000 and of the 300 saved on 12-16, to its 2026-01-01 snapshot.
+var invGapGrowth = 10000*(grow(0.06, 31)-1) + 300*(grow(0.06, 16)-1)
+
 func TestBreakdownCauses(t *testing.T) {
 	rec := fixture(t)
 	bd, err := Breakdown(rec, "", "pair", d(2025, time.December, 5), d(2026, time.March, 1))
 	must(t, err)
 	// The 12-16 transfer is recorded on both sides and cancels. inv's 10500 snapshot is 200 more than
-	// 10000 + 300 explains. The 12-15 income and 12-20 expense are actual; later flows are projected.
-	if l := line(bd, CauseUnexplained); !near(l.Actual, 200) || l.Projected != 0 {
+	// 10000 + 300 explains, less the 6% growth the 10000 and the 300 earn to the snapshot. The 12-15 income and 12-20 expense are actual; later flows are projected.
+	if l := line(bd, CauseUnexplained); !near(l.Actual, 200-invGapGrowth) || l.Projected != 0 {
 		t.Errorf("unexplained: got %+v", l)
 	}
 	if l := line(bd, CauseIncome); !near(l.Actual, 500) || !near(l.Projected, 2000) {
@@ -455,7 +458,7 @@ func TestBreakdownCauses(t *testing.T) {
 	if l := line(bd, CauseTax); !near(l.Projected, -2000*fica) || l.Actual != 0 {
 		t.Errorf("tax: got %+v", l)
 	}
-	if l := line(bd, CauseGrowth); l.Projected <= 0 || l.Actual != 0 {
+	if l := line(bd, CauseGrowth); l.Projected <= 0 || !near(l.Actual, invGapGrowth) {
 		t.Errorf("growth: got %+v", l)
 	}
 	if l := line(bd, CauseDefault); l != (Line{}) {
@@ -887,5 +890,129 @@ func TestRecordedTransferCountedOnBothSides(t *testing.T) {
 				t.Errorf("early on 2026-03-20 is %v, want %v", single.Amount, want)
 			}
 		})
+	}
+}
+
+// TestBreakdownReadBackBooksExpectedGrowth checks that a snapshot gap of an account with an allocation, and of one with only a stated rate, shows its expected growth as Growth and the rest of the gap as Unexplained.
+func TestBreakdownReadBackBooksExpectedGrowth(t *testing.T) {
+	rec := model.NewRecord(d(2026, time.January, 1))
+	rec.Classes = model.DefaultClasses()
+	alloc := &model.Account{ID: "alloc", Type: model.TypeBrokerage, Tax: model.Taxable,
+		Allocation: []model.Holding{{Class: model.ClassLargeCap, Percent: 60}, {Class: model.ClassBonds, Percent: 40}}}
+	alloc.AddSnapshot(d(2025, time.March, 1), 1000)
+	alloc.AddSnapshot(d(2025, time.September, 1), 1100)
+	rated := &model.Account{ID: "rated", Type: model.TypeSavings, Tax: model.Taxable, StatedRate: 0.04}
+	rated.AddSnapshot(d(2025, time.March, 1), 2000)
+	rated.AddSnapshot(d(2025, time.September, 1), 2050)
+	must(t, rec.AddAccount(alloc))
+	must(t, rec.AddAccount(rated))
+	must(t, rec.AddAsset(&model.Asset{ID: "both", Members: []model.Member{model.AccountMember("alloc"), model.AccountMember("rated")}}))
+	days := d(2025, time.September, 1) - d(2025, time.March, 1)
+	for _, c := range []struct {
+		target      model.AssetID
+		growth, gap float64
+	}{
+		{model.DefaultAssetID("alloc"), 600*(grow(0.10, days)-1) + 400*(grow(0.045, days)-1), 100},
+		{model.DefaultAssetID("rated"), 2000 * (grow(0.04, days) - 1), 50},
+		{"both", 600*(grow(0.10, days)-1) + 400*(grow(0.045, days)-1) + 2000*(grow(0.04, days)-1), 150},
+	} {
+		bd, err := Breakdown(rec, "", c.target, d(2025, time.March, 1), d(2025, time.October, 1))
+		must(t, err)
+		if l := line(bd, CauseGrowth); !near(l.Actual, c.growth) {
+			t.Errorf("%v: growth %+v, want %v", c.target, l, c.growth)
+		}
+		if l := line(bd, CauseUnexplained); !near(l.Actual, c.gap-c.growth) {
+			t.Errorf("%v: unexplained %+v, want %v", c.target, l, c.gap-c.growth)
+		}
+		if l := line(bd, CauseDefault); l != (Line{}) {
+			t.Errorf("%v: default %+v", c.target, l)
+		}
+		if !near(bd.Total(), bd.End-bd.Start) {
+			t.Errorf("%v: total %v, change %v", c.target, bd.Total(), bd.End-bd.Start)
+		}
+	}
+}
+
+// TestBreakdownReadBackAccruesDebtInterest checks that a snapshot gap of an amortized mortgage books the interest its stated rate accrues as Interest and leaves the remainder of the gap as Unexplained, and that a card paid off early in a gap accrues interest only on its running balance.
+func TestBreakdownReadBackAccruesDebtInterest(t *testing.T) {
+	rec := model.NewRecord(d(2026, time.January, 1))
+	mort := &model.Account{ID: "mort", Type: model.TypeMortgage, Tax: model.Taxable, StatedRate: 0.06, OriginalAmount: 100000, TermMonths: 360,
+		FirstPayment: model.Ptr(d(2025, time.April, 1)), PaidFrom: "chk"}
+	mort.AddSnapshot(d(2025, time.March, 1), -100000)
+	mort.AddSnapshot(d(2025, time.April, 1), -99700)
+	// The payment of 800 pays 500 of interest and 300 of principal, so the snapshot moves by 300 only.
+	must(t, mort.AddTransaction(model.Transaction{Date: d(2025, time.April, 1), Amount: 800, Kind: model.TxIncome}))
+	const cardRate = 0.2299
+	card := &model.Account{ID: "card", Type: model.TypeCreditCard, Tax: model.Taxable, StatedRate: cardRate}
+	card.AddSnapshot(d(2025, time.March, 1), -1000)
+	card.AddSnapshot(d(2025, time.March, 29), -1)
+	// Paid off the next day: only one day's interest accrues on the 1000, then 27 days on what is left.
+	must(t, card.AddTransaction(model.Transaction{Date: d(2025, time.March, 2), Amount: 1000, Kind: model.TxIncome}))
+	chk := &model.Account{ID: "chk", Type: model.TypeChecking, Tax: model.Taxable}
+	chk.AddSnapshot(d(2025, time.March, 1), 0)
+	must(t, rec.AddAccount(chk))
+	must(t, rec.AddAccount(mort))
+	must(t, rec.AddAccount(card))
+	from, to := d(2025, time.February, 1), d(2025, time.May, 1)
+
+	bd, err := Breakdown(rec, "", model.DefaultAssetID("mort"), from, to)
+	must(t, err)
+	interest := -100000 * 0.06 * 31 / model.DaysPerYear
+	if l := line(bd, CauseInterest); !near(l.Actual, interest) {
+		t.Errorf("mortgage interest %+v, want %v", l, interest)
+	}
+	if l := line(bd, CauseUnexplained); !near(l.Actual, 300-800-interest) {
+		t.Errorf("mortgage unexplained %+v, want %v", l, 300-800-interest)
+	}
+	if l := line(bd, CauseGrowth); l != (Line{}) {
+		t.Errorf("mortgage growth %+v", l)
+	}
+	if !near(bd.Total(), bd.End-bd.Start) {
+		t.Errorf("mortgage total %v, change %v", bd.Total(), bd.End-bd.Start)
+	}
+
+	bd, err = Breakdown(rec, "", model.DefaultAssetID("card"), from, to)
+	must(t, err)
+	first := -1000 * (math.Pow(1+cardRate/365, 1) - 1)
+	second := first * (math.Pow(1+cardRate/365, 27) - 1)
+	if l := line(bd, CauseInterest); !near(l.Actual, first+second) {
+		t.Errorf("card interest %+v, want %v", l, first+second)
+	}
+	if l := line(bd, CauseUnexplained); !near(l.Actual, 999-1000-first-second) {
+		t.Errorf("card unexplained %+v, want %v", l, 999-1000-first-second)
+	}
+	if !near(bd.Total(), bd.End-bd.Start) {
+		t.Errorf("card total %v, change %v", bd.Total(), bd.End-bd.Start)
+	}
+}
+
+// TestBreakdownReadBackIgnoresProjectionGrowth checks that the same actual history reads back the same Growth and Unexplained under a projection that overrides a class's growth, an account's rate or an asset's rate as under the base.
+func TestBreakdownReadBackIgnoresProjectionGrowth(t *testing.T) {
+	rec := model.NewRecord(d(2026, time.January, 1))
+	rec.Classes = model.DefaultClasses()
+	alloc := &model.Account{ID: "alloc", Type: model.TypeBrokerage, Tax: model.Taxable,
+		Allocation: []model.Holding{{Class: model.ClassLargeCap, Percent: 60}, {Class: model.ClassBonds, Percent: 40}}}
+	alloc.AddSnapshot(d(2025, time.March, 1), 1000)
+	alloc.AddSnapshot(d(2025, time.September, 1), 1100)
+	rated := &model.Account{ID: "rated", Type: model.TypeSavings, Tax: model.Taxable, StatedRate: 0.04}
+	rated.AddSnapshot(d(2025, time.March, 1), 2000)
+	rated.AddSnapshot(d(2025, time.September, 1), 2050)
+	must(t, rec.AddAccount(alloc))
+	must(t, rec.AddAccount(rated))
+	must(t, rec.AddAsset(&model.Asset{ID: "both", Members: []model.Member{model.AccountMember("alloc"), model.AccountMember("rated")}}))
+	addProjection(t, rec, "bearish", "", growthMod(model.KindClass, model.ClassLargeCap, 0.01),
+		growthMod(model.KindAccount, "rated", 0.30), growthMod(model.KindAsset, "both", 0.20))
+	from, to := d(2025, time.February, 1), d(2025, time.October, 1)
+	base, err := Breakdown(rec, "", "both", from, to)
+	must(t, err)
+	proj, err := Breakdown(rec, "bearish", "both", from, to)
+	must(t, err)
+	for _, c := range []Cause{CauseGrowth, CauseUnexplained} {
+		if b, p := line(base, c), line(proj, c); !near(b.Actual, p.Actual) {
+			t.Errorf("%v: actual %v under base, %v under the projection", c, b.Actual, p.Actual)
+		}
+	}
+	if l := line(base, CauseGrowth); l.Actual <= 0 {
+		t.Errorf("base growth %+v", l)
 	}
 }
