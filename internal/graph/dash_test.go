@@ -79,6 +79,9 @@ func TestDashClippedBoundedByRect(t *testing.T) {
 }
 
 func TestDashClippedFarViews(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: far views")
+	}
 	r := newRunner(t)
 	lo, hi := graph.Pt{X: 0, Y: 0}, graph.Pt{X: plotW, Y: plotH}
 	for _, v := range farViews() {

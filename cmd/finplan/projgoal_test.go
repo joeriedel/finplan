@@ -44,6 +44,9 @@ func TestGoalTargetResolvesInProjectionView(t *testing.T) {
 }
 
 func TestGoalJobFinishes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: goal search job")
+	}
 	rec := demodata.Family()
 	j := startGoalJob(rec, demodata.ProjRetire60, demodata.NetWorth, 95, 90, 20)
 	for deadline := time.Now().Add(time.Minute); !isDone(j) && time.Now().Before(deadline); {
@@ -56,6 +59,9 @@ func TestGoalJobFinishes(t *testing.T) {
 }
 
 func TestMonteCarloCacheComputesOnceAndReports(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: 1,000-run Monte Carlo")
+	}
 	c := newMCCache(demodata.Family())
 	if st, _ := c.get(demodata.NetWorth, demodata.ProjBase); st != mcComputing {
 		t.Fatalf("first get is %v", st)

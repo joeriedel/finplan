@@ -76,15 +76,19 @@ func TestMonthStarts(t *testing.T) {
 }
 
 func TestFindEarliestRetirement(t *testing.T) {
+	runs := 100
+	if testing.Short() {
+		runs = 10
+	}
 	rec := demodata.Family()
-	opts := SuccessOptions{SuccessAge: 95, MonteCarloOptions: MonteCarloOptions{Runs: 100, Seed: 1}}
+	opts := SuccessOptions{SuccessAge: 95, MonteCarloOptions: MonteCarloOptions{Runs: runs, Seed: 1}}
 	before := *rec.Projection(demodata.ProjRetire60).RetireOn
 	got, err := FindEarliestRetirement(context.Background(), rec, demodata.ProjRetire60, demodata.NetWorth, 90, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Found || got.Success < 90 {
-		t.Fatalf("result %+v: want a date with success of at least 90", got)
+	if !got.Found || got.Success < 90 || got.Evaluated < 2 || got.Date == got.Latest {
+		t.Fatalf("result %+v: want a date before the latest with success of at least 90, found by a search", got)
 	}
 	if *rec.Projection(demodata.ProjRetire60).RetireOn != before {
 		t.Error("the search changed the caller's record")

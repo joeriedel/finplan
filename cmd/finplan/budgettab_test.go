@@ -408,6 +408,9 @@ var allRecurrences = []model.RecurrenceKind{model.OneTime, model.Weekly, model.B
 
 // Every switch of the repeat kind of a base item, from any kind to any other, succeeds through the in-place editor.
 func TestBudgetTabEveryKindSwitchSucceeds(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: every item kind")
+	}
 	for _, from := range allRecurrences {
 		for _, to := range allRecurrences {
 			if from == to {

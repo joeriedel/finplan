@@ -195,6 +195,9 @@ func TestFamilyProjections(t *testing.T) {
 }
 
 func TestFamilyBreakdowns(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: long projections")
+	}
 	rec := Family()
 	intervals := [][2]model.Date{
 		{d(2025, time.March, 1), d(2026, time.March, 1)},                 // all actual

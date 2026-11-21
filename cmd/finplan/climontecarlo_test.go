@@ -5,6 +5,7 @@ package main
 
 import (
 	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -109,15 +110,19 @@ type earliestOut struct {
 
 // TestCLIGoalEarliestRetirement finds a date, sets it with the write command and sees the success it promised.
 func TestCLIGoalEarliestRetirement(t *testing.T) {
+	runs := 100
+	if testing.Short() {
+		runs = 10
+	}
 	path := seededFile(t)
 	var g earliestOut
-	cliJSON(t, &g, "--db", path, "goal", "earliest-retirement", "net-worth", "--projection", "Retire at 60", "--runs", "100")
-	if !g.Found || g.Date == nil || g.Success < 90 || g.Want != 90 || g.SuccessAge != 95 || g.Runs != 100 || g.Seed != 1 || g.Projection != "Retire at 60" || g.Target != "net-worth" || g.Tried < 2 {
+	cliJSON(t, &g, "--db", path, "goal", "earliest-retirement", "net-worth", "--projection", "Retire at 60", "--runs", strconv.Itoa(runs))
+	if !g.Found || g.Date == nil || g.Success < 90 || g.Want != 90 || g.SuccessAge != 95 || g.Runs != runs || g.Seed != 1 || g.Projection != "Retire at 60" || g.Target != "net-worth" || g.Tried < 2 || *g.Date == g.Latest {
 		t.Fatalf("goal = %+v", g)
 	}
 	write(t, path, "", "projection", "set-retirement", "Retire at 60", *g.Date)
 	var m monteCarloOut
-	cliJSON(t, &m, "--db", path, "montecarlo", "net-worth", "--from", "2026-12", "--to", "2080-12", "--step", "month", "--projection", "Retire at 60", "--runs", "100", "--success-age", "95")
+	cliJSON(t, &m, "--db", path, "montecarlo", "net-worth", "--from", "2026-12", "--to", "2080-12", "--step", "month", "--projection", "Retire at 60", "--runs", strconv.Itoa(runs), "--success-age", "95")
 	if m.Success == nil || *m.Success != g.Success {
 		t.Errorf("after setting %s the success is %v, the goal said %v", *g.Date, m.Success, g.Success)
 	}

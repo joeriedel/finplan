@@ -39,6 +39,9 @@ func smokeEnv(tmp string) []string {
 
 // TestScreenshotSmoke draws every tab, with selections and editors that put the forms on screen, and fails on any widget ID conflict (--check-ids).
 func TestScreenshotSmoke(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: builds the binary and renders every tab")
+	}
 	bin := buildBinary(t)
 	outDir := os.Getenv("FINPLAN_SMOKE_OUT")
 	if outDir == "" {
@@ -156,6 +159,9 @@ func TestScreenshotSmoke(t *testing.T) {
 }
 
 func TestScreenshotBadArguments(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: builds and launches the binary")
+	}
 	bin := buildBinary(t)
 	for _, args := range [][]string{
 		{"--screenshot", filepath.Join(t.TempDir(), "x.png"), "--tab", "Nope"},
@@ -186,6 +192,9 @@ func TestScreenshotBadArguments(t *testing.T) {
 
 // TestDemoSigintLeavesNothing starts the GUI on a demo database and interrupts it.
 func TestDemoSigintLeavesNothing(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: builds and launches the binary")
+	}
 	bin := buildBinary(t)
 	tmp := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

@@ -101,6 +101,9 @@ func farViews() [][2]model.Date {
 }
 
 func TestHatchBoundedByPlot(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: hatch performance")
+	}
 	r := newRunner(t)
 	maxSegs := 2 * (plotW + plotH) / spacing
 	// Work is the visible strips, the stripes, and the edges' travel across the stripes: a few times the

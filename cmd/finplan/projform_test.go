@@ -493,6 +493,9 @@ func TestProjectionItemEditsEveryRecurrence(t *testing.T) {
 
 // Every switch of the repeat kind of a budget item a projection adds, from any kind to any other, succeeds.
 func TestProjectionItemEveryKindSwitchSucceeds(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: every item kind")
+	}
 	for _, from := range allRecurrences {
 		for _, to := range allRecurrences {
 			if from == to {
