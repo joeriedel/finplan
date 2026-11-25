@@ -125,10 +125,22 @@ var incomeTypeLabels = func() (names []string) {
 }()
 
 // groupHeaderRow draws a row of the current table that titles the group of rows after it, tinted across all columns.
-func groupHeaderRow(title string) {
+func groupHeaderRow(title string) { groupHeaderRowTail(title, "", false) }
+
+// groupHeaderRowTail is groupHeaderRow with tail after the title, dimmed if dim.
+func groupHeaderRowTail(title, tail string, dim bool) {
 	imgui.TableNextRowV(0, 0)
 	imgui.TableSetBgColor(imgui.TableBgTargetRowBg0, u32(rgba(colMuted, 0.18)))
 	imgui.TableSetColumnIndex(0)
 	imgui.AlignTextToFramePadding()
 	imgui.TextUnformatted(title)
+	if tail == "" {
+		return
+	}
+	imgui.SameLineV(0, 0)
+	if dim {
+		disabledText(tail)
+	} else {
+		imgui.TextUnformatted(tail)
+	}
 }

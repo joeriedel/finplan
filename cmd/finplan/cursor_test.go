@@ -106,3 +106,28 @@ func TestCursorMarks(t *testing.T) {
 		}
 	}
 }
+
+func TestCursorHoverIsOnlyEffectiveWhereThePlotIsTracked(t *testing.T) {
+	lock, day := model.D(2026, time.November, 8), model.D(2027, time.March, 1)
+	c := cursorState{lock: lock}
+	c.newFrame()
+	c.track(true, day)
+	if c.effective() != day {
+		t.Errorf("tracked in the frame: %v, want the hover %v", c.effective(), day)
+	}
+	// The next frame draws no plot, as when the Graph has no accounts or another tab is shown.
+	c.newFrame()
+	if c.effective() != lock {
+		t.Errorf("plot not tracked in the frame: %v, want the lock %v", c.effective(), lock)
+	}
+	c.newFrame()
+	if c.effective() != lock {
+		t.Errorf("after frames without the plot: %v, want the lock %v", c.effective(), lock)
+	}
+	// Drawn again, the pointer has newly come onto the plot, so the day it rested on before is not shown.
+	c.newFrame()
+	c.track(true, day.Add(9))
+	if c.effective() != day.Add(9) || c.settled() != lock {
+		t.Errorf("drawn again: effective %v, settled %v; want %v and the lock %v", c.effective(), c.settled(), day.Add(9), lock)
+	}
+}

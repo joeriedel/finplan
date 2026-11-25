@@ -76,7 +76,7 @@ func (c *chartCache) close() {
 	c.closed = true
 }
 
-// balanceCache works out in the background the balance today of every asset the tree shows a balance for, on a copy of the record it was made for, closed when the tab replaces it.
+// balanceCache works out in the background the balance today of every asset the tree shows a balance for and of the default asset of every account, which the Accounts tab shows, on a copy of the record it was made for, closed when the tab replaces it.
 type balanceCache struct {
 	snap recCopy
 	run  *bgRunner

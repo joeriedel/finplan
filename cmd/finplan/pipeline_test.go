@@ -380,3 +380,110 @@ func TestPipelineBreakdownLandingRedrawsOnce(t *testing.T) {
 		t.Error("the loop stays hot after the breakdown was redrawn for")
 	}
 }
+
+// landAccounts drives the Accounts tab's frame step until the balances of its record have landed.
+func landAccounts(t *testing.T, tab *acctTab) {
+	t.Helper()
+	waitUntil(t, "the account balances", func() bool { tab.sync(); return tab.landed })
+}
+
+// laterRecord returns a clone of the record with today a year later, in which some balance differs.
+func laterRecord(t *testing.T, rec *model.Record) *model.Record {
+	t.Helper()
+	later := rec.Clone()
+	later.Today = rec.Today.Add(365)
+	before, after := listAccounts(rec), listAccounts(later)
+	for i := range before {
+		if before[i].Balance != after[i].Balance {
+			return later
+		}
+	}
+	t.Fatal("no balance differs between the records")
+	return nil
+}
+
+// The Accounts tab shows ... for the balances until they land, and then those of listAccounts.
+func TestPipelineAccountBalancesPlaceholderThenLand(t *testing.T) {
+	a := demoApp(t)
+	tab := &acctTab{a: a, rec: a.rec}
+	tab.reset()
+	if len(tab.rows) != len(a.rec.Accounts) {
+		t.Fatalf("%d rows for %d accounts", len(tab.rows), len(a.rec.Accounts))
+	}
+	for _, r := range tab.rows {
+		if r.BalanceState != balanceUnknown || balanceText(r) != "..." {
+			t.Errorf("%s before the balances: state %v, text %q", r.Account.ID, r.BalanceState, balanceText(r))
+		}
+		if want := rowOf(listAccountRows(a.rec), r.Account.ID); r.LastData != want.LastData || r.Stale != want.Stale {
+			t.Errorf("%s: row without balances %+v, want %+v", r.Account.ID, r, want)
+		}
+	}
+	for _, g := range groupAccounts(tab.rows) {
+		if _, sum, state := groupHeaderParts(g); sum != "..." || state != balanceUnknown {
+			t.Errorf("%s header %q, state %v", g.Title, sum, state)
+		}
+	}
+	landAccounts(t, tab)
+	for _, want := range listAccounts(a.rec) {
+		got := rowOf(tab.rows, want.Account.ID)
+		if got.Balance != want.Balance || got.BalanceState != balanceCurrent {
+			t.Errorf("%s: balance %v (%v), want %v current", want.Account.ID, got.Balance, got.BalanceState, want.Balance)
+		}
+	}
+}
+
+// After a record change the balances of the record before are shown as pending, until those of the new record replace them.
+func TestPipelineAccountBalancesPendingAfterRecordChange(t *testing.T) {
+	a := demoApp(t)
+	tab := &acctTab{a: a}
+	landAccounts(t, tab)
+	old := listAccounts(a.rec)
+	later := laterRecord(t, a.rec)
+	a.rec, tab.rec = later, later
+	tab.reset()
+	for _, want := range old {
+		got := rowOf(tab.rows, want.Account.ID)
+		if got.Balance != want.Balance || got.BalanceState != balancePending {
+			t.Errorf("%s: balance %v (%v), want %v pending", want.Account.ID, got.Balance, got.BalanceState, want.Balance)
+		}
+	}
+	for _, g := range groupAccounts(tab.rows) {
+		if _, _, state := groupHeaderParts(g); state != balancePending {
+			t.Errorf("%s header state %v, want pending", g.Title, state)
+		}
+	}
+	landAccounts(t, tab)
+	for _, want := range listAccounts(later) {
+		got := rowOf(tab.rows, want.Account.ID)
+		if got.Balance != want.Balance || got.BalanceState != balanceCurrent {
+			t.Errorf("%s: balance %v (%v), want %v current", want.Account.ID, got.Balance, got.BalanceState, want.Balance)
+		}
+	}
+}
+
+// The result of the record before never lands for the record after it.
+func TestPipelineAccountBalancesOfOldRecordNeverLand(t *testing.T) {
+	a := demoApp(t)
+	tab := &acctTab{a: a, rec: a.rec}
+	stale := &balanceCache{snap: recCopy{src: a.rec}, run: newBGRunner()}
+	release := blockWorkers(t, stale.run)
+	snap := stale.snap.get()
+	stale.run.submit(struct{}{}, func() { stale.compute(snap) })
+	tab.balances, tab.base = stale, listAccountRows(a.rec)
+	tab.rows = pendingBalances(tab.base, nil)
+
+	later := laterRecord(t, a.rec)
+	a.rec = later
+	tab.sync()
+	release()
+	waitUntil(t, "the old job", func() bool { return !stale.busy() })
+	if stale.ready() || stale.landCount() != 0 {
+		t.Fatal("the result of the old record landed")
+	}
+	landAccounts(t, tab)
+	for _, want := range listAccounts(later) {
+		if got := rowOf(tab.rows, want.Account.ID); got.Balance != want.Balance || got.BalanceState != balanceCurrent {
+			t.Errorf("%s: balance %v (%v), want %v current", want.Account.ID, got.Balance, got.BalanceState, want.Balance)
+		}
+	}
+}

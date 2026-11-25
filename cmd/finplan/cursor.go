@@ -13,14 +13,24 @@ type cursorState struct {
 	lock     model.Date
 	hover    model.Date
 	hovering bool
+	// tracked is whether the plot was tracked in the frame being drawn, which it is not in a frame that does not draw the Graph's plot, so that a pointer position left from an earlier frame is not taken for the pointer's now.
+	tracked bool
 	// rest is how many frames the pointer has stayed on hover, and shown the day the panels follow while hovering: the day the pointer last rested on, or the lock if it has not since it came onto the plot.
 	rest  int
 	shown model.Date
 }
 
-// effective is the date under the pointer while hovering, else the locked date.
+// newFrame starts a frame. If the plot was not tracked in the frame before, the pointer is no longer taken to be on it, so that it counts as newly come onto it when the plot is drawn again.
+func (c *cursorState) newFrame() {
+	if !c.tracked {
+		c.hovering = false
+	}
+	c.tracked = false
+}
+
+// effective is the date under the pointer while hovering over a plot drawn in this frame, else the locked date, which is what a view drawn in a frame without the plot follows.
 func (c *cursorState) effective() model.Date {
-	if c.hovering {
+	if c.hovering && c.tracked {
 		return c.hover
 	}
 	return c.lock
@@ -48,7 +58,7 @@ func (c *cursorState) track(hovering bool, day model.Date) {
 	if hovering && c.rest >= restFrames {
 		c.shown = day
 	}
-	c.hovering, c.hover = hovering, day
+	c.hovering, c.hover, c.tracked = hovering, day, true
 }
 
 // setLock locks the cursor at the day, a click there.

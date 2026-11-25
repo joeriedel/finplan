@@ -137,3 +137,19 @@ func TestPeriodDeductionFollowsItsPaycheck(t *testing.T) {
 		t.Fatal("no deduction beside a matched paycheck")
 	}
 }
+
+func TestPeriodViewHoverNeedsThePlotInTheFrame(t *testing.T) {
+	a := demoApp(t)
+	s := &a.budget.period
+	a.graph.cur.lock = pastCursorDate
+	hover := pastCursorDate.Add(30)
+	a.graph.cur.newFrame()
+	a.graph.cur.track(true, hover)
+	if d := s.shownDate(a); d != hover {
+		t.Errorf("plot tracked: shown %s, want the hover %s", d, hover)
+	}
+	a.graph.cur.newFrame()
+	if d := s.shownDate(a); d != pastCursorDate {
+		t.Errorf("plot not tracked: shown %s, want the lock %s", d, pastCursorDate)
+	}
+}

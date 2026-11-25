@@ -181,6 +181,7 @@ func (a *app) drawAbout() {
 var tabs = []string{"Graph", "Projections", "Assets", "Accounts", "Budget", "Markets"}
 
 func (a *app) draw() {
+	a.graph.cur.newFrame()
 	if r, ok := backend.PollSaveDialog(); ok {
 		a.backupOpen = false
 		a.backup(r)
@@ -312,7 +313,8 @@ func (a *app) menuBar() {
 
 // busy reports whether background work for the screens is still running.
 func (a *app) busy() bool {
-	return a.graph.busy() || (a.assets.charts != nil && (a.assets.charts.busy() || a.assets.balances.busy()))
+	return a.graph.busy() || (a.assets.charts != nil && (a.assets.charts.busy() || a.assets.balances.busy())) ||
+		(a.accts.balances != nil && a.accts.balances.busy())
 }
 
 // landMark is the caches whose landings the loop redraws for and the number of landings in them.
@@ -321,15 +323,19 @@ type landMark struct {
 	bk       *breakdownCache
 	charts   *chartCache
 	balances *balanceCache
+	acctBal  *balanceCache
 	n        uint64
 }
 
 // landed reports whether a result landed in a background cache the screens show since the last call, so that the loop redraws once for it whichever tab is shown; the Graph refits on its own flag when it is next drawn.
 func (a *app) landed() bool {
-	m := landMark{data: a.graph.cache, bk: a.graph.bkCache, charts: a.assets.charts, balances: a.assets.balances}
+	m := landMark{data: a.graph.cache, bk: a.graph.bkCache, charts: a.assets.charts, balances: a.assets.balances, acctBal: a.accts.balances}
 	m.n = m.data.landCount() + m.bk.landCount()
 	if m.charts != nil {
 		m.n += m.charts.landCount() + m.balances.landCount()
+	}
+	if m.acctBal != nil {
+		m.n += m.acctBal.landCount()
 	}
 	f := m != a.landSeen
 	a.landSeen = m

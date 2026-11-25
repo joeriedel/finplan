@@ -11,7 +11,6 @@ import (
 
 	"github.com/AllenDang/cimgui-go/imgui"
 
-	"github.com/joeriedel/finplan/internal/graph"
 	"github.com/joeriedel/finplan/internal/model"
 	"github.com/joeriedel/finplan/internal/ops"
 	"github.com/joeriedel/finplan/internal/store"
@@ -235,6 +234,13 @@ type acctTab struct {
 	// openBenefits opens the Benefits section of the household members the next time they are drawn.
 	openBenefits bool
 
+	// balances works out the balances of the rows for the record shown; landed says they are in rows, and prev holds the balances of the last record they landed for, by account.
+	balances *balanceCache
+	landed   bool
+	prev     map[model.AccountID]float64
+	// base is the rows of the record shown without balances.
+	base []listRow
+
 	// ledger says whether the ledger panel is folded out to the right of the detail.
 	ledger  bool
 	closeOn string
@@ -249,17 +255,35 @@ type acctTab struct {
 }
 
 func (t *acctTab) reset() {
-	t.rows = listAccounts(t.rec)
+	if t.balances != nil {
+		t.balances.close()
+	}
+	t.balances, t.landed = newBalanceCache(t.rec), false
+	t.base = listAccountRows(t.rec)
+	t.rows = pendingBalances(t.base, t.prev)
 	t.bufs, t.errs = map[string]string{}, map[string]string{}
 	t.alloc = nil
 }
 
-func (t *acctTab) draw() {
-	a := t.a
-	if t.rec != a.rec {
-		t.rec = a.rec
+// sync makes the tab follow the record: a new record starts its balances in the background and shows the balances of the record before as pending, and the balances of the record shown replace them once they land.
+func (t *acctTab) sync() {
+	if t.rec != t.a.rec {
+		t.rec = t.a.rec
 		t.reset()
 	}
+	if !t.landed && t.balances.ready() {
+		t.landed = true
+		t.prev = map[model.AccountID]float64{}
+		for _, r := range t.base {
+			t.prev[r.Account.ID] = t.balances.balance(model.DefaultAssetID(r.Account.ID))
+		}
+		t.rows = currentBalances(t.base, func(id model.AccountID) float64 { return t.prev[id] })
+	}
+}
+
+func (t *acctTab) draw() {
+	a := t.a
+	t.sync()
 	if t.sel != "" && a.rec.Account(t.sel) == nil {
 		t.sel = ""
 	}
@@ -368,7 +392,8 @@ func (t *acctTab) list(withTax bool) {
 	for _, g := range groups {
 		header := groupHasHeader(g)
 		if header {
-			groupHeaderRow(groupHeaderText(g))
+			head, sum, state := groupHeaderParts(g)
+			groupHeaderRowTail(head, sum, state == balancePending)
 		}
 		for _, r := range g.Rows {
 			t.listRow(r, withTax, header)
@@ -401,7 +426,12 @@ func (t *acctTab) listRow(r listRow, withTax, indented bool) {
 		text(col, listTaxText(r.Account))
 		col++
 	}
-	text(col, graph.FormatMoney(r.Balance))
+	if r.BalanceState == balancePending {
+		imgui.TableSetColumnIndex(int32(col))
+		disabledText(balanceText(r))
+	} else {
+		text(col, balanceText(r))
+	}
 	imgui.TableSetColumnIndex(int32(col + 1))
 	switch {
 	case r.Account.IsClosed():
