@@ -20,10 +20,60 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Image tag
+        id: tag
+        run: |
+          source scripts/lib.sh
+          set_image
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+      - name: Image cache
+        id: image-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/finplan-image.tar
+          key: image-${{ runner.os }}-${{ steps.tag.outputs.image }}
+      - name: Image
+        id: image
+        run: |
+          source scripts/lib.sh
+          set_image
+          if [ "${{ steps.image-cache.outputs.cache-hit }}" = true ]; then
+            podman load -i "$RUNNER_TEMP/finplan-image.tar"
+          else
+            ensure_image
+            podman save -o "$RUNNER_TEMP/finplan-image.tar" "$IMAGE"
+          fi
+          id="$(podman image inspect --format '{{.Id}}' "$IMAGE")"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+      - name: Save image cache
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/finplan-image.tar
+          key: ${{ steps.image-cache.outputs.cache-primary-key }}
+      - name: Go cache
+        id: go-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/finplan-go
+          key: go-${{ runner.os }}-${{ steps.image.outputs.id }}-${{ hashFiles('go.sum') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ steps.image.outputs.id }}-${{ hashFiles('go.sum') }}-
+            go-${{ runner.os }}-${{ steps.image.outputs.id }}-
       - name: Build
+        env:
+          FINPLAN_GO_DIR: ${{ runner.temp }}/finplan-go
         run: ./scripts/build.sh
       - name: Test
+        env:
+          FINPLAN_GO_DIR: ${{ runner.temp }}/finplan-go
         run: ./scripts/test.sh --quick
+      - name: Save Go cache
+        if: ${{ !cancelled() && steps.image.outcome == 'success' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/finplan-go
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

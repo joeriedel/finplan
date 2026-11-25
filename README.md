@@ -15,6 +15,17 @@ The data model, projection engine and planned features are described in [docs/de
 
 This builds the container image on first use (and whenever the `Containerfile` changes) and produces `bin/finplan`.
 
+Go's module and build caches live in the podman volume `finplan-go`. Set `FINPLAN_GO_DIR` to a host directory to use it at `/gopath` instead (created if missing; refused if it is the repo or inside it, or its resolved path contains a colon); unset or empty, the volume is used. Go writes the module cache read-only, so run `chmod -R u+w` on a `FINPLAN_GO_DIR` folder before deleting it.
+
+### CI caching
+
+The `build-test` job in `.github/workflows/ci.yml` caches between runs:
+
+- The build image, as an archive written with `podman save` and restored with `podman load`, keyed on the image's name and tag. The tag is the first 16 hex digits of the `Containerfile`'s sha256, so an unchanged `Containerfile` skips the image build.
+- Go's module and build caches, in a host folder used through `FINPLAN_GO_DIR` for Build and Test. The key holds the image ID, `go.sum` and a per-run suffix, and the latest earlier cache is restored through prefixes (same image and `go.sum`, then same image only). It is saved after Test even when Build or Test failed, unless the run was cancelled. The image ID is in every key because Go's build cache does not track system C headers and libraries, so a rebuilt image starts with a cold Go cache.
+
+The `release` job does not use the caches and builds cold.
+
 ## Test
 
     scripts/test.sh
